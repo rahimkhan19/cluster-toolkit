@@ -1,0 +1,10 @@
+steps:
+- name: 'python:3.10'
+  entrypoint: 'bash'
+  args:
+  - '-c'
+  - |
+    pip install google-cloud-tasks google-cloud-build
+    python poc/master_monitor.py
+env:
+- 'PROJECT_ID=$PROJECT_ID'
