@@ -40,16 +40,23 @@ def enqueue_test(trigger_name, queue_name):
         return None
         
     parent = client.queue_path(PROJECT_ID, REGION, queue_name)
-    url = f"https://cloudbuild.googleapis.com/v1/projects/{PROJECT_ID}/locations/global/triggers/{trigger_id}:run"
+    url = "https://us-central1-hpc-toolkit-dev.cloudfunctions.net/poc-coordinator-test-infra"
+    
+    payload = {
+        "trigger_name": trigger_name
+    }
+    body_bytes = json.dumps(payload).encode('utf-8')
     
     task = {
         "http_request": {
             "http_method": tasks_v2.HttpMethod.POST,
             "url": url,
-            "body": b"{}",
-            "oauth_token": {
-                "service_account_email": f"{PROJECT_ID}@appspot.gserviceaccount.com",
-                "scope": "https://www.googleapis.com/auth/cloud-platform"
+            "body": body_bytes,
+            "headers": {
+                "Content-Type": "application/json"
+            },
+            "oidc_token": {
+                "service_account_email": f"{PROJECT_ID}@appspot.gserviceaccount.com", 
             },
         }
     }
@@ -117,9 +124,15 @@ def poll_status(trigger_names, queue_names):
         time.sleep(60)
 
 if __name__ == "__main__":
-    # Enqueue tests in their respective queues
+    # Enqueue tests as requested by user: T1, T2, T1
+    print("Enqueuing TRIGGER_1 to QUEUE_1...")
     enqueue_test(TRIGGER_1, QUEUE_1)
+    
+    print("Enqueuing TRIGGER_2 to QUEUE_2...")
     enqueue_test(TRIGGER_2, QUEUE_2)
+    
+    print("Enqueuing TRIGGER_1 to QUEUE_1 again...")
+    enqueue_test(TRIGGER_1, QUEUE_1)
     
     # Poll status for both
     poll_status([TRIGGER_1, TRIGGER_2], [QUEUE_1, QUEUE_2])
