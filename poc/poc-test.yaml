@@ -1,6 +1,6 @@
 steps:
 - name: 'gcr.io/cloud-builders/gcloud'
   script: |
-    echo "Starting actual test work..."
-    sleep 30
-    echo "Test completed successfully."
+    echo "Starting actual test work (Test 1)..."
+    sleep 120
+    echo "Test 1 completed successfully."

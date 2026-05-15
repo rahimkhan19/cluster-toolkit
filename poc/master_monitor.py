@@ -1,44 +1,45 @@
 import json
 import os
 import time
+import sys
 from google.cloud import tasks_v2
 from google.cloud.devtools import cloudbuild_v1
 
 PROJECT_ID = os.environ['PROJECT_ID']
 REGION = "us-central1"
-QUEUE_NAME = "poc-test-queue"
-TRIGGER_NAME = "poc-test-infra-master-trigger"
 
-def enqueue_test():
-    print("Entering enqueue_test...")
-    print("Initializing CloudTasksClient...")
-    client = tasks_v2.CloudTasksClient()
-    print("CloudTasksClient initialized.")
-    
-    print("Initializing CloudBuildClient to find trigger ID...")
-    cb_client = cloudbuild_v1.CloudBuildClient()
-    cb_parent = f"projects/{PROJECT_ID}/locations/global"
-    
+# We assume these two triggers exist or will be created
+TRIGGER_1 = "poc-test-infra-master-trigger"
+TRIGGER_2 = "poc-test-infra-master-trigger-2"
+
+# We assume these two queues exist or will be created
+QUEUE_1 = "poc-test-queue"
+QUEUE_2 = "poc-test-queue-2"
+
+def get_trigger_id(cb_client, project_id, trigger_name):
+    cb_parent = f"projects/{project_id}/locations/global"
     try:
         request = cloudbuild_v1.ListBuildTriggersRequest(parent=cb_parent)
         triggers = cb_client.list_build_triggers(request=request)
-        trigger_id = None
         for t in triggers:
-            if t.name == TRIGGER_NAME:
-                trigger_id = t.id
-                break
-                
-        if not trigger_id:
-            raise Exception(f"Trigger '{TRIGGER_NAME}' not found.")
-            
-        print(f"Found trigger ID: {trigger_id} for name: {TRIGGER_NAME}")
-        
+            if t.name == trigger_name:
+                return t.id
+        return None
     except Exception as e:
-        print(f"Error finding trigger: {e}")
-        raise e
+        print(f"Error finding trigger {trigger_name}: {e}")
+        return None
 
-    parent = client.queue_path(PROJECT_ID, REGION, QUEUE_NAME)
+def enqueue_test(trigger_name, queue_name):
+    client = tasks_v2.CloudTasksClient()
+    cb_client = cloudbuild_v1.CloudBuildClient()
     
+    print(f"Resolving ID for trigger: {trigger_name}")
+    trigger_id = get_trigger_id(cb_client, PROJECT_ID, trigger_name)
+    if not trigger_id:
+        print(f"Error: Trigger '{trigger_name}' not found.")
+        return None
+        
+    parent = client.queue_path(PROJECT_ID, REGION, queue_name)
     url = f"https://cloudbuild.googleapis.com/v1/projects/{PROJECT_ID}/locations/global/triggers/{trigger_id}:run"
     
     task = {
@@ -53,48 +54,72 @@ def enqueue_test():
         }
     }
     
-    print("Sending create_task request to Cloud Tasks...")
+    print(f"Sending create_task request for {trigger_name} to {queue_name}...")
     try:
         response = client.create_task(request={"parent": parent, "task": task}, timeout=10)
-        print(f"Created task {response.name}")
+        print(f"Created task {response.name} in {queue_name}")
         return response.name
     except Exception as e:
-        print(f"Error creating task: {e}")
-        raise e
+        print(f"Error creating task for {trigger_name}: {e}")
+        return None
 
-def poll_build_status():
-    client = cloudbuild_v1.CloudBuildClient()
+def poll_status(trigger_names, queue_names):
+    cb_client = cloudbuild_v1.CloudBuildClient()
+    tasks_client = tasks_v2.CloudTasksClient()
+    
     parent = f"projects/{PROJECT_ID}/locations/global"
     
-    print("Polling for builds triggered by queue...")
+    print("Starting status polling...")
     while True:
-        request = cloudbuild_v1.ListBuildsRequest(
-            parent=parent,
-            page_size=10
-        )
+        status_map = {name: "UNKNOWN" for name in trigger_names}
+        
+        # 1. Check Cloud Tasks for waiting tasks in ALL queues
+        for queue_name in queue_names:
+            queue_parent = tasks_client.queue_path(PROJECT_ID, REGION, queue_name)
+            try:
+                tasks = tasks_client.list_tasks(parent=queue_parent)
+                for task in tasks:
+                    url = task.http_request.url
+                    for name in trigger_names:
+                        # If trigger name is in URL or we can map it
+                        pass
+            except Exception as e:
+                print(f"Error listing tasks in {queue_name}: {e}")
+            
+        # 2. Check Cloud Build for running/finished builds
         try:
-            builds = client.list_builds(request=request)
+            request = cloudbuild_v1.ListBuildsRequest(parent=parent, page_size=20)
+            builds = cb_client.list_builds(request=request)
             
             for build in builds:
-                if build.substitutions.get('_TRIGGER_NAME') == TRIGGER_NAME:
-                    print(f"Found build {build.id} with status: {build.status.name}")
-                    
-                    if build.status.name in ["SUCCESS", "FAILURE", "CANCELLED"]:
-                        print(f"Build finished with status: {build.status.name}")
-                        return build.status.name
-                        
-            print("No finished builds found yet. Waiting 60 seconds...")
-            time.sleep(60)
+                for name in trigger_names:
+                    if build.substitutions.get('_TRIGGER_NAME') == name or name in build.id:
+                         status_map[name] = build.status.name
         except Exception as e:
-            if "429" in str(e) or "Quota exceeded" in str(e):
-                print(f"Rate limit exceeded or quota issues: {e}. Waiting 60 seconds before retry...")
-                time.sleep(60)
-            else:
-                print(f"Unexpected error: {e}")
-                raise e
+             if "429" in str(e):
+                 print("Rate limit hit, waiting...")
+                 time.sleep(60)
+                 continue
+             print(f"Error listing builds: {e}")
+             
+        # Print Summary
+        print("\n--- Status Summary ---")
+        for name, status in status_map.items():
+            print(f"Test: {name} -> State: {status}")
+        print("----------------------")
+        
+        # Check if all are finished
+        all_finished = all(status in ["SUCCESS", "FAILURE", "CANCELLED"] for status in status_map.values())
+        if all_finished and len(status_map) > 0:
+            print("All tracked builds have finished.")
+            break
+            
+        time.sleep(60)
 
 if __name__ == "__main__":
-    enqueue_test()
-    status = poll_build_status()
-    if status != "SUCCESS":
-        print("Handling failure / Requeuing logic would go here.")
+    # Enqueue tests in their respective queues
+    enqueue_test(TRIGGER_1, QUEUE_1)
+    enqueue_test(TRIGGER_2, QUEUE_2)
+    
+    # Poll status for both
+    poll_status([TRIGGER_1, TRIGGER_2], [QUEUE_1, QUEUE_2])
