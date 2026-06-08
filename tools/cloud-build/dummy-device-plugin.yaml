@@ -1,0 +1,38 @@
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: dummy-device-plugin
+  namespace: kube-system
+  labels:
+    app: dummy-device-plugin
+spec:
+  selector:
+    matchLabels:
+      app: dummy-device-plugin
+  template:
+    metadata:
+      labels:
+        app: dummy-device-plugin
+    spec:
+      hostNetwork: true
+      containers:
+      - name: generic-device-plugin
+        image: squat/generic-device-plugin
+        args:
+        - --domain=test-locks
+        - '--device={"name": "slurm-generic", "groups": [{"count": 1000, "paths": [{"path": "/dev/null"}]}]}'
+        - --listen=:8085
+        securityContext:
+          privileged: true
+        volumeMounts:
+        - name: device-plugin
+          mountPath: /var/lib/kubelet/device-plugins
+        - name: dev
+          mountPath: /dev
+      volumes:
+      - name: device-plugin
+        hostPath:
+          path: /var/lib/kubelet/device-plugins
+      - name: dev
+        hostPath:
+          path: /dev

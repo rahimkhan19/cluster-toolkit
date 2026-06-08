@@ -1,0 +1,26 @@
+apiVersion: kueue.x-k8s.io/v1beta1
+kind: ResourceFlavor
+metadata:
+  name: slurm-generic-lock-flavor
+---
+apiVersion: kueue.x-k8s.io/v1beta1
+kind: ClusterQueue
+metadata:
+  name: cluster-queue-slurm-generic
+spec:
+  namespaceSelector: {} # Matches all namespaces
+  resourceGroups:
+  - coveredResources: ["test-locks/slurm-generic"]
+    flavors:
+    - name: slurm-generic-lock-flavor
+      resources:
+      - name: test-locks/slurm-generic
+        nominalQuota: 1
+---
+apiVersion: kueue.x-k8s.io/v1beta1
+kind: LocalQueue
+metadata:
+  name: local-queue-slurm-generic
+  namespace: default
+spec:
+  clusterQueue: cluster-queue-slurm-generic
