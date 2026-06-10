@@ -21,6 +21,12 @@ spec:
         args:
         - --domain=test-locks
         - '--device={"name": "slurm-generic", "groups": [{"count": 1000, "paths": [{"path": "/dev/null"}]}]}'
+        - '--device={"name": "a3-megagpu", "groups": [{"count": 1000, "paths": [{"path": "/dev/null"}]}]}'
+        - '--device={"name": "a3-highgpu", "groups": [{"count": 1000, "paths": [{"path": "/dev/null"}]}]}'
+        - '--device={"name": "filestore-high-scale", "groups": [{"count": 1000, "paths": [{"path": "/dev/null"}]}]}'
+        - '--device={"name": "filestore-standard", "groups": [{"count": 1000, "paths": [{"path": "/dev/null"}]}]}'
+        - '--device={"name": "h3", "groups": [{"count": 1000, "paths": [{"path": "/dev/null"}]}]}'
+        - '--device={"name": "vpc-heavy", "groups": [{"count": 1000, "paths": [{"path": "/dev/null"}]}]}'
         - --listen=:8085
         securityContext:
           privileged: true

@@ -1,0 +1,229 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+---
+tags:
+- slurm6
+- m.filestore
+- m.multivpc
+- m.schedmd-slurm-gcp-v6-controller
+- m.schedmd-slurm-gcp-v6-login
+- m.schedmd-slurm-gcp-v6-nodeset
+- m.schedmd-slurm-gcp-v6-partition
+- m.service-account
+- m.startup-script
+- m.vpc
+- m.custom-image
+- kueue-queued
+
+substitutions:
+  _TEST_PREFIX: "" # Default to no prefix
+
+timeout: 14400s  # 4hr
+steps:
+# 1. Build and push workspace container containing the current code layer
+- id: build-workspace-image
+  name: gcr.io/cloud-builders/docker
+  entrypoint: /bin/bash
+  args:
+  - -c
+  - |
+    docker build -t us-central1-docker.pkg.dev/$PROJECT_ID/hpc-toolkit-repo/test-runner:$BUILD_ID -f- . <<INNER_EOF
+    FROM us-central1-docker.pkg.dev/$PROJECT_ID/hpc-toolkit-repo/test-runner:latest
+    COPY . /workspace
+    WORKDIR /workspace
+    INNER_EOF
+    docker push us-central1-docker.pkg.dev/$PROJECT_ID/hpc-toolkit-repo/test-runner:$BUILD_ID
+
+# 2. Generate Job Manifest with Token Requests
+- id: generate-job-manifest
+  name: gcr.io/cloud-builders/gcloud
+  entrypoint: /bin/bash
+  secretEnv: ['GCLUSTER_GCS_PATH', 'TCPX_KERNEL_LOGIN', 'TCPX_KERNEL_PASSWORD', 'KEYSERVER_UBUNTU_KEY']
+  args:
+  - -c
+  - |
+    BUILD_ID_SHORT=$$(echo "$BUILD_ID" | cut -c1-6)
+    cat <<INNER_EOF > job.yaml
+    apiVersion: batch/v1
+    kind: Job
+    metadata:
+      name: ml-a3-highgpu-onspot-$$BUILD_ID_SHORT
+      namespace: default
+      labels:
+        kueue.x-k8s.io/queue-name: local-queue-test-locks
+        build-id: "$BUILD_ID"
+    spec:
+      suspend: true
+      backoffLimit: 0
+      template:
+        spec:
+          serviceAccountName: hpc-test-runner-ksa
+          restartPolicy: Never
+          containers:
+          - name: runner
+            image: us-central1-docker.pkg.dev/$PROJECT_ID/hpc-toolkit-repo/test-runner:$BUILD_ID
+            env:
+            - name: ANSIBLE_HOST_KEY_CHECKING
+              value: "false"
+            - name: ANSIBLE_CONFIG
+              value: "/workspace/tools/cloud-build/ansible.cfg"
+            - name: MACHINE_TYPE
+              value: "a3-highgpu-8g"
+            - name: NUM_NODES
+              value: "4"
+            - name: INSTANCE_PREFIX
+              value: "a3hsp"
+            - name: PROJECT_ID
+              value: "$PROJECT_ID"
+            - name: BUILD_ID
+              value: "$BUILD_ID"
+            - name: OPTIONS_GCS_PATH
+              value: "gs://hpc-ctk1357/a3hoptions.txt"
+            - name: ENABLE_SPOT_FALLBACK
+              value: "true"
+            - name: TCPX_KERNEL_LOGIN
+              value: "$$TCPX_KERNEL_LOGIN"
+            - name: TCPX_KERNEL_PASSWORD
+              value: "$$TCPX_KERNEL_PASSWORD"
+            - name: KEYSERVER_UBUNTU_KEY
+              value: "$$KEYSERVER_UBUNTU_KEY"
+            command: ["/bin/bash", "-c"]
+            args:
+            - |
+              set -e -u -o pipefail
+              echo "Sourcing find_available_zone.sh to determine zone."
+              source /workspace/tools/cloud-build/find_available_zone.sh
+              if [ -z "\$${ZONE:-}" ]; then
+                echo "ERROR: ZONE not found" >&2
+                exit 1
+              fi
+              set -x
+              cd /workspace
+              if [ "${_TEST_PREFIX}" == "daily-" ]; then
+                  gsutil cp gs://$$GCLUSTER_GCS_PATH/latest/gcluster-bundle.zip .
+                  unzip -o gcluster-bundle.zip
+                  # Grant execution permissions to the binary
+                  chmod +x gcluster
+              else
+                  make
+              fi
+              REGION="\$${ZONE%-*}"
+              BUILD_ID_SHORT="\$${BUILD_ID:0:6}"
+              BLUEPRINT="/workspace/examples/machine-learning/a3-highgpu-8g/a3high-slurm-blueprint.yaml"
+
+              ENABLE_SPOT="true"
+              SLURM_VARS_FILE="tools/cloud-build/daily-tests/tests/ml-a3-highgpu-onspot-slurm.yml"
+              if [[ "\$$PROVISIONING_MODEL" == "STANDARD" ]]; then
+                ENABLE_SPOT="false"
+                sed -i '/instance_labels:/,+1d' "\$$SLURM_VARS_FILE"
+                sed -i '/enable_spot: true/d' "\$$SLURM_VARS_FILE"
+              else
+                echo "INFO: Using \$$SLURM_VARS_FILE as it is for SPOT provisioning."
+              fi
+
+              bash tools/add_ttl_label.sh \$$BLUEPRINT
+              python3 tools/fix_vpc_name.py \$$BLUEPRINT "${_TEST_PREFIX}"
+              
+              ansible-playbook tools/cloud-build/daily-tests/ansible_playbooks/slurm-integration-test.yml \
+                --user=sa_106486320838376751393 \
+                --extra-vars="test_prefix=${_TEST_PREFIX} use_fixed_vpc=true" \
+                --extra-vars="project=$PROJECT_ID build=\$$BUILD_ID_SHORT "\
+                --extra-vars="region=\$$REGION zone=\$$ZONE"\
+                --extra-vars="enable_spot=\$$ENABLE_SPOT "\
+                --extra-vars="tcpx_kernel_login=\$$TCPX_KERNEL_LOGIN tcpx_kernel_password=\$$TCPX_KERNEL_PASSWORD keyserver_ubuntu_key=\$$KEYSERVER_UBUNTU_KEY "\
+                --extra-vars="@\$$SLURM_VARS_FILE"
+            resources:
+              requests:
+                test-locks/slurm-generic: 1
+                test-locks/a3-highgpu: 1
+                test-locks/vpc-heavy: 1
+                test-locks/filestore-standard: 1
+              limits:
+                test-locks/slurm-generic: 1
+                test-locks/a3-highgpu: 1
+                test-locks/vpc-heavy: 1
+                test-locks/filestore-standard: 1
+    INNER_EOF
+
+# 3. Submit and Monitor GKE Kueue Job with Retry
+- id: submit-and-monitor-gke-job
+  name: gcr.io/cloud-builders/gcloud
+  entrypoint: /bin/bash
+  args:
+  - -c
+  - |
+    gcloud container clusters get-credentials poc-test-infra-cluster-standard --region=us-central1
+    BUILD_ID_SHORT=$$(echo "$BUILD_ID" | cut -c1-6)
+    JOB_NAME="ml-a3-highgpu-onspot-$$BUILD_ID_SHORT"
+    
+    MAX_RETRIES=5
+    RETRY_DELAY=60
+    ATTEMPT=1
+    
+    while true; do
+      echo "=== ATTEMPT $$ATTEMPT: Submitting Kueue Job ==="
+      kubectl apply -f /workspace/job.yaml
+      
+      set +e
+      bash tools/cloud-build/monitor_kueue_job.sh \
+          poc-test-infra-cluster-standard \
+          us-central1 \
+          "$$JOB_NAME" \
+          default | tee /workspace/job_logs.txt
+      EXIT_CODE=$${PIPESTATUS[0]}
+      set -e
+      
+      if [ $$EXIT_CODE -eq 0 ]; then
+        echo "Job succeeded!"
+        break
+      fi
+      
+      # Check if failure was due to zone capacity
+      if grep -q "Couldn't find a zone to deploy\|ERROR: ZONE not found" /workspace/job_logs.txt; then
+        echo "WARNING: GCP is out of zone capacity. Kueue Job has already been deleted. Retrying in $$RETRY_DELAY seconds..."
+      else
+        echo "ERROR: Test failed due to an actual error (not zone capacity). Failing pipeline." >&2
+        exit 1
+      fi
+      
+      if [ $$ATTEMPT -ge $$MAX_RETRIES ]; then
+        echo "ERROR: Job failed to find zone capacity after $$MAX_RETRIES attempts." >&2
+        exit 1
+      fi
+      
+      sleep $$RETRY_DELAY
+      ATTEMPT=$$((ATTEMPT + 1))
+      RETRY_DELAY=$$((RETRY_DELAY * 2))
+    done
+
+# 5. Cleanup the built image from Registry to save costs
+- id: cleanup-image
+  name: gcr.io/cloud-builders/gcloud
+  entrypoint: /bin/bash
+  args:
+  - -c
+  - |
+    gcloud artifacts docker images delete us-central1-docker.pkg.dev/$PROJECT_ID/hpc-toolkit-repo/test-runner:$BUILD_ID --quiet
+
+availableSecrets:
+  secretManager:
+  - versionName: projects/${PROJECT_ID}/secrets/gcluster-develop-release-bucket/versions/latest
+    env: 'GCLUSTER_GCS_PATH'
+  - versionName: projects/${PROJECT_ID}/secrets/tcpx-kernel-ppa-login/versions/latest
+    env: 'TCPX_KERNEL_LOGIN'
+  - versionName: projects/${PROJECT_ID}/secrets/tcpx-kernel-ppa-password/versions/latest
+    env: 'TCPX_KERNEL_PASSWORD'
+  - versionName: projects/${PROJECT_ID}/secrets/keyserver-ubuntu-key/versions/latest
+    env: 'KEYSERVER_UBUNTU_KEY'
