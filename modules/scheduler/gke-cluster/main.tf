@@ -46,18 +46,7 @@ locals {
   # multi networking needs enabled Dataplane v2
   derived_enable_dataplane_v2 = coalesce(var.enable_dataplane_v2, local.derived_enable_multi_networking)
 
-  default_monitoring_component = [
-    "SYSTEM_COMPONENTS",
-    "POD",
-    "DAEMONSET",
-    "DEPLOYMENT",
-    "STATEFULSET",
-    "STORAGE",
-    "HPA",
-    "CADVISOR",
-    "KUBELET",
-    "JOBSET"
-  ]
+
 
   default_logging_component = [
     "SYSTEM_COMPONENTS",
@@ -107,7 +96,13 @@ data "google_container_engine_versions" "version_prefix_filter" {
 }
 
 locals {
-  master_version = var.min_master_version != null ? var.min_master_version : data.google_container_engine_versions.version_prefix_filter.latest_master_version
+  latest_master_version  = data.google_container_engine_versions.version_prefix_filter.latest_master_version
+  latest_channel_version = lookup(data.google_container_engine_versions.version_prefix_filter.release_channel_latest_version, var.release_channel, local.latest_master_version)
+  master_version = var.min_master_version != null ? var.min_master_version : (
+    var.release_channel != "UNSPECIFIED" ? local.latest_channel_version : local.latest_master_version
+  )
+
+  mldiagnostics_minimum_version = "1.35.0-gke.3065000"
 }
 
 
@@ -115,6 +110,12 @@ module "slice_controller_version_check" {
   source          = "../../internal/semver_compare"
   current_version = local.master_version
   minimum_version = "1.35.0-gke.274500"
+}
+
+module "mldiagnostics_version_check" {
+  source          = "../../internal/semver_compare"
+  current_version = local.master_version
+  minimum_version = local.mldiagnostics_minimum_version
 }
 
 resource "google_container_cluster" "gke_cluster" {
@@ -386,7 +387,7 @@ resource "google_container_cluster" "gke_cluster" {
   }
 
   monitoring_config {
-    enable_components = var.enable_dcgm_monitoring ? concat(local.default_monitoring_component, ["DCGM"]) : local.default_monitoring_component
+    enable_components = var.enable_dcgm_monitoring ? distinct(concat(var.monitoring_components, ["DCGM"])) : var.monitoring_components
     managed_prometheus {
       enabled = true
       auto_monitoring_config {
@@ -397,6 +398,13 @@ resource "google_container_cluster" "gke_cluster" {
 
   logging_config {
     enable_components = local.default_logging_component
+  }
+
+  dynamic "managed_machine_learning_diagnostics_config" {
+    for_each = var.enable_managed_ml_diagnostics ? [1] : []
+    content {
+      enabled = true
+    }
   }
 }
 
@@ -566,6 +574,25 @@ resource "kubernetes_namespace" "user_namespace" {
   ]
 }
 
+resource "kubernetes_labels" "workload_namespace_labels" {
+  count       = var.enable_managed_ml_diagnostics ? 1 : 0
+  api_version = "v1"
+  kind        = "Namespace"
+
+  metadata {
+    name = var.namespace
+  }
+
+  labels = {
+    "managed-mldiagnostics-gke" = "true"
+  }
+
+  depends_on = [
+    google_container_cluster.gke_cluster,
+    kubernetes_namespace.user_namespace
+  ]
+}
+
 module "workload_identity" {
   count   = var.configure_workload_identity_sa ? 1 : 0
   source  = "terraform-google-modules/kubernetes-engine/google//modules/workload-identity"
@@ -636,4 +663,13 @@ module "kubectl_apply" {
       }
     ] : []
   )
+}
+
+resource "terraform_data" "validate_ml_diagnostics_version" {
+  lifecycle {
+    precondition {
+      condition     = !var.enable_managed_ml_diagnostics || module.mldiagnostics_version_check.is_greater_than_or_equal
+      error_message = "GKE-managed ML Diagnostics requires a GKE version of ${local.mldiagnostics_minimum_version} or higher. Please update 'version_prefix' or 'min_master_version', or use the 'mldiagnostics' module instead."
+    }
+  }
 }

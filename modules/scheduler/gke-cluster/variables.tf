@@ -222,6 +222,28 @@ variable "enable_dcgm_monitoring" {
   default     = true
 }
 
+variable "monitoring_components" {
+  description = "List of GKE monitoring components to enable. If empty, GKE monitoring is disabled."
+  type        = list(string)
+  nullable    = false
+  default = [
+    "SYSTEM_COMPONENTS",
+    "POD",
+    "DAEMONSET",
+    "DEPLOYMENT",
+    "STATEFULSET",
+    "STORAGE",
+    "HPA",
+    "CADVISOR",
+    "KUBELET",
+    "JOBSET"
+  ]
+}
+
+
+
+
+
 variable "enable_node_local_dns_cache" {
   description = "Enable GKE NodeLocal DNSCache addon to improve DNS lookup latency"
   type        = bool
@@ -650,4 +672,10 @@ variable "machine_mappings_json" {
   description = "Injected JSON string containing machine mappings"
   type        = string
   default     = "{}"
+}
+
+variable "enable_managed_ml_diagnostics" {
+  description = "Enables ML Diagnostics on the GKE cluster."
+  type        = bool
+  default     = false
 }
