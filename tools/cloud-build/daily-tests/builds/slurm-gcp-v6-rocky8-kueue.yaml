@@ -62,8 +62,10 @@ steps:
         build-id: "$BUILD_ID"
     spec:
       suspend: true
+      backoffLimit: 0
       template:
         spec:
+          terminationGracePeriodSeconds: 1800
           serviceAccountName: ctk-test-runner-kueue-ksa
           restartPolicy: Never
           containers:
@@ -79,6 +81,28 @@ steps:
             - |
               set -x -e
               cd /workspace
+              
+              DEPLOYMENT_NAME="${_TEST_PREFIX}rocky8-slurm-$$BUILD_ID_SHORT"
+              
+              cleanup_pod() {
+                set +e
+                echo "Caught SIGTERM! Stopping ansible and initiating graceful cleanup..."
+                kill -TERM $$ANSIBLE_PID 2>/dev/null || true
+                wait $$ANSIBLE_PID 2>/dev/null || true
+                
+                echo "Destroying infrastructure for $$DEPLOYMENT_NAME using Ansible..."
+                echo "- hosts: localhost" > /workspace/cleanup-playbook.yml
+                echo "  tasks:" >> /workspace/cleanup-playbook.yml
+                echo "  - ansible.builtin.include_tasks:" >> /workspace/cleanup-playbook.yml
+                echo "      file: tools/cloud-build/daily-tests/ansible_playbooks/tasks/rescue_gcluster_failure.yml" >> /workspace/cleanup-playbook.yml
+                
+                ansible-playbook /workspace/cleanup-playbook.yml -e deployment_name="$$DEPLOYMENT_NAME" -e workspace="/workspace"
+                
+                echo "Graceful cleanup finished."
+                exit 1
+              }
+              trap cleanup_pod SIGTERM SIGINT
+              
               if [ "${_TEST_PREFIX}" == "daily-" ]; then
                   gsutil cp gs://$$GCLUSTER_GCS_PATH/latest/gcluster-bundle.zip .
                   unzip -o gcluster-bundle.zip
@@ -93,7 +117,9 @@ steps:
               ansible-playbook tools/cloud-build/daily-tests/ansible_playbooks/slurm-integration-test.yml \
                 --extra-vars="test_prefix=${_TEST_PREFIX} use_fixed_vpc=true" \
                 --user=sa_117072932881248643794 --extra-vars="project=$PROJECT_ID build=$$BUILD_ID_SHORT" \
-                --extra-vars="@tools/cloud-build/daily-tests/tests/slurm-v6-rocky8.yml"
+                --extra-vars="@tools/cloud-build/daily-tests/tests/slurm-v6-rocky8.yml" &
+              ANSIBLE_PID=$$!
+              wait $$ANSIBLE_PID
             resources:
               requests:
                 test-locks/slurm-generic: 1
@@ -101,31 +127,66 @@ steps:
                 test-locks/slurm-generic: 1
     EOF
 
-# 3. Submit GKE Kueue Job
-- id: submit-gke-job
+# 3. Submit and Monitor GKE Kueue Job with Retry
+- id: submit-and-monitor-gke-job
   name: gcr.io/cloud-builders/gcloud
   entrypoint: /bin/bash
   args:
   - -c
   - |
     gcloud container clusters get-credentials integration-tests-kueue-cluster --region=us-central1
-    kubectl apply -f /workspace/job.yaml
-
-# 4. Stream Logs and Monitor GKE Job execution
-- id: monitor-gke-job
-  name: gcr.io/cloud-builders/gcloud
-  entrypoint: /bin/bash
-  args:
-  - -c
-  - |
     BUILD_ID_SHORT=$$(echo "$BUILD_ID" | cut -c1-6)
-    bash tools/cloud-build/monitor_kueue_job.sh \
-        integration-tests-kueue-cluster \
-        us-central1 \
-        "slurm-gcp-v6-rocky8-$$BUILD_ID_SHORT" \
-        default
+    JOB_NAME="slurm-gcp-v6-rocky8-$$BUILD_ID_SHORT"
+    
+    cleanup_cb() {
+      echo "Caught SIGTERM! Cloud Build cancelled. Deleting Kueue Job to trigger graceful eviction..."
+      kubectl delete job "$$JOB_NAME" -n default || true
+      exit 1
+    }
+    trap cleanup_cb SIGTERM SIGINT
+    
+    MAX_RETRIES=100
+    RETRY_DELAY=300
+    ATTEMPT=1
+    
+    while true; do
+      echo "=== ATTEMPT $$ATTEMPT: Submitting Kueue Job ==="
+      kubectl apply -f /workspace/job.yaml
+      
+      set +e
+      ( bash tools/cloud-build/monitor_kueue_job.sh \
+          integration-tests-kueue-cluster \
+          us-central1 \
+          "$$JOB_NAME" \
+          default | tee /workspace/job_logs.txt; exit $${PIPESTATUS[0]} ) &
+      MONITOR_PID=$$!
+      wait $$MONITOR_PID
+      EXIT_CODE=$$?
+      set -e
+      
+      if [ $$EXIT_CODE -eq 0 ]; then
+        echo "Job succeeded!"
+        break
+      fi
+      
+      # Check if failure was due to zone capacity
+      if grep -q "Couldn't find a zone to deploy\|ERROR: ZONE not found\|ZONE_RESOURCE_POOL_EXHAUSTED\|does not have enough resources available" /workspace/job_logs.txt; then
+        echo "WARNING: GCP is out of zone capacity. Kueue Job has already been deleted. Retrying in $$RETRY_DELAY seconds..."
+      else
+        echo "ERROR: Test failed due to an actual error (not zone capacity). Failing pipeline." >&2
+        exit 1
+      fi
+      
+      if [ $$ATTEMPT -ge $$MAX_RETRIES ]; then
+        echo "ERROR: Job failed to find zone capacity after $$MAX_RETRIES attempts." >&2
+        exit 1
+      fi
+      
+      sleep $$RETRY_DELAY
+      ATTEMPT=$$((ATTEMPT + 1))
+    done
 
-# 5. Cleanup the built image from Registry to save costs
+# 4. Cleanup the built image from Registry to save costs
 - id: cleanup-image
   name: gcr.io/cloud-builders/gcloud
   entrypoint: /bin/bash
