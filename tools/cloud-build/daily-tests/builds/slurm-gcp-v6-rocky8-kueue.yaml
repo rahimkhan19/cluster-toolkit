@@ -128,14 +128,16 @@ steps:
                   STATUS=$$(gcloud builds describe "$$CLOUD_BUILD_ID" --format="value(status)" 2>/dev/null || echo "UNKNOWN")
                   if [ "$$STATUS" = "CANCELLED" ]; then
                     echo "Detected Cloud Build cancellation via API! Triggering self-destruct..."
-                    kill -TERM $$ANSIBLE_PID
+                    kill -TERM 1
                     break
                   fi
                   sleep 30
                 done
               ) &
+              WATCHDOG_PID=$$!
 
               wait $$ANSIBLE_PID
+              kill $$WATCHDOG_PID 2>/dev/null || true
             resources:
               requests:
                 test-locks/slurm-generic: 1
