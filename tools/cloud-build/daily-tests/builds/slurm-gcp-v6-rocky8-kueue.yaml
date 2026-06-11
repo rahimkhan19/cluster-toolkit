@@ -76,6 +76,8 @@ steps:
               value: "false"
             - name: ANSIBLE_CONFIG
               value: "/workspace/tools/cloud-build/ansible.cfg"
+            - name: CLOUD_BUILD_ID
+              value: "$BUILD_ID"
             command: ["/bin/bash", "-c"]
             args:
             - |
@@ -119,6 +121,20 @@ steps:
                 --user=sa_117072932881248643794 --extra-vars="project=$PROJECT_ID build=$$BUILD_ID_SHORT" \
                 --extra-vars="@tools/cloud-build/daily-tests/tests/slurm-v6-rocky8.yml" &
               ANSIBLE_PID=$$!
+              
+              # Watchdog to monitor Cloud Build cancellation
+              (
+                while true; do
+                  STATUS=$$(gcloud builds describe "$$CLOUD_BUILD_ID" --format="value(status)" 2>/dev/null || echo "UNKNOWN")
+                  if [ "$$STATUS" = "CANCELLED" ]; then
+                    echo "Detected Cloud Build cancellation via API! Triggering self-destruct..."
+                    kill -TERM $$ANSIBLE_PID
+                    break
+                  fi
+                  sleep 30
+                done
+              ) &
+
               wait $$ANSIBLE_PID
             resources:
               requests:
