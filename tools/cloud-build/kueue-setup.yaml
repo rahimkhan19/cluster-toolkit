@@ -1,0 +1,45 @@
+apiVersion: kueue.x-k8s.io/v1beta1
+kind: ResourceFlavor
+metadata:
+  name: test-lock-flavor
+---
+apiVersion: kueue.x-k8s.io/v1beta1
+kind: ClusterQueue
+metadata:
+  name: cluster-queue-test-locks
+spec:
+  namespaceSelector: {} # Matches all namespaces
+  resourceGroups:
+  - coveredResources:
+    - "test-locks/slurm-generic"
+    - "test-locks/a3-megagpu"
+    - "test-locks/a3-highgpu"
+    - "test-locks/filestore-high-scale"
+    - "test-locks/filestore-standard"
+    - "test-locks/h3"
+    - "test-locks/vpc-heavy"
+    flavors:
+    - name: test-lock-flavor
+      resources:
+      - name: test-locks/slurm-generic
+        nominalQuota: 10
+      - name: test-locks/a3-megagpu
+        nominalQuota: 1
+      - name: test-locks/a3-highgpu
+        nominalQuota: 1
+      - name: test-locks/filestore-high-scale
+        nominalQuota: 1
+      - name: test-locks/filestore-standard
+        nominalQuota: 2
+      - name: test-locks/h3
+        nominalQuota: 1
+      - name: test-locks/vpc-heavy
+        nominalQuota: 1
+---
+apiVersion: kueue.x-k8s.io/v1beta1
+kind: LocalQueue
+metadata:
+  name: local-queue-test-locks
+  namespace: default
+spec:
+  clusterQueue: cluster-queue-test-locks
