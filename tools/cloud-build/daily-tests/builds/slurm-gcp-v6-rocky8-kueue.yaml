@@ -139,7 +139,7 @@ steps:
               (
                 set +x
                 while true; do
-                  STATUS=\$$\(gcloud builds describe "\$$CLOUD_BUILD_ID" --format="value(status)" 2>/dev/null || echo "UNKNOWN"\)
+                  STATUS=\$$(gcloud builds describe "\$$CLOUD_BUILD_ID" --format="value(status)" 2>/dev/null || echo "UNKNOWN")
                   if [ "\$$STATUS" = "CANCELLED" ]; then
                     echo ""
                     echo "=========================================================================="

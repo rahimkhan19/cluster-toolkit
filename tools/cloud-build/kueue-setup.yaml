@@ -43,3 +43,19 @@ metadata:
   namespace: default
 spec:
   clusterQueue: cluster-queue-test-locks
+---
+apiVersion: scheduling.k8s.io/v1
+kind: PriorityClass
+metadata:
+  name: daily-test-priority
+value: 100
+globalDefault: false
+description: "High priority for daily integration tests"
+---
+apiVersion: scheduling.k8s.io/v1
+kind: PriorityClass
+metadata:
+  name: pr-test-priority
+value: 50
+globalDefault: false
+description: "Lower priority for standard PR tests"
