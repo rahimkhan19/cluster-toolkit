@@ -51,6 +51,13 @@ steps:
   - -c
   - |
     BUILD_ID_SHORT=$$(echo "$BUILD_ID" | cut -c1-6)
+    
+    if [ "${_TEST_PREFIX}" == "daily-" ]; then
+      PRIORITY_CLASS="daily-test-priority"
+    else
+      PRIORITY_CLASS="pr-test-priority"
+    fi
+
     cat <<EOF > job.yaml
     apiVersion: batch/v1
     kind: Job
@@ -65,6 +72,7 @@ steps:
       backoffLimit: 0
       template:
         spec:
+          priorityClassName: $$PRIORITY_CLASS
           terminationGracePeriodSeconds: 1800
           serviceAccountName: ctk-test-runner-kueue-ksa
           restartPolicy: Never
@@ -88,17 +96,22 @@ steps:
               
               cleanup_pod() {
                 set +e
-                echo "Caught SIGTERM! Stopping ansible and initiating graceful cleanup..."
-                kill -TERM $$ANSIBLE_PID 2>/dev/null || true
-                wait $$ANSIBLE_PID 2>/dev/null || true
+                echo ""
+                echo "=========================================================================="
+                echo "CAUGHT SIGTERM (Pod Eviction or Manual Cancellation)!"
+                echo "Halting primary Ansible execution..."
+                echo "=========================================================================="
+                kill -TERM \$$ANSIBLE_PID 2>/dev/null || true
+                wait \$$ANSIBLE_PID 2>/dev/null || true
                 
-                echo "Destroying infrastructure for $$DEPLOYMENT_NAME using Ansible..."
+                echo ""
+                echo "INITIATING RESCUE PLAYBOOK: Destroying leaked infrastructure for \$$DEPLOYMENT_NAME..."
                 echo "- hosts: localhost" > /workspace/cleanup-playbook.yml
                 echo "  tasks:" >> /workspace/cleanup-playbook.yml
                 echo "  - ansible.builtin.include_tasks:" >> /workspace/cleanup-playbook.yml
                 echo "      file: tools/cloud-build/daily-tests/ansible_playbooks/tasks/rescue_gcluster_failure.yml" >> /workspace/cleanup-playbook.yml
                 
-                ansible-playbook /workspace/cleanup-playbook.yml -e deployment_name="$$DEPLOYMENT_NAME" -e workspace="/workspace"
+                ansible-playbook /workspace/cleanup-playbook.yml -e deployment_name="\$$DEPLOYMENT_NAME" -e workspace="/workspace"
                 
                 echo "Graceful cleanup finished."
                 exit 1
@@ -120,24 +133,30 @@ steps:
                 --extra-vars="test_prefix=${_TEST_PREFIX} use_fixed_vpc=true" \
                 --user=sa_117072932881248643794 --extra-vars="project=$PROJECT_ID build=$$BUILD_ID_SHORT" \
                 --extra-vars="@tools/cloud-build/daily-tests/tests/slurm-v6-rocky8.yml" &
-              ANSIBLE_PID=$$!
+              ANSIBLE_PID=\$$!
               
               # Watchdog to monitor Cloud Build cancellation
               (
+                set +x
                 while true; do
-                  STATUS=$$(gcloud builds describe "$$CLOUD_BUILD_ID" --format="value(status)" 2>/dev/null || echo "UNKNOWN")
-                  if [ "$$STATUS" = "CANCELLED" ]; then
-                    echo "Detected Cloud Build cancellation via API! Triggering self-destruct..."
+                  STATUS=\$$\(gcloud builds describe "\$$CLOUD_BUILD_ID" --format="value(status)" 2>/dev/null || echo "UNKNOWN"\)
+                  if [ "\$$STATUS" = "CANCELLED" ]; then
+                    echo ""
+                    echo "=========================================================================="
+                    echo "WATCHDOG ALERT: Cloud Build pipeline was CANCELLED by a user!"
+                    echo "Triggering graceful shutdown and cleanup for \$$DEPLOYMENT_NAME..."
+                    echo "=========================================================================="
+                    echo ""
                     kill -TERM 1
                     break
                   fi
                   sleep 30
                 done
               ) &
-              WATCHDOG_PID=$$!
+              WATCHDOG_PID=\$$!
 
-              wait $$ANSIBLE_PID
-              kill $$WATCHDOG_PID 2>/dev/null || true
+              wait \$$ANSIBLE_PID
+              kill \$$WATCHDOG_PID 2>/dev/null || true
             resources:
               requests:
                 test-locks/slurm-generic: 1
@@ -157,7 +176,11 @@ steps:
     JOB_NAME="slurm-gcp-v6-rocky8-$$BUILD_ID_SHORT"
     
     cleanup_cb() {
-      echo "Caught SIGTERM! Cloud Build cancelled. Deleting Kueue Job to trigger graceful eviction..."
+      echo ""
+      echo "=========================================================================="
+      echo "PIPELINE CANCELLED: The Cloud Build step received a termination signal."
+      echo "Deleting GKE Kueue Job ($$JOB_NAME) to force the Pod to clean itself up!"
+      echo "=========================================================================="
       kubectl delete job "$$JOB_NAME" -n default || true
       exit 1
     }
