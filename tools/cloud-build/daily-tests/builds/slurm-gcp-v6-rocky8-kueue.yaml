@@ -92,7 +92,7 @@ steps:
               set -x -e
               cd /workspace
               
-              DEPLOYMENT_NAME="${_TEST_PREFIX}rocky8-slurm-$$BUILD_ID_SHORT"
+              DEPLOYMENT_NAME="rock-8-$$BUILD_ID_SHORT"
               
               cleanup_pod() {
                 set +e
