@@ -86,6 +86,8 @@ steps:
               value: "/workspace/tools/cloud-build/ansible.cfg"
             - name: CLOUD_BUILD_ID
               value: "$BUILD_ID"
+            - name: _TEST_PREFIX
+              value: "${_TEST_PREFIX}"
             command: ["/bin/bash", "-c"]
             args:
             - |
