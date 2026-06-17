@@ -74,7 +74,7 @@ steps:
         spec:
           priorityClassName: $$PRIORITY_CLASS
           terminationGracePeriodSeconds: 1800
-          serviceAccountName: ctk-test-runner-kueue-ksa
+          serviceAccountName: test-kueue-cluster-runner-ksa
           restartPolicy: Never
           containers:
           - name: runner
@@ -142,7 +142,7 @@ steps:
 
               ansible-playbook tools/cloud-build/daily-tests/ansible_playbooks/slurm-integration-test.yml \
                 --extra-vars="test_prefix=${_TEST_PREFIX} use_fixed_vpc=true" \
-                --user=sa_117072932881248643794 --extra-vars="project=$PROJECT_ID build=$$BUILD_ID_SHORT" \
+                --user=sa_110243952974069991993 --extra-vars="project=$PROJECT_ID build=$$BUILD_ID_SHORT" \
                 --extra-vars="@tools/cloud-build/daily-tests/tests/slurm-v6-rocky8.yml" &
               ANSIBLE_PID=\$$!
               
@@ -183,7 +183,7 @@ steps:
   args:
   - -c
   - |
-    gcloud container clusters get-credentials integration-tests-kueue-cluster --region=us-central1
+    gcloud container clusters get-credentials test-kueue-cluster --region=us-central1
     BUILD_ID_SHORT=$$(echo "$BUILD_ID" | cut -c1-6)
     JOB_NAME="slurm-gcp-v6-rocky8-$$BUILD_ID_SHORT"
     
@@ -208,7 +208,7 @@ steps:
       
       set +e
       ( bash tools/cloud-build/monitor_kueue_job.sh \
-          integration-tests-kueue-cluster \
+          test-kueue-cluster \
           us-central1 \
           "$$JOB_NAME" \
           default | tee /workspace/job_logs.txt; exit $${PIPESTATUS[0]} ) &
