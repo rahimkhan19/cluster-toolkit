@@ -12,11 +12,14 @@ spec:
   resourceGroups:
   - coveredResources:
     - "test-locks/slurm"
+    - "test-locks/slurm-gcp-v6-rocky8"
     flavors:
     - name: test-lock-flavor
       resources:
       - name: test-locks/slurm
         nominalQuota: 5
+      - name: test-locks/slurm-gcp-v6-rocky8
+        nominalQuota: 1
 ---
 apiVersion: kueue.x-k8s.io/v1beta1
 kind: LocalQueue

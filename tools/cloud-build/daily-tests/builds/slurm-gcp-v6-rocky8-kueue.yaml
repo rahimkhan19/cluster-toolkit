@@ -180,8 +180,10 @@ steps:
             resources:
               requests:
                 test-locks/slurm: 1
+                test-locks/slurm-gcp-v6-rocky8: 1
               limits:
                 test-locks/slurm: 1
+                test-locks/slurm-gcp-v6-rocky8: 1
     EOF
 
 # 3. Submit and Monitor GKE Kueue Job with Retry
