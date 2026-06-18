@@ -52,6 +52,8 @@ steps:
   - |
     BUILD_ID_SHORT=$$(echo "$BUILD_ID" | cut -c1-6)
     
+    # Determine the priority class based on the test prefix. 
+    # Daily tests use lower priority compared to PR validation tests.
     if [ "${_TEST_PREFIX}" == "daily-" ]; then
       PRIORITY_CLASS="daily-test-priority"
     else
@@ -68,12 +70,12 @@ steps:
         kueue.x-k8s.io/queue-name: local-queue-test-locks
         build-id: "$BUILD_ID"
     spec:
-      suspend: true
+      suspend: true # Required for Kueue: the job must be created in suspended state for Kueue to manage it
       backoffLimit: 0
       template:
         spec:
           priorityClassName: $$PRIORITY_CLASS
-          terminationGracePeriodSeconds: 1800
+          terminationGracePeriodSeconds: 1800 # Grants 30 minutes for terraform destroy to finish gracefully if cancelled
           serviceAccountName: test-kueue-cluster-runner-ksa
           restartPolicy: Never
           containers:
@@ -97,6 +99,8 @@ steps:
               DEPLOYMENT_NAME="rock-8-$$BUILD_ID_SHORT"
               
               RUN_CLEANUP=true
+              # Trap function that runs the rescue playbook (terraform destroy) 
+              # if the pod is terminated by Kueue, fails, or is cancelled.
               cleanup_pod() {
                 local exit_code=$?
                 trap - EXIT SIGTERM SIGINT ERR
@@ -148,7 +152,9 @@ steps:
                 --extra-vars="@tools/cloud-build/daily-tests/tests/slurm-v6-rocky8.yml" &
               ANSIBLE_PID=\$$!
               
-              # Watchdog to monitor Cloud Build cancellation
+              # Watchdog background process to monitor the Cloud Build API.
+              # If the user clicks "Cancel" in the UI, this detects it and sends a SIGTERM 
+              # to trigger the graceful cleanup trap inside the pod.
               (
                 set +x
                 while true; do
@@ -173,9 +179,9 @@ steps:
               RUN_CLEANUP=false
             resources:
               requests:
-                test-locks/slurm-generic: 1
+                test-locks/slurm: 1
               limits:
-                test-locks/slurm-generic: 1
+                test-locks/slurm: 1
     EOF
 
 # 3. Submit and Monitor GKE Kueue Job with Retry
@@ -189,6 +195,8 @@ steps:
     BUILD_ID_SHORT=$$(echo "$BUILD_ID" | cut -c1-6)
     JOB_NAME="slurm-gcp-v6-rocky8-$$BUILD_ID_SHORT"
     
+    # Cloud Build trap: If the Cloud Build step itself receives a cancellation signal, 
+    # delete the GKE job so the pod receives a SIGTERM and performs infrastructure cleanup.
     cleanup_cb() {
       echo ""
       echo "=========================================================================="
@@ -224,7 +232,8 @@ steps:
         break
       fi
       
-      # Check if failure was due to zone capacity
+      # Check if the failure was specifically due to a lack of GCP zone capacity.
+      # If so, retry. If it's a real error (like a terraform syntax error), fail immediately.
       if grep -q "Couldn't find a zone to deploy\|ERROR: ZONE not found\|ZONE_RESOURCE_POOL_EXHAUSTED\|does not have enough resources available" /workspace/job_logs.txt; then
         echo "WARNING: GCP is out of zone capacity. Kueue Job has already been deleted. Retrying in $$RETRY_DELAY seconds..."
       else
