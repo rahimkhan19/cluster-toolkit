@@ -1,0 +1,78 @@
+#!/bin/bash
+set -o pipefail
+
+if [ "$#" -ne 4 ]; then
+    echo "Usage: $0 <cluster-name> <region> <job-name> <namespace>"
+    exit 1
+fi
+
+CLUSTER_NAME="$1"
+REGION="$2"
+JOB_NAME="$3"
+NAMESPACE="$4"
+
+echo "Connecting to GKE cluster $CLUSTER_NAME in $REGION..."
+gcloud container clusters get-credentials "$CLUSTER_NAME" --region="$REGION"
+
+echo "Waiting for Job $JOB_NAME to be admitted by Kueue..."
+while true; do
+    SUSPENDED=$(kubectl get job "$JOB_NAME" -n "$NAMESPACE" -o jsonpath='{.spec.suspend}' 2>/dev/null)
+    if [ "$?" -ne 0 ]; then
+        echo "Error: Job $JOB_NAME not found yet or kubectl failed. Retrying..."
+        sleep 5
+        continue
+    fi
+    if [ "$SUSPENDED" = "false" ]; then
+        echo "Job admitted by Kueue!"
+        break
+    fi
+    echo "Job is currently suspended/queued. Waiting..."
+    sleep 10
+done
+
+echo "Waiting for Pod to be initialized..."
+while true; do
+    POD_NAME=$(kubectl get pods -n "$NAMESPACE" --selector=job-name="$JOB_NAME" -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
+    if [ -n "$POD_NAME" ]; then
+        POD_PHASE=$(kubectl get pod "$POD_NAME" -n "$NAMESPACE" -o jsonpath='{.status.phase}' 2>/dev/null)
+        if [ "$POD_PHASE" = "Running" ] || [ "$POD_PHASE" = "Succeeded" ] || [ "$POD_PHASE" = "Failed" ]; then
+            echo "Pod $POD_NAME is $POD_PHASE. Ready to stream logs."
+            break
+        fi
+        echo "Pod $POD_NAME detected but is in phase: $POD_PHASE. Waiting for it to start running..."
+    fi
+    sleep 5
+done
+
+echo "Streaming logs from pod $POD_NAME..."
+while true; do
+    # Stream logs
+    kubectl logs -f "$POD_NAME" -n "$NAMESPACE" -c runner
+    
+    # Check if job is completed
+    SUCCEEDED=$(kubectl get job "$JOB_NAME" -n "$NAMESPACE" -o jsonpath='{.status.succeeded}' 2>/dev/null)
+    FAILED=$(kubectl get job "$JOB_NAME" -n "$NAMESPACE" -o jsonpath='{.status.failed}' 2>/dev/null)
+    
+    if [ "$SUCCEEDED" = "1" ] || [ "$FAILED" = "1" ]; then
+        break
+    fi
+    echo "Logs disconnected but job is not finished. Reconnecting in 5s..."
+    sleep 5
+done
+
+echo "Job finished execution. Fetching final status..."
+SUCCEEDED=$(kubectl get job "$JOB_NAME" -n "$NAMESPACE" -o jsonpath='{.status.succeeded}' 2>/dev/null)
+FAILED=$(kubectl get job "$JOB_NAME" -n "$NAMESPACE" -o jsonpath='{.status.failed}' 2>/dev/null)
+
+echo "Job status: Succeeded=$SUCCEEDED, Failed=$FAILED"
+
+echo "Cleaning up GKE Job resource..."
+kubectl delete job "$JOB_NAME" -n "$NAMESPACE"
+
+if [ "$SUCCEEDED" = "1" ]; then
+    echo "GKE Kueue Job completed successfully."
+    exit 0
+else
+    echo "GKE Kueue Job failed (or was aborted)."
+    exit 1
+fi
