@@ -148,34 +148,11 @@ steps:
 
               ansible-playbook tools/cloud-build/daily-tests/ansible_playbooks/slurm-integration-test.yml \
                 --extra-vars="test_prefix=${_TEST_PREFIX} use_fixed_vpc=true" \
-                --user=sa_110243952974069991993 --extra-vars="project=$PROJECT_ID build=$$BUILD_ID_SHORT" \
+                --user=sa_116785999750372214978 --extra-vars="project=$PROJECT_ID build=$$BUILD_ID_SHORT" \
                 --extra-vars="@tools/cloud-build/daily-tests/tests/slurm-v6-rocky8.yml" &
               ANSIBLE_PID=\$$!
-              
-              # Watchdog background process to monitor the Cloud Build API.
-              # If the user clicks "Cancel" in the UI, this detects it and sends a SIGTERM 
-              # to trigger the graceful cleanup trap inside the pod.
-              (
-                set +x
-                while true; do
-                  STATUS=\$$(gcloud builds describe "\$$CLOUD_BUILD_ID" --format="value(status)" 2>/dev/null || echo "UNKNOWN")
-                  if [ "\$$STATUS" = "CANCELLED" ]; then
-                    echo ""
-                    echo "=========================================================================="
-                    echo "WATCHDOG ALERT: Cloud Build pipeline was CANCELLED by a user!"
-                    echo "Triggering graceful shutdown and cleanup for \$$DEPLOYMENT_NAME..."
-                    echo "=========================================================================="
-                    echo ""
-                    kill -TERM 1
-                    break
-                  fi
-                  sleep 30
-                done
-              ) &
-              WATCHDOG_PID=\$$!
 
               wait \$$ANSIBLE_PID
-              kill \$$WATCHDOG_PID 2>/dev/null || true
               RUN_CLEANUP=false
             resources:
               requests:

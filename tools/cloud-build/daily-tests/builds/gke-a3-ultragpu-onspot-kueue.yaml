@@ -62,6 +62,12 @@ steps:
       PRIORITY_CLASS="pr-test-priority"
     fi
 
+    if [[ "$PROJECT_ID" == "hpc-toolkit-gsc" ]]; then
+      OPTIONS_BUCKET="daily-tests-gsc-tf-state"
+    else
+      OPTIONS_BUCKET="hpc-ctk1357"
+    fi
+
     cat <<EOF > job.yaml
     apiVersion: batch/v1
     kind: Job
@@ -103,7 +109,7 @@ steps:
             - name: INSTANCE_PREFIX
               value: "a3uspgke"
             - name: OPTIONS_GCS_PATH
-              value: "gs://hpc-ctk1357/a3uoptions.txt"
+              value: "gs://$${OPTIONS_BUCKET}/a3uoptions.txt"
             - name: ENABLE_SPOT_FALLBACK
               value: "true"
             - name: GCLUSTER_GCS_PATH
@@ -202,7 +208,7 @@ steps:
               bash tools/add_ttl_label.sh "\$$EXAMPLE_BP"
 
               ansible-playbook tools/cloud-build/daily-tests/ansible_playbooks/base-integration-test.yml \
-                  --user=sa_110243952974069991993 --extra-vars="project=$PROJECT_ID build=$$BUILD_ID_SHORT chs_repo=$$CHS_REPO" \
+                  --user=sa_116785999750372214978 --extra-vars="project=$PROJECT_ID build=$$BUILD_ID_SHORT chs_repo=$$CHS_REPO" \
                   --extra-vars="region=\$$REGION zone=\$$ZONE" \
                   --extra-vars="enable_spot=\$$ENABLE_SPOT" \
                   --extra-vars="@\$$GKE_VARS_FILE" &
