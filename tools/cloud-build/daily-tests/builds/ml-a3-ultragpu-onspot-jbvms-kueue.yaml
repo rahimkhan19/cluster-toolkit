@@ -122,7 +122,7 @@ steps:
               set -x
               cd /workspace
               
-              DEPLOYMENT_NAME="a3usp-jbvms-$$BUILD_ID_SHORT"
+              DEPLOYMENT_NAME="a3u-spot-jbvms-$$BUILD_ID_SHORT"
               
               RUN_CLEANUP=true
               # Trap function that runs the rescue playbook (terraform destroy) 
