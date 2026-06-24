@@ -63,7 +63,7 @@ steps:
     fi
     
     if [ "$PROJECT_ID" == "hpc-toolkit-gsc" ]; then
-      OPTIONS_BUCKET="daily-tests-gsc-tf-state"
+      OPTIONS_BUCKET="hpc-ctk1357-gsc"
     else
       OPTIONS_BUCKET="hpc-ctk1357"
     fi
