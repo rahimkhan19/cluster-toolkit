@@ -61,6 +61,12 @@ steps:
     else
       PRIORITY_CLASS="pr-test-priority"
     fi
+    
+    if [ "$PROJECT_ID" == "hpc-toolkit-gsc" ]; then
+      OPTIONS_BUCKET="daily-tests-gsc-tf-state"
+    else
+      OPTIONS_BUCKET="hpc-ctk1357"
+    fi
 
     cat <<EOF > job.yaml
     apiVersion: batch/v1
@@ -101,7 +107,7 @@ steps:
             - name: INSTANCE_PREFIX
               value: "a4spgke"
             - name: OPTIONS_GCS_PATH
-              value: "gs://hpc-ctk1357/a4hoptions.txt"
+              value: "gs://$$OPTIONS_BUCKET/a4hoptions.txt"
             - name: ENABLE_SPOT_FALLBACK
               value: "true"
             - name: GCLUSTER_GCS_PATH
