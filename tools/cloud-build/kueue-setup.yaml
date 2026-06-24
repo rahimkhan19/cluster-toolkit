@@ -16,6 +16,7 @@ spec:
     - "test-locks/a3-ultragpu"
     - "test-locks/gke-a3-ultragpu-onspot"
     - "test-locks/ml-a3-ultragpu-onspot-slurm"
+    - "test-locks/ml-a3-ultragpu-onspot-jbvms"
     flavors:
     - name: test-lock-flavor
       resources:
@@ -28,6 +29,8 @@ spec:
       - name: test-locks/gke-a3-ultragpu-onspot
         nominalQuota: 1
       - name: test-locks/ml-a3-ultragpu-onspot-slurm
+        nominalQuota: 1
+      - name: test-locks/ml-a3-ultragpu-onspot-jbvms
         nominalQuota: 1
 ---
 apiVersion: kueue.x-k8s.io/v1beta1
