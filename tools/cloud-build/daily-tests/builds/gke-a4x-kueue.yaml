@@ -91,10 +91,6 @@ steps:
               value: "/workspace/tools/cloud-build/ansible.cfg"
             - name: _TEST_PREFIX
               value: "${_TEST_PREFIX}"
-            - name: PROJECT_ID
-              value: "$PROJECT_ID"
-            - name: BUILD_ID
-              value: "$BUILD_ID"
             - name: GCLUSTER_GCS_PATH
               value: "$$GCLUSTER_GCS_PATH"
             command: ["/bin/bash", "-c"]
@@ -103,7 +99,7 @@ steps:
               set -x -e
               cd /workspace
               
-              DEPLOYMENT_NAME="gke-a4x-\$$BUILD_ID_SHORT"
+              DEPLOYMENT_NAME="gke-a4x-$$BUILD_ID_SHORT"
               
               RUN_CLEANUP=true
               cleanup_pod() {
@@ -141,8 +137,6 @@ steps:
               trap cleanup_pod EXIT SIGTERM SIGINT
               
               bash tools/get_binary.sh "${_TEST_PREFIX}"
-              BUILD_ID_FULL=\$$BUILD_ID
-              BUILD_ID_SHORT=\$${BUILD_ID_FULL:0:6}
               EXAMPLE_BP=examples/gke-a4x/gke-a4x.yaml
 
               # Adding vm to act as remote node
@@ -171,7 +165,7 @@ steps:
 
               bash tools/add_ttl_label.sh "\$$EXAMPLE_BP"
               ansible-playbook tools/cloud-build/daily-tests/ansible_playbooks/base-integration-test.yml \
-                  --user=sa_116785999750372214978 --extra-vars="project=\$$PROJECT_ID build=\$$BUILD_ID_SHORT" \
+                  --user=sa_116785999750372214978 --extra-vars="project=$PROJECT_ID build=$$BUILD_ID_SHORT" \
                   --extra-vars="@tools/cloud-build/daily-tests/tests/gke-a4x.yml" &
               ANSIBLE_PID=\$$!
 
