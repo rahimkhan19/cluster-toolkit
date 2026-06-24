@@ -19,6 +19,8 @@ spec:
     - "test-locks/ml-a3-ultragpu-onspot-jbvms"
     - "test-locks/a4-highgpu"
     - "test-locks/gke-a4-onspot"
+    - "test-locks/a4x"
+    - "test-locks/gke-a4x"
     flavors:
     - name: test-lock-flavor
       resources:
@@ -37,6 +39,10 @@ spec:
       - name: test-locks/a4-highgpu
         nominalQuota: 1
       - name: test-locks/gke-a4-onspot
+        nominalQuota: 1
+      - name: test-locks/a4x
+        nominalQuota: 1
+      - name: test-locks/gke-a4x
         nominalQuota: 1
 ---
 apiVersion: kueue.x-k8s.io/v1beta1
