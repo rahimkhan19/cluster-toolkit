@@ -1,0 +1,65 @@
+apiVersion: kueue.x-k8s.io/v1beta1
+kind: ResourceFlavor
+metadata:
+  name: test-lock-flavor
+---
+apiVersion: kueue.x-k8s.io/v1beta1
+kind: ClusterQueue
+metadata:
+  name: cluster-queue-test-locks
+spec:
+  namespaceSelector: {} # Matches all namespaces
+  resourceGroups:
+  - coveredResources:
+    - "test-locks/slurm"
+    - "test-locks/slurm-gcp-v6-rocky8"
+    - "test-locks/a3-ultragpu"
+    - "test-locks/gke-a3-ultragpu-onspot"
+    - "test-locks/ml-a3-ultragpu-onspot-slurm"
+    - "test-locks/ml-a3-ultragpu-onspot-jbvms"
+    - "test-locks/a4-highgpu"
+    - "test-locks/gke-a4-onspot"
+    - "test-locks/a4x"
+    - "test-locks/gke-a4x"
+    - "test-locks/ml-a4-highgpu-onspot-slurm"
+    flavors:
+    - name: test-lock-flavor
+      resources:
+      - name: test-locks/slurm
+        nominalQuota: 5
+      - name: test-locks/slurm-gcp-v6-rocky8
+        nominalQuota: 1
+      - name: test-locks/a3-ultragpu
+        nominalQuota: 1
+      - name: test-locks/gke-a3-ultragpu-onspot
+        nominalQuota: 1
+      - name: test-locks/ml-a3-ultragpu-onspot-slurm
+        nominalQuota: 1
+      - name: test-locks/ml-a3-ultragpu-onspot-jbvms
+        nominalQuota: 1
+      - name: test-locks/a4-highgpu
+        nominalQuota: 1
+      - name: test-locks/gke-a4-onspot
+        nominalQuota: 1
+      - name: test-locks/a4x
+        nominalQuota: 1
+      - name: test-locks/gke-a4x
+        nominalQuota: 1
+      - name: test-locks/ml-a4-highgpu-onspot-slurm
+        nominalQuota: 1
+---
+apiVersion: kueue.x-k8s.io/v1beta1
+kind: LocalQueue
+metadata:
+  name: local-queue-test-locks
+  namespace: default
+spec:
+  clusterQueue: cluster-queue-test-locks
+---
+apiVersion: scheduling.k8s.io/v1
+kind: PriorityClass
+metadata:
+  name: emergency-hotfix-priority
+value: 10000
+globalDefault: false
+description: "Highest priority for emergency hotfix PR tests."
