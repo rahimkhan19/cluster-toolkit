@@ -165,7 +165,7 @@ steps:
               set -x
               cd /workspace
               bash tools/get_binary.sh "${_TEST_PREFIX}"
-              REGION="\$$${ZONE%-*}"
+              REGION="\$${ZONE%-*}"
               BLUEPRINT="/workspace/examples/machine-learning/a4-highgpu-8g/a4high-slurm-blueprint.yaml"
               sed -i -e '/deletion_protection:/{n;s/enabled: true/enabled: false/}' \$$BLUEPRINT
               sed -i -e '/reason:/d' \$$BLUEPRINT
