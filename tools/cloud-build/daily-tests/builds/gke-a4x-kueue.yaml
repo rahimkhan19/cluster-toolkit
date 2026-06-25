@@ -57,10 +57,10 @@ steps:
     BUILD_ID_SHORT=$$(echo "$BUILD_ID" | cut -c1-6)
     
     # Determine the priority class based on the test prefix. 
-    if [ "${_TEST_PREFIX}" == "daily-" ]; then
-      PRIORITY_CLASS="daily-test-priority"
+    if [ "${_TEST_PREFIX}" == "hotfix-" ]; then
+      PRIORITY_LINE="priorityClassName: emergency-hotfix-priority"
     else
-      PRIORITY_CLASS="pr-test-priority"
+      PRIORITY_LINE=""
     fi
 
     cat <<EOF > job.yaml
@@ -77,7 +77,7 @@ steps:
       backoffLimit: 0
       template:
         spec:
-          priorityClassName: $$PRIORITY_CLASS
+          $$PRIORITY_LINE
           terminationGracePeriodSeconds: 1800
           serviceAccountName: test-kueue-cluster-runner-ksa
           restartPolicy: Never
@@ -165,7 +165,7 @@ steps:
 
               bash tools/add_ttl_label.sh "\$$EXAMPLE_BP"
               ansible-playbook tools/cloud-build/daily-tests/ansible_playbooks/base-integration-test.yml \
-                  --user=sa_116785999750372214978 --extra-vars="project=$PROJECT_ID build=$$BUILD_ID_SHORT" \
+                  --user=sa_112747096841303599702 --extra-vars="project=$PROJECT_ID build=$$BUILD_ID_SHORT" \
                   --extra-vars="@tools/cloud-build/daily-tests/tests/gke-a4x.yml" &
               ANSIBLE_PID=\$$!
 
