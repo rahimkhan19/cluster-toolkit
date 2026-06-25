@@ -1,0 +1,48 @@
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: dummy-device-plugin
+  namespace: kube-system
+  labels:
+    app: dummy-device-plugin
+spec:
+  selector:
+    matchLabels:
+      app: dummy-device-plugin
+  template:
+    metadata:
+      labels:
+        app: dummy-device-plugin
+    spec:
+      hostNetwork: true
+      containers:
+      - name: generic-device-plugin
+        image: us-central1-docker.pkg.dev/hpc-toolkit-dev/hpc-toolkit-repo/generic-device-plugin:0.2.0
+        args:
+        - --domain=test-locks
+        - '--device={"name": "slurm", "groups": [{"count": 1000, "paths": [{"path": "/dev/null"}]}]}'
+        - '--device={"name": "slurm-gcp-v6-rocky8", "groups": [{"count": 1000, "paths": [{"path": "/dev/null"}]}]}'
+        - '--device={"name": "a3-ultragpu", "groups": [{"count": 1000, "paths": [{"path": "/dev/null"}]}]}'
+        - '--device={"name": "gke-a3-ultragpu-onspot", "groups": [{"count": 1000, "paths": [{"path": "/dev/null"}]}]}'
+        - '--device={"name": "ml-a3-ultragpu-onspot-slurm", "groups": [{"count": 1000, "paths": [{"path": "/dev/null"}]}]}'
+        - '--device={"name": "ml-a3-ultragpu-onspot-jbvms", "groups": [{"count": 1000, "paths": [{"path": "/dev/null"}]}]}'
+        - '--device={"name": "a4-highgpu", "groups": [{"count": 1000, "paths": [{"path": "/dev/null"}]}]}'
+        - '--device={"name": "gke-a4-onspot", "groups": [{"count": 1000, "paths": [{"path": "/dev/null"}]}]}'
+        - '--device={"name": "a4x", "groups": [{"count": 1000, "paths": [{"path": "/dev/null"}]}]}'
+        - '--device={"name": "gke-a4x", "groups": [{"count": 1000, "paths": [{"path": "/dev/null"}]}]}'
+        - '--device={"name": "ml-a4-highgpu-onspot-slurm", "groups": [{"count": 1000, "paths": [{"path": "/dev/null"}]}]}'
+        - --listen=:8085
+        securityContext:
+          privileged: true
+        volumeMounts:
+        - name: device-plugin
+          mountPath: /var/lib/kubelet/device-plugins
+        - name: dev
+          mountPath: /dev
+      volumes:
+      - name: device-plugin
+        hostPath:
+          path: /var/lib/kubelet/device-plugins
+      - name: dev
+        hostPath:
+          path: /dev
