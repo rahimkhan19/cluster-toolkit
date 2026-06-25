@@ -128,7 +128,7 @@ steps:
               set -x
               cd /workspace
               
-              DEPLOYMENT_NAME="a3uspgke-$$BUILD_ID_SHORT"
+              DEPLOYMENT_NAME="gke-a3u-spot-$$BUILD_ID_SHORT"
               
               RUN_CLEANUP=true
               # Trap function that runs the rescue playbook (terraform destroy) 

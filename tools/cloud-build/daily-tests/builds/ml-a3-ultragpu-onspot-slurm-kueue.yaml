@@ -131,7 +131,7 @@ steps:
               set -x
               cd /workspace
               
-              DEPLOYMENT_NAME="a3usp-$$BUILD_ID_SHORT"
+              DEPLOYMENT_NAME="a3u-onspot-slurm-$$BUILD_ID_SHORT"
               
               RUN_CLEANUP=true
               # Trap function that runs the rescue playbook (terraform destroy) 
