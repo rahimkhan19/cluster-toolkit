@@ -17,7 +17,7 @@ spec:
       hostNetwork: true
       containers:
       - name: generic-device-plugin
-        image: squat/generic-device-plugin
+        image: us-central1-docker.pkg.dev/hpc-toolkit-dev/hpc-toolkit-repo/generic-device-plugin:0.2.0
         args:
         - --domain=test-locks
         - '--device={"name": "slurm", "groups": [{"count": 1000, "paths": [{"path": "/dev/null"}]}]}'

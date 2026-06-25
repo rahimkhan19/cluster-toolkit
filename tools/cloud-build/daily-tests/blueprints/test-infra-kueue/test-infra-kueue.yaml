@@ -21,8 +21,7 @@ vars:
   # Your GCP Project ID
   project_id: hpc-toolkit-gsc
 
-  # This should be unique across all of your Cluster
-  # Toolkit Deployments.
+  # This should be unique across all of your Cluster Toolkit Deployments.
   deployment_name: test-kueue-cluster
 
   # The GCP Region used for this deployment.
@@ -67,9 +66,20 @@ deployment_groups:
       - container.admin
       - iam.serviceAccountAdmin
 
+  - id: node_pool_sa
+    source: modules/project/service-account
+    settings:
+      name: node-sa
+      project_roles:
+      - logging.logWriter
+      - monitoring.metricWriter
+      - monitoring.viewer
+      - stackdriver.resourceMetadata.writer
+      - artifactregistry.reader
+
   - id: gke_cluster
     source: modules/scheduler/gke-cluster
-    use: [network1]
+    use: [network1, node_pool_sa]
     settings:
       system_node_pool_machine_type: e2-standard-2
       enable_private_endpoint: false
@@ -84,7 +94,7 @@ deployment_groups:
 
   - id: compute_pool
     source: modules/compute/gke-node-pool
-    use: [gke_cluster]
+    use: [gke_cluster, node_pool_sa]
     settings:
       machine_type: e2-standard-2
       initial_node_count: 1
@@ -117,13 +127,15 @@ deployment_groups:
       namespace: default
       k8s_service_account_name: kueue-reaper-ksa
 
+- group: kueue-config
+  modules:
   - id: kueue_and_manifests
     source: modules/management/kubectl-apply
     use: [gke_cluster]
     settings:
       kueue:
         install: true
-        config_path: $(ghpc_stage("../tools/cloud-build/kueue-setup.yaml"))
+        config_path: $(ghpc_stage("configs/kueue-setup.yaml"))
       apply_manifests:
       - name: test-runner-ksa
         content: |
@@ -135,7 +147,7 @@ deployment_groups:
             annotations:
               iam.gke.io/gcp-service-account: $(test_runner_gsa.service_account_email)
       - name: dummy-device-plugin
-        source: $(ghpc_stage("../tools/cloud-build/dummy-device-plugin.yaml"))
+        source: $(ghpc_stage("configs/dummy-device-plugin.yaml"))
       - name: kueue-reaper-ksa
         content: |
           apiVersion: v1
@@ -146,4 +158,4 @@ deployment_groups:
             annotations:
               iam.gke.io/gcp-service-account: $(kueue_reaper_gsa.service_account_email)
       - name: kueue-reaper-pod
-        source: $(ghpc_stage("../tools/cloud-build/kueue-reaper-pod.yaml"))
+        source: $(ghpc_stage("configs/kueue-reaper-pod.yaml"))

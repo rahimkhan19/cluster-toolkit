@@ -56,15 +56,7 @@ spec:
 apiVersion: scheduling.k8s.io/v1
 kind: PriorityClass
 metadata:
-  name: daily-test-priority
-value: 500
+  name: emergency-hotfix-priority
+value: 10000
 globalDefault: false
-description: "Standard priority for automated daily integration tests."
----
-apiVersion: scheduling.k8s.io/v1
-kind: PriorityClass
-metadata:
-  name: pr-test-priority
-value: 1000
-globalDefault: true
-description: "High priority for PR validation tests."
+description: "Highest priority for emergency hotfix PR tests."
