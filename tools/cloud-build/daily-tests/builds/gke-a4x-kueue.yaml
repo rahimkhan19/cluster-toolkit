@@ -165,7 +165,7 @@ steps:
 
               bash tools/add_ttl_label.sh "\$$EXAMPLE_BP"
               ansible-playbook tools/cloud-build/daily-tests/ansible_playbooks/base-integration-test.yml \
-                  --user=sa_112747096841303599702 --extra-vars="project=$PROJECT_ID build=$$BUILD_ID_SHORT" \
+                  --user=sa_108752959895705522366 --extra-vars="project=$PROJECT_ID build=$$BUILD_ID_SHORT" \
                   --extra-vars="@tools/cloud-build/daily-tests/tests/gke-a4x.yml" &
               ANSIBLE_PID=\$$!
 
