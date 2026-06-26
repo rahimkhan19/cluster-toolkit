@@ -14,7 +14,9 @@ spec:
     - "test-locks/slurm"
     - "test-locks/slurm-gcp-v6-rocky8"
     - "test-locks/a3-ultragpu"
+    - "test-locks/a3-highgpu"
     - "test-locks/gke-a3-ultragpu-onspot"
+    - "test-locks/gke-a3-highgpu-onspot"
     - "test-locks/ml-a3-ultragpu-onspot-slurm"
     - "test-locks/ml-a3-ultragpu-onspot-jbvms"
     - "test-locks/a4-highgpu"
@@ -34,7 +36,11 @@ spec:
         nominalQuota: 1
       - name: test-locks/a3-ultragpu
         nominalQuota: 1
+      - name: test-locks/a3-highgpu
+        nominalQuota: 1
       - name: test-locks/gke-a3-ultragpu-onspot
+        nominalQuota: 1
+      - name: test-locks/gke-a3-highgpu-onspot
         nominalQuota: 1
       - name: test-locks/ml-a3-ultragpu-onspot-slurm
         nominalQuota: 1
