@@ -104,6 +104,8 @@ steps:
               value: "true"
             - name: _TEST_PREFIX
               value: "${_TEST_PREFIX}"
+            - name: GCLUSTER_GCS_PATH
+              value: "$$GCLUSTER_GCS_PATH"
             command: ["/bin/bash", "-c"]
             args:
             - |
