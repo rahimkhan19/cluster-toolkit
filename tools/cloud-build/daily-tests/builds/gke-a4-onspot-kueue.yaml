@@ -202,7 +202,7 @@ steps:
               bash tools/add_ttl_label.sh "\$$EXAMPLE_BP"
 
               ansible-playbook tools/cloud-build/daily-tests/ansible_playbooks/base-integration-test.yml \
-                  --user=sa_112747096841303599702 \
+                  --user=sa_114252587369770497798 \
                   --extra-vars="project=\$$PROJECT_ID build=$$BUILD_ID_SHORT chs_repo=\$$CHS_REPO" \
                   --extra-vars="region=\$$REGION zone=\$$ZONE" \
                   --extra-vars="enable_spot=\$$ENABLE_SPOT" \
