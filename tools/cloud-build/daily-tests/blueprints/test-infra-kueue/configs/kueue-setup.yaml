@@ -31,7 +31,7 @@ spec:
     - "test-locks/g4-standard"
     - "test-locks/ml-g4-onspot-slurm"
     - "test-locks/ml-a4x-highgpu-slurm"
-    - "test-locks/ml-a3-megagpu-onspot-slurm-ubuntu"
+    - "test-locks/ml-a3-megagpu-onspot-slurm"
     flavors:
     - name: test-lock-flavor
       resources:
@@ -75,7 +75,7 @@ spec:
         nominalQuota: 1
       - name: test-locks/ml-a4x-highgpu-slurm
         nominalQuota: 1
-      - name: test-locks/ml-a3-megagpu-onspot-slurm-ubuntu
+      - name: test-locks/ml-a3-megagpu-onspot-slurm
         nominalQuota: 1
 ---
 apiVersion: kueue.x-k8s.io/v1beta1

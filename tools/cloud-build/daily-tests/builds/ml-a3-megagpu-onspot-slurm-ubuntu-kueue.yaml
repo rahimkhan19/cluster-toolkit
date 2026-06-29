@@ -211,10 +211,10 @@ steps:
             resources:
               requests:
                 test-locks/a3-megagpu: 1
-                test-locks/ml-a3-megagpu-onspot-slurm-ubuntu: 1
+                test-locks/ml-a3-megagpu-onspot-slurm: 1
               limits:
                 test-locks/a3-megagpu: 1
-                test-locks/ml-a3-megagpu-onspot-slurm-ubuntu: 1
+                test-locks/ml-a3-megagpu-onspot-slurm: 1
     JOBEOF
 
 # 3. Submit and Monitor GKE Kueue Job with Retry

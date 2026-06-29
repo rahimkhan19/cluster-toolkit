@@ -40,7 +40,7 @@ spec:
         - '--device={"name": "g4-standard", "groups": [{"count": 1000, "paths": [{"path": "/dev/null"}]}]}'
         - '--device={"name": "ml-g4-onspot-slurm", "groups": [{"count": 1000, "paths": [{"path": "/dev/null"}]}]}'
         - '--device={"name": "ml-a4x-highgpu-slurm", "groups": [{"count": 1000, "paths": [{"path": "/dev/null"}]}]}'
-        - '--device={"name": "ml-a3-megagpu-onspot-slurm-ubuntu", "groups": [{"count": 1000, "paths": [{"path": "/dev/null"}]}]}'
+        - '--device={"name": "ml-a3-megagpu-onspot-slurm", "groups": [{"count": 1000, "paths": [{"path": "/dev/null"}]}]}'
         - --listen=:8085
         securityContext:
           privileged: true
