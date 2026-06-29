@@ -24,6 +24,8 @@ spec:
         - '--device={"name": "slurm-gcp-v6-rocky8", "groups": [{"count": 1000, "paths": [{"path": "/dev/null"}]}]}'
         - '--device={"name": "a3-ultragpu", "groups": [{"count": 1000, "paths": [{"path": "/dev/null"}]}]}'
         - '--device={"name": "a3-highgpu", "groups": [{"count": 1000, "paths": [{"path": "/dev/null"}]}]}'
+        - '--device={"name": "a3-megagpu", "groups": [{"count": 1000, "paths": [{"path": "/dev/null"}]}]}'
+        - '--device={"name": "gke-a3-megagpu-onspot", "groups": [{"count": 1000, "paths": [{"path": "/dev/null"}]}]}'
         - '--device={"name": "ml-a3-highgpu-onspot-slurm", "groups": [{"count": 1000, "paths": [{"path": "/dev/null"}]}]}'
         - '--device={"name": "gke-a3-ultragpu-onspot", "groups": [{"count": 1000, "paths": [{"path": "/dev/null"}]}]}'
         - '--device={"name": "gke-a3-highgpu-onspot", "groups": [{"count": 1000, "paths": [{"path": "/dev/null"}]}]}'
