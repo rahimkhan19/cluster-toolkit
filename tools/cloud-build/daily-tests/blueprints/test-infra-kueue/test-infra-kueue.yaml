@@ -65,6 +65,7 @@ deployment_groups:
       - resourcemanager.projectIamAdmin
       - container.admin
       - iam.serviceAccountAdmin
+      - iam.serviceAccountTokenCreator
 
   - id: node_pool_sa
     source: modules/project/service-account

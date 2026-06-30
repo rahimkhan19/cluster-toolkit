@@ -168,9 +168,7 @@ steps:
               BLUEPRINT="/workspace/examples/h4d-vm.yaml"
               sed -i -e '/deletion_protection:/{n;s/enabled: true/enabled: false/}' \$$BLUEPRINT
               sed -i -e '/reason:/d' \$$BLUEPRINT
-              sed -i '/  - id: h4d-vms/,/  - id: wait-for-vms/ { /    settings:/a \
-                    provisioning_model: "'"\$$PROVISIONING_MODEL"'"
-              }' \$$BLUEPRINT
+              sed -i '/  - id: h4d-vms/,/  - id: wait-for-vms/ s/    settings:/    settings:\n      provisioning_model: "'"\$$PROVISIONING_MODEL"'"/' \$$BLUEPRINT
 
               ENABLE_SPOT="true"
               H4D_VARS_FILE="tools/cloud-build/daily-tests/tests/h4d-vm.yml"
