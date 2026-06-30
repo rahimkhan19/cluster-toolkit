@@ -33,6 +33,7 @@ spec:
     - "test-locks/ml-a4x-highgpu-slurm"
     - "test-locks/ml-a3-megagpu-onspot-slurm"
     - "test-locks/h4d"
+    - "test-locks/h4d-vm"
     - "test-locks/gke-h4d-onspot"
     - "test-locks/ml-h4d-onspot-slurm"
     flavors:
@@ -81,6 +82,8 @@ spec:
       - name: test-locks/ml-a3-megagpu-onspot-slurm
         nominalQuota: 1
       - name: test-locks/h4d
+        nominalQuota: 1
+      - name: test-locks/h4d-vm
         nominalQuota: 1
       - name: test-locks/gke-h4d-onspot
         nominalQuota: 1
