@@ -34,6 +34,7 @@ spec:
     - "test-locks/ml-a3-megagpu-onspot-slurm"
     - "test-locks/h4d"
     - "test-locks/gke-h4d-onspot"
+    - "test-locks/ml-h4d-onspot-slurm"
     flavors:
     - name: test-lock-flavor
       resources:
@@ -82,6 +83,8 @@ spec:
       - name: test-locks/h4d
         nominalQuota: 1
       - name: test-locks/gke-h4d-onspot
+        nominalQuota: 1
+      - name: test-locks/ml-h4d-onspot-slurm
         nominalQuota: 1
 ---
 apiVersion: kueue.x-k8s.io/v1beta1
