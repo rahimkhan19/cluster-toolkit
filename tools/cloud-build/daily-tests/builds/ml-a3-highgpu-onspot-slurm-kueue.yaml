@@ -93,7 +93,7 @@ steps:
             - name: MACHINE_TYPE
               value: "a3-highgpu-8g"
             - name: NUM_NODES
-              value: "4"
+              value: "2"
             - name: INSTANCE_PREFIX
               value: "a3hsp"
             - name: PROJECT_ID
