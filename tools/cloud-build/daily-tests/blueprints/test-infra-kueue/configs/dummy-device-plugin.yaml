@@ -22,6 +22,8 @@ spec:
         - --domain=test-locks
         - '--device={"name": "slurm", "groups": [{"count": 1000, "paths": [{"path": "/dev/null"}]}]}'
         - '--device={"name": "slurm-gcp-v6-rocky8", "groups": [{"count": 1000, "paths": [{"path": "/dev/null"}]}]}'
+        - '--device={"name": "a2-highgpu", "groups": [{"count": 1000, "paths": [{"path": "/dev/null"}]}]}'
+        - '--device={"name": "gke-a2-highgpu-kueue-onspot", "groups": [{"count": 1000, "paths": [{"path": "/dev/null"}]}]}'
         - '--device={"name": "a3-ultragpu", "groups": [{"count": 1000, "paths": [{"path": "/dev/null"}]}]}'
         - '--device={"name": "a3-highgpu", "groups": [{"count": 1000, "paths": [{"path": "/dev/null"}]}]}'
         - '--device={"name": "a3-megagpu", "groups": [{"count": 1000, "paths": [{"path": "/dev/null"}]}]}'
