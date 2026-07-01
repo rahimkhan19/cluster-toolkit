@@ -138,6 +138,14 @@ steps:
                 fi
                 if [ \$$exit_code -eq 0 ]; then exit_code=1; fi
                 
+                # Check for NodePool stockout errors before destroying the cluster
+                echo "Checking GKE NodePools for stockout errors..."
+                gcloud container node-pools list --cluster="\$$DEPLOYMENT_NAME" --location="\$$ZONE" --project="\$$PROJECT_ID" --format="value(statusMessage)" > /tmp/np_status.txt 2>/dev/null || true
+                gcloud container node-pools list --cluster="\$$DEPLOYMENT_NAME" --location="\$$REGION" --project="\$$PROJECT_ID" --format="value(statusMessage)" >> /tmp/np_status.txt 2>/dev/null || true
+                if grep -q -i "stockout\|does not have enough resources available\|not enough resources available" /tmp/np_status.txt 2>/dev/null; then
+                  echo "ZONE_RESOURCE_POOL_EXHAUSTED"
+                fi
+
                 echo ""
                 echo "=========================================================================="
                 echo "CAUGHT SIGTERM OR SCRIPT ERROR!"
