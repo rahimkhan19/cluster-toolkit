@@ -145,7 +145,7 @@ steps:
 
               ansible-playbook tools/cloud-build/daily-tests/ansible_playbooks/slurm-integration-test.yml \
                 --extra-vars="test_prefix=${_TEST_PREFIX} use_fixed_vpc=true" \
-                --user=sa_114252587369770497798 --extra-vars="project=$PROJECT_ID build=$$BUILD_ID_SHORT" \
+                --user=sa_108481972033535374787 --extra-vars="project=$PROJECT_ID build=$$BUILD_ID_SHORT" \
                 --extra-vars="@tools/cloud-build/daily-tests/tests/slurm-v6-rocky8.yml" &
               ANSIBLE_PID=\$$!
 
