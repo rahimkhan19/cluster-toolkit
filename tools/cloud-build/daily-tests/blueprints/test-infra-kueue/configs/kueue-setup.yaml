@@ -39,6 +39,8 @@ spec:
     - "test-locks/h4d-vm"
     - "test-locks/gke-h4d-onspot"
     - "test-locks/ml-h4d-onspot-slurm"
+    - "test-locks/tpu-v6e"
+    - "test-locks/gke-tpu-v6e"
     flavors:
     - name: test-lock-flavor
       resources:
@@ -97,6 +99,10 @@ spec:
       - name: test-locks/gke-h4d-onspot
         nominalQuota: 1
       - name: test-locks/ml-h4d-onspot-slurm
+        nominalQuota: 1
+      - name: test-locks/tpu-v6e
+        nominalQuota: 1
+      - name: test-locks/gke-tpu-v6e
         nominalQuota: 1
 ---
 apiVersion: kueue.x-k8s.io/v1beta1

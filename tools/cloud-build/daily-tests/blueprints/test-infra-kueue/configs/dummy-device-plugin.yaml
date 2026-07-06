@@ -44,6 +44,8 @@ spec:
         - '--device={"name": "ml-g4-onspot-slurm", "groups": [{"count": 1000, "paths": [{"path": "/dev/null"}]}]}'
         - '--device={"name": "ml-a4x-highgpu-slurm", "groups": [{"count": 1000, "paths": [{"path": "/dev/null"}]}]}'
         - '--device={"name": "ml-a3-megagpu-onspot-slurm", "groups": [{"count": 1000, "paths": [{"path": "/dev/null"}]}]}'
+        - '--device={"name": "tpu-v6e", "groups": [{"count": 1000, "paths": [{"path": "/dev/null"}]}]}'
+        - '--device={"name": "gke-tpu-v6e", "groups": [{"count": 1000, "paths": [{"path": "/dev/null"}]}]}'
         - '--device={"name": "h4d", "groups": [{"count": 1000, "paths": [{"path": "/dev/null"}]}]}'
         - '--device={"name": "h4d-vm", "groups": [{"count": 1000, "paths": [{"path": "/dev/null"}]}]}'
         - '--device={"name": "gke-h4d-onspot", "groups": [{"count": 1000, "paths": [{"path": "/dev/null"}]}]}'
