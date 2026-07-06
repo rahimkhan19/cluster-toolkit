@@ -60,6 +60,7 @@ func TestCollectMetrics_Extensible(t *testing.T) {
 		MACHINE_TYPE,
 		REGION,
 		ZONE,
+		STATIC_NODE_COUNTS,
 		OS_NAME,
 		OS_VERSION,
 		TERRAFORM_VERSION,
@@ -71,6 +72,7 @@ func TestCollectMetrics_Extensible(t *testing.T) {
 	tests := []struct {
 		name             string
 		errorCode        int
+		err              error
 		installationMode string
 		setupCmd         func(cmd *cobra.Command) // Hook to configure the command
 		setupCollector   func(c *Collector)       // Hook to mock internal collector state
@@ -79,6 +81,7 @@ func TestCollectMetrics_Extensible(t *testing.T) {
 		{
 			name:             "Success exit code",
 			errorCode:        0,
+			err:              nil,
 			installationMode: SOURCE,
 			setupCmd: func(cmd *cobra.Command) {
 				// Define dummy flags for the mock command
@@ -104,7 +107,8 @@ func TestCollectMetrics_Extensible(t *testing.T) {
 									ID:     config.ModuleID("compute_pool"),
 									Source: "modules/compute/vm-instance",
 									Settings: config.NewDict(map[string]cty.Value{
-										"machine_type": cty.StringVal("c2-standard-8"),
+										"machine_type":   cty.StringVal("c2-standard-8"),
+										"instance_count": cty.NumberIntVal(1),
 									}),
 								},
 							},
@@ -113,21 +117,23 @@ func TestCollectMetrics_Extensible(t *testing.T) {
 				}
 			},
 			expectedValues: map[string]string{
-				IS_TEST_DATA:      "true",
-				EXIT_CODE:         "0",
-				COMMAND_FLAGS:     "force,project",
-				REGION:            "us-central1",
-				ZONE:              "us-central1-a",
-				MACHINE_TYPE:      "c2-standard-8",
-				OS_NAME:           getOSName(),           // Dynamically expect the current OS name
-				OS_VERSION:        getOSVersion(),        // Dynamically expect the current OS version
-				TERRAFORM_VERSION: getTerraformVersion(), // Dynamically expect the current Terraform version
-				INSTALLATION_MODE: SOURCE,
+				IS_TEST_DATA:       "true",
+				EXIT_CODE:          "0",
+				COMMAND_FLAGS:      "force,project",
+				REGION:             "us-central1",
+				ZONE:               "us-central1-a",
+				MACHINE_TYPE:       "c2-standard-8",
+				STATIC_NODE_COUNTS: `"c2-standard-8":1`,
+				OS_NAME:            getOSName(),           // Dynamically expect the current OS name
+				OS_VERSION:         getOSVersion(),        // Dynamically expect the current OS version
+				TERRAFORM_VERSION:  getTerraformVersion(), // Dynamically expect the current Terraform version
+				INSTALLATION_MODE:  SOURCE,
 			},
 		},
 		{
 			name:             "Failure exit code with missing region, zone, and machine type",
 			errorCode:        1,
+			err:              nil,
 			installationMode: BINARY,
 			setupCmd: func(cmd *cobra.Command) {
 				// No flags set
@@ -140,16 +146,35 @@ func TestCollectMetrics_Extensible(t *testing.T) {
 				}
 			},
 			expectedValues: map[string]string{
-				IS_TEST_DATA:      "true",
-				EXIT_CODE:         "1",
-				COMMAND_FLAGS:     "",
-				REGION:            "",
-				ZONE:              "",
-				OS_NAME:           getOSName(),           // Verify OS info is still collected on failure
-				OS_VERSION:        getOSVersion(),        // Verify OS info is still collected on failure
-				TERRAFORM_VERSION: getTerraformVersion(), // Verify Terraform version is still collected on failure
-				MACHINE_TYPE:      "",                    // Verify empty machine type when no matching modules exist
-				INSTALLATION_MODE: BINARY,
+				IS_TEST_DATA:       "true",
+				EXIT_CODE:          "1",
+				COMMAND_FLAGS:      "",
+				REGION:             "",
+				ZONE:               "",
+				OS_NAME:            getOSName(),           // Verify OS info is still collected on failure
+				OS_VERSION:         getOSVersion(),        // Verify OS info is still collected on failure
+				TERRAFORM_VERSION:  getTerraformVersion(), // Verify Terraform version is still collected on failure
+				MACHINE_TYPE:       "",                    // Verify empty machine type when no matching modules exist
+				STATIC_NODE_COUNTS: "",
+				INSTALLATION_MODE:  BINARY,
+			},
+		},
+		{
+			name:             "Failure exit code with error",
+			errorCode:        1,
+			err:              errors.New("permission denied error"),
+			installationMode: SOURCE,
+			setupCmd: func(cmd *cobra.Command) {
+			},
+			setupCollector: func(c *Collector) {
+				c.blueprint = config.Blueprint{
+					Vars:   config.NewDict(map[string]cty.Value{}),
+					Groups: []config.Group{},
+				}
+			},
+			expectedValues: map[string]string{
+				EXIT_CODE:  "1",
+				ERROR_TYPE: ErrTypePermissionDenied,
 			},
 		},
 	}
@@ -172,7 +197,7 @@ func TestCollectMetrics_Extensible(t *testing.T) {
 			}
 
 			// Run the method being tested
-			c.CollectMetrics(tt.errorCode)
+			c.CollectMetrics(tt.errorCode, tt.err)
 
 			// Assert that all expected keys are populated in the metadata
 			for _, key := range expectedKeys {
@@ -321,7 +346,7 @@ func TestBuildConcordEvent(t *testing.T) {
 	rootCmd.AddCommand(childCmd)
 
 	c := NewCollector(childCmd, nil, SOURCE)
-	c.CollectMetrics(0)
+	c.CollectMetrics(0, nil)
 
 	event := c.BuildConcordEvent()
 
@@ -1704,5 +1729,394 @@ func TestCheckGcloudConfigForInternalUser_MissingFiles(t *testing.T) {
 	result := checkGcloudConfigForInternalUser()
 	if result {
 		t.Errorf("Expected checkGcloudConfigForInternalUser to return false when config files are missing")
+	}
+}
+
+func TestGetErrorType(t *testing.T) {
+	tests := []struct {
+		name     string
+		err      error
+		expected string
+	}{
+		{
+			name:     "Nil Error",
+			err:      nil,
+			expected: "",
+		},
+		{
+			name:     "Permission Denied",
+			err:      os.ErrPermission,
+			expected: ErrTypePermissionDenied,
+		},
+		{
+			name:     "File Not Exist",
+			err:      os.ErrNotExist,
+			expected: ErrTypeFileNotFound,
+		},
+		{
+			name:     "Context Deadline Exceeded",
+			err:      context.DeadlineExceeded,
+			expected: ErrTypeTimeout,
+		},
+		{
+			name:     "Context Canceled",
+			err:      context.Canceled,
+			expected: ErrTypeCanceled,
+		},
+		{
+			name:     "Text Match Validation",
+			err:      errors.New("invalid argument provided"),
+			expected: ErrTypeValidation,
+		},
+		{
+			name:     "Text Match Network",
+			err:      errors.New("failed to dial tcp: connection refused"),
+			expected: ErrTypeNetwork,
+		},
+		{
+			name:     "Text Match Permission",
+			err:      errors.New("server responded with 403 forbidden"),
+			expected: ErrTypePermissionDenied,
+		},
+		{
+			name:     "Text Match Not Found",
+			err:      errors.New("resource not found"),
+			expected: ErrTypeFileNotFound,
+		},
+		{
+			name:     "Unknown Error",
+			err:      errors.New("something went entirely wrong"),
+			expected: ErrTypeUnknown,
+		},
+		{
+			name:     "Text Match Quota",
+			err:      errors.New("google api error: quota exceeded for c2-standard-8"),
+			expected: ErrTypeQuotaExceeded,
+		},
+		{
+			name:     "Text Match Auth",
+			err:      errors.New("unauthorized request to remote server"),
+			expected: ErrTypeAuthentication,
+		},
+		{
+			name:     "Text Match Provisioning",
+			err:      errors.New("deployment failed to finish"),
+			expected: ErrTypeProvisioning,
+		},
+		{
+			name:     "Text Match Stockout",
+			err:      errors.New("A c2-standard-60 VM instance is currently unavailable"),
+			expected: ErrTypeStockout,
+		},
+		{
+			name:     "Text Match APIDisabled",
+			err:      errors.New("Cloud Filestore API has not been used in project 12345 before or it is disabled."),
+			expected: ErrTypeAPIDisabled,
+		},
+		{
+			name:     "Text Match ResourceAlreadyExists",
+			err:      errors.New("googleapi: Error 409: Resource already exists"),
+			expected: ErrTypeResourceExists,
+		},
+		{
+			name:     "Capitalization Test",
+			err:      errors.New("PERMISSION DENIED TO ACCESS THIS RESOURCE"),
+			expected: ErrTypePermissionDenied,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := getErrorType(tt.err); got != tt.expected {
+				t.Errorf("getErrorType() = %v, want %v", got, tt.expected)
+			}
+		})
+	}
+}
+
+// TestGetStaticNodeCounts verifies that static node counts are correctly extracted from the blueprint.
+func TestGetStaticNodeCounts(t *testing.T) {
+	tests := []struct {
+		name string
+		bp   config.Blueprint
+		want string
+	}{
+		{
+			// 1. Standard Top-Level Module Definition
+			// The code matches the key, extracts the integer, and maps it directly to the machine type.
+			name: "Standard top-level module definition",
+			bp: config.Blueprint{
+				Groups: []config.Group{{
+					Name: config.GroupName("primary"),
+					Modules: []config.Module{{
+						ID: config.ModuleID("pool1"),
+						Settings: config.NewDict(map[string]cty.Value{
+							"machine_type":      cty.StringVal("g4"),
+							"static_node_count": cty.NumberIntVal(3),
+						}),
+					}},
+				}},
+			},
+			want: `"g4":3`,
+		},
+		{
+			// 2. Multiple Modules Sharing a Machine Type
+			// Two modules defining the same machine type have their node counts successfully aggregated into a single total.
+			name: "Multiple modules sharing a machine type",
+			bp: config.Blueprint{
+				Groups: []config.Group{{
+					Name: config.GroupName("primary"),
+					Modules: []config.Module{
+						{
+							ID: config.ModuleID("pool1"),
+							Settings: config.NewDict(map[string]cty.Value{
+								"machine_type":   cty.StringVal("c2-standard-8"),
+								"instance_count": cty.NumberIntVal(2),
+							}),
+						},
+						{
+							ID: config.ModuleID("pool2"),
+							Settings: config.NewDict(map[string]cty.Value{
+								"machine_type":   cty.StringVal("c2-standard-8"),
+								"instance_count": cty.NumberIntVal(4),
+							}),
+						},
+					},
+				}},
+			},
+			want: `"c2-standard-8":6`,
+		},
+		{
+			// 3. Multiple Modules with Varying Machine Types
+			// Maps multiple types into distinct keys and deterministically sorts them alphabetically.
+			name: "Multiple modules with varying machine types",
+			bp: config.Blueprint{
+				Groups: []config.Group{{
+					Name: config.GroupName("primary"),
+					Modules: []config.Module{
+						{
+							ID: config.ModuleID("pool1"),
+							Settings: config.NewDict(map[string]cty.Value{
+								"machine_type":      cty.StringVal("g4"),
+								"static_node_count": cty.NumberIntVal(3),
+							}),
+						},
+						{
+							ID: config.ModuleID("pool2"),
+							Settings: config.NewDict(map[string]cty.Value{
+								"machine_type":      cty.StringVal("a3u"),
+								"node_count_static": cty.NumberIntVal(2),
+							}),
+						},
+					},
+				}},
+			},
+			want: `"a3u":2,"g4":3`,
+		},
+		{
+			// 4. Explicit Zero Override
+			// Explicitly passing a 0 node count safely flags as found, avoiding a fallback to default values.
+			name: "Explicit zero override safely evaluates and avoids default fallback",
+			bp: config.Blueprint{
+				Groups: []config.Group{{
+					Name: config.GroupName("primary"),
+					Modules: []config.Module{{
+						ID: config.ModuleID("pool1"),
+						Settings: config.NewDict(map[string]cty.Value{
+							"machine_type":   cty.StringVal("n1-standard-4"),
+							"instance_count": cty.NumberIntVal(0),
+						}),
+					}},
+				}},
+			},
+			want: ``,
+		},
+		{
+			// 5. Autoscaling Parameters Co-Existing
+			// Autoscaling bounds are ignored because they are excluded from the target keys check.
+			name: "Autoscaling parameters co-existing with static counts",
+			bp: config.Blueprint{
+				Groups: []config.Group{{
+					Name: config.GroupName("primary"),
+					Modules: []config.Module{{
+						ID: config.ModuleID("pool1"),
+						Settings: config.NewDict(map[string]cty.Value{
+							"machine_type":               cty.StringVal("n2-standard-2"),
+							"static_node_count":          cty.NumberIntVal(2),
+							"autoscaling_max_node_count": cty.NumberIntVal(10), // Should be ignored
+						}),
+					}},
+				}},
+			},
+			want: `"n2-standard-2":2`,
+		},
+		{
+			// 6. Inline Slurm Partitions with Inherited Machine Types
+			// Inline lists of objects successfully inherit the top-level machine type when omitted inside the block.
+			name: "Inline Slurm partitions with inherited machine types",
+			bp: config.Blueprint{
+				Groups: []config.Group{{
+					Name: config.GroupName("primary"),
+					Modules: []config.Module{{
+						ID: config.ModuleID("slurm_partition"),
+						Settings: config.NewDict(map[string]cty.Value{
+							"machine_type": cty.StringVal("c2-standard-8"),
+							"nodeset": cty.ListVal([]cty.Value{
+								cty.ObjectVal(map[string]cty.Value{
+									"node_count_static": cty.NumberIntVal(5),
+								}),
+							}),
+						}),
+					}},
+				}},
+			},
+			want: `"c2-standard-8":5`,
+		},
+		{
+			// 7. Heterogeneous Inline Slurm Partitions
+			// Individual machine types correctly override top-level designations within nested heterogeneous blocks.
+			name: "Heterogeneous inline Slurm partitions override top-level machine types",
+			bp: config.Blueprint{
+				Groups: []config.Group{{
+					Name: config.GroupName("primary"),
+					Modules: []config.Module{{
+						ID: config.ModuleID("slurm_partition_mixed"),
+						Settings: config.NewDict(map[string]cty.Value{
+							"machine_type": cty.StringVal("default-type"), // Ignored due to inline override
+							"partition": cty.ListVal([]cty.Value{
+								cty.ObjectVal(map[string]cty.Value{
+									"machine_type":      cty.StringVal("a2-highgpu-1g"),
+									"node_count_static": cty.NumberIntVal(2),
+								}),
+								cty.ObjectVal(map[string]cty.Value{
+									"machine_type":      cty.StringVal("a3-ultragpu-8g"),
+									"node_count_static": cty.NumberIntVal(4),
+								}),
+							}),
+						}),
+					}},
+				}},
+			},
+			want: `"a2-highgpu-1g":2,"a3-ultragpu-8g":4`,
+		},
+		{
+			// 8. Module Missing a Machine Type Definition
+			// Evaluates to an empty machine type string, causing the parsing function to skip counting the module entirely.
+			name: "Module missing a machine type definition",
+			bp: config.Blueprint{
+				Groups: []config.Group{{
+					Name: config.GroupName("primary"),
+					Modules: []config.Module{{
+						ID: config.ModuleID("network_module"),
+						Settings: config.NewDict(map[string]cty.Value{
+							"instance_count": cty.NumberIntVal(5),
+						}),
+					}},
+				}},
+			},
+			want: ``,
+		},
+		{
+			// 9. Unknown or Computed Variables
+			// Detects values that are not known until the apply phase, flagging them as found but resolving to 0 to prevent panics.
+			name: "Unknown or computed variables do not panic and evaluate safely",
+			bp: config.Blueprint{
+				Groups: []config.Group{{
+					Name: config.GroupName("primary"),
+					Modules: []config.Module{{
+						ID: config.ModuleID("pool1"),
+						Settings: config.NewDict(map[string]cty.Value{
+							"machine_type":      cty.StringVal("g4"),
+							"static_node_count": cty.UnknownVal(cty.Number),
+						}),
+					}},
+				}},
+			},
+			want: ``,
+		},
+		{
+			// 10. Blueprints with No Compute Instances
+			// Safe fast-path execution returns an empty string entirely when no modules populate the accumulator map.
+			name: "Blueprints with no compute instances",
+			bp: config.Blueprint{
+				Groups: []config.Group{{
+					Name:    config.GroupName("primary"),
+					Modules: []config.Module{},
+				}},
+			},
+			want: ``,
+		},
+		{
+			// 11. (Additional) Extraneous Non-Numeric Nested Data
+			// Validates that encountering strings or booleans within expected numeric targets cleanly falls back without breaking.
+			name: "Extraneous non-numeric nested data is safely ignored",
+			bp: config.Blueprint{
+				Groups: []config.Group{{
+					Name: config.GroupName("primary"),
+					Modules: []config.Module{{
+						ID: config.ModuleID("slurm_partition_extraneous"),
+						Settings: config.NewDict(map[string]cty.Value{
+							"machine_type": cty.StringVal("c2-standard-8"),
+							"nodeset": cty.TupleVal([]cty.Value{
+								cty.ObjectVal(map[string]cty.Value{
+									"node_count_static": cty.StringVal("invalid-string-should-be-ignored"),
+								}),
+								cty.ObjectVal(map[string]cty.Value{
+									"node_count_static": cty.NumberIntVal(3),
+								}),
+							}),
+						}),
+					}},
+				}},
+			},
+			want: `"c2-standard-8":3`,
+		},
+		{
+			// 12. TPU Topology calculation
+			// Validates that TPU node count is calculated correctly using the topology string when static_node_count is missing.
+			name: "TPU topology automatically infers static_node_count",
+			bp: config.Blueprint{
+				Groups: []config.Group{{
+					Name: config.GroupName("primary"),
+					Modules: []config.Module{{
+						ID: config.ModuleID("tpu_pool"),
+						Settings: config.NewDict(map[string]cty.Value{
+							"machine_type": cty.StringVal("ct5lp-hightpu-8t"),
+							"tpu_topology": cty.StringVal("8x16"),
+						}),
+					}},
+				}},
+			},
+			want: `"ct5lp-hightpu-8t":16`,
+		},
+		{
+			// 13. Multiplier properties (num_node_pools, num_slices)
+			// Validates that node count multiplies correctly when num_node_pools and num_slices are present.
+			name: "num_node_pools and num_slices multiply the base count",
+			bp: config.Blueprint{
+				Groups: []config.Group{{
+					Name: config.GroupName("primary"),
+					Modules: []config.Module{{
+						ID: config.ModuleID("multi_pool"),
+						Settings: config.NewDict(map[string]cty.Value{
+							"machine_type":      cty.StringVal("n2-standard-4"),
+							"static_node_count": cty.NumberIntVal(2),
+							"num_node_pools":    cty.NumberIntVal(3),
+							"num_slices":        cty.NumberIntVal(4),
+						}),
+					}},
+				}},
+			},
+			want: `"n2-standard-4":8`, // 2 * max(3, 4) = 8
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := getStaticNodeCounts(tc.bp)
+			if got != tc.want {
+				t.Errorf("getStaticNodeCounts() = %q; want %q", got, tc.want)
+			}
+		})
 	}
 }
