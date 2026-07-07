@@ -99,7 +99,7 @@ steps:
             - name: OPTIONS_BUCKET
               value: "$$OPTIONS_BUCKET"
             - name: OPTIONS_GCS_PATH
-              value: "gs://\$$OPTIONS_BUCKET/g4options.txt"
+              value: "gs://$${OPTIONS_BUCKET}/g4options.txt"
             - name: ENABLE_SPOT_FALLBACK
               value: "true"
             - name: GCLUSTER_GCS_PATH
@@ -199,7 +199,7 @@ steps:
 
               ansible-playbook tools/cloud-build/daily-tests/ansible_playbooks/base-integration-test.yml \
                 --extra-vars="test_prefix=${_TEST_PREFIX}" \
-                  --user=sa_114252587369770497798 \
+                  --user=sa_108481972033535374787 \
                   --extra-vars="project=\$$PROJECT_ID build=\$$BUILD_ID_SHORT full_build_id=\$$BUILD_ID_FULL" \
                   --extra-vars="region=\$$REGION zone=\$$ZONE" \
                   --extra-vars="enable_spot=\$$ENABLE_SPOT" \

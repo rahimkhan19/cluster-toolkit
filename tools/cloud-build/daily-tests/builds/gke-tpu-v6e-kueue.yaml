@@ -128,14 +128,14 @@ steps:
               
               RUN_CLEANUP=true
               cleanup_pod() {
-                local exit_code=\$?
+                local exit_code=\$$?
                 trap - EXIT SIGTERM SIGINT ERR
                 set +e
                 
                 if [ "\$$RUN_CLEANUP" = "false" ]; then
                   exit 0
                 fi
-                if [ \$exit_code -eq 0 ]; then exit_code=1; fi
+                if [ \$$exit_code -eq 0 ]; then exit_code=1; fi
                 
                 echo ""
                 echo "=========================================================================="
@@ -157,7 +157,7 @@ steps:
                 ansible-playbook /workspace/cleanup-playbook.yml -e deployment_name="\$$DEPLOYMENT_NAME" -e workspace="/workspace" || true
                 
                 echo "Graceful cleanup finished."
-                exit \$exit_code
+                exit \$$exit_code
               }
               trap cleanup_pod EXIT SIGTERM SIGINT
 
@@ -209,7 +209,7 @@ steps:
               bash tools/add_ttl_label.sh "\$$EXAMPLE_BP"
 
               ansible-playbook tools/cloud-build/daily-tests/ansible_playbooks/base-integration-test.yml \
-                  --user=sa_114252587369770497798 --extra-vars="project=\$$PROJECT_ID build=$$BUILD_ID_SHORT full_build_id=\$$BUILD_ID chs_repo=\$$CHS_REPO" \
+                  --user=sa_108481972033535374787 --extra-vars="project=\$$PROJECT_ID build=$$BUILD_ID_SHORT full_build_id=\$$BUILD_ID chs_repo=\$$CHS_REPO" \
                   --extra-vars="region=\$$REGION zone=\$$ZONE" \
                   --extra-vars="enable_spot=\$$ENABLE_SPOT" \
                   --extra-vars="@\$$GKE_VARS_FILE" \

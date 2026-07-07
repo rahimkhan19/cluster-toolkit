@@ -42,7 +42,7 @@ Robust cleanup requires traps both inside the Kubernetes pod and the Cloud Build
 - **Cloud Build Step Trap**: In the `submit-and-monitor-gke-job` step, add a `cleanup_cb()` function and trap for `SIGTERM SIGINT`. This ensures that if the Cloud Build pipeline is cancelled, the step catches the signal and runs `kubectl delete job "$$JOB_NAME"`.
 - **Pod `cleanup_pod()` Trap**: Inside the container's entrypoint, catch `SIGTERM` (which is sent by Kubernetes when the Job is deleted by Cloud Build or the Reaper Pod) and execute the `rescue_gcluster_failure.yml` playbook to safely run `terraform destroy`.
 - **`DEPLOYMENT_NAME` Alignment**: The `cleanup_pod()` trap relies on the `DEPLOYMENT_NAME` bash variable to know which directory to run `gcluster destroy` on. You MUST ensure that this variable perfectly matches the `deployment_name` defined in the corresponding Ansible extra-vars `.yml` file (e.g., `tools/cloud-build/daily-tests/tests/...yml`). If the names don't match, the trap will fail with a `"must be a directory"` error, and the test will leak cloud infrastructure on failure!
-- **Ansible `--user` Flag**: Because the pod runs under Workload Identity using the `test-kueue-cluster-runner` service account, any SSH operations via OS Login must use its specific Google Account unique ID. Ensure the `ansible-playbook` `--user` flag is set to `sa_114252587369770497798`.
+- **Ansible `--user` Flag**: Because the pod runs under Workload Identity using the `test-kueue-cluster-runner` service account, any SSH operations via OS Login must use its specific Google Account unique ID. Ensure the `ansible-playbook` `--user` flag is set to `sa_108481972033535374787`.
 
 ## 4. Resource Request Locks (Concurrency)
 
