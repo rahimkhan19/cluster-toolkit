@@ -124,7 +124,7 @@ steps:
               set -x -e
               cd /workspace
               
-              DEPLOYMENT_NAME="gke-tpu-v6e-\$$BUILD_ID_SHORT"
+              DEPLOYMENT_NAME="gke-tpu-v6e-$$BUILD_ID_SHORT"
               
               RUN_CLEANUP=true
               cleanup_pod() {
@@ -171,7 +171,6 @@ steps:
               cd /workspace
               bash tools/get_binary.sh "${_TEST_PREFIX}"
               REGION="\$${ZONE%-*}"
-              BUILD_ID_SHORT="\$${BUILD_ID:0:6}"
 
               EXAMPLE_BP=examples/gke-tpu-v6e/gke-tpu-v6e.yaml
               # adding vm to act as remote node
@@ -210,7 +209,7 @@ steps:
               bash tools/add_ttl_label.sh "\$$EXAMPLE_BP"
 
               ansible-playbook tools/cloud-build/daily-tests/ansible_playbooks/base-integration-test.yml \
-                  --user=sa_114252587369770497798 --extra-vars="project=\$$PROJECT_ID build=\$$BUILD_ID_SHORT full_build_id=\$$BUILD_ID chs_repo=\$$CHS_REPO" \
+                  --user=sa_114252587369770497798 --extra-vars="project=\$$PROJECT_ID build=$$BUILD_ID_SHORT full_build_id=\$$BUILD_ID chs_repo=\$$CHS_REPO" \
                   --extra-vars="region=\$$REGION zone=\$$ZONE" \
                   --extra-vars="enable_spot=\$$ENABLE_SPOT" \
                   --extra-vars="@\$$GKE_VARS_FILE" \
