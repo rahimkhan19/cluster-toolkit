@@ -87,6 +87,14 @@ steps:
               value: "/workspace/tools/cloud-build/ansible.cfg"
             - name: _TEST_PREFIX
               value: "${_TEST_PREFIX}"
+            - name: TRIAGE_GCS_BUCKET
+              value: "$$TRIAGE_GCS_BUCKET"
+            - name: TRIAGE_PROJECT_NUMBER
+              value: "$$TRIAGE_PROJECT_NUMBER"
+            - name: TRIAGE_INVOKER_SA
+              value: "$$TRIAGE_INVOKER_SA"
+            - name: TRIAGE_CLOUD_RUN_URL
+              value: "$$TRIAGE_CLOUD_RUN_URL"
             command: ["/bin/bash", "-c"]
             args:
             - |
@@ -146,7 +154,11 @@ steps:
               ansible-playbook tools/cloud-build/daily-tests/ansible_playbooks/slurm-integration-test.yml \
                 --extra-vars="test_prefix=${_TEST_PREFIX} use_fixed_vpc=true" \
                 --user=sa_108481972033535374787 --extra-vars="project=$PROJECT_ID build=$$BUILD_ID_SHORT" \
-                --extra-vars="@tools/cloud-build/daily-tests/tests/slurm-v6-rocky8.yml" &
+                --extra-vars="@tools/cloud-build/daily-tests/tests/slurm-v6-rocky8.yml" \
+                --extra-vars="triage_gcs_bucket_override=\$$TRIAGE_GCS_BUCKET" \
+                --extra-vars="triage_project_number_override=\$$TRIAGE_PROJECT_NUMBER" \
+                --extra-vars="triage_invoker_sa_override=\$$TRIAGE_INVOKER_SA" \
+                --extra-vars="triage_cloud_run_url_override=\$$TRIAGE_CLOUD_RUN_URL" &
               ANSIBLE_PID=\$$!
 
               wait \$$ANSIBLE_PID
@@ -234,8 +246,16 @@ steps:
   - -c
   - |
     gcloud artifacts docker images delete us-central1-docker.pkg.dev/$PROJECT_ID/hpc-toolkit-repo/test-runner:$BUILD_ID --quiet
-  secretEnv: ['GCLUSTER_GCS_PATH']
+  secretEnv: ['GCLUSTER_GCS_PATH', 'TRIAGE_GCS_BUCKET', 'TRIAGE_PROJECT_NUMBER', 'TRIAGE_INVOKER_SA', 'TRIAGE_CLOUD_RUN_URL']
 availableSecrets:
   secretManager:
   - versionName: projects/${PROJECT_ID}/secrets/gcluster-develop-release-bucket/versions/latest
     env: 'GCLUSTER_GCS_PATH'
+  - versionName: projects/${PROJECT_ID}/secrets/triage-gcs-bucket/versions/latest
+    env: 'TRIAGE_GCS_BUCKET'
+  - versionName: projects/${PROJECT_ID}/secrets/triage-project-number/versions/latest
+    env: 'TRIAGE_PROJECT_NUMBER'
+  - versionName: projects/${PROJECT_ID}/secrets/triage-invoker-sa/versions/latest
+    env: 'TRIAGE_INVOKER_SA'
+  - versionName: projects/${PROJECT_ID}/secrets/triage-cloud-run-url/versions/latest
+    env: 'TRIAGE_CLOUD_RUN_URL'
