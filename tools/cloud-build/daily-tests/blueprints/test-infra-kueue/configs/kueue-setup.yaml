@@ -42,6 +42,7 @@ spec:
     - "test-locks/tpu-v6e"
     - "test-locks/gke-tpu-v6e"
     - "test-locks/gke-g4-onspot"
+    - "test-locks/ansible-vm"
     flavors:
     - name: test-lock-flavor
       resources:
@@ -106,6 +107,8 @@ spec:
       - name: test-locks/gke-tpu-v6e
         nominalQuota: 1
       - name: test-locks/gke-g4-onspot
+        nominalQuota: 1
+      - name: test-locks/ansible-vm
         nominalQuota: 1
 ---
 apiVersion: kueue.x-k8s.io/v1beta1
