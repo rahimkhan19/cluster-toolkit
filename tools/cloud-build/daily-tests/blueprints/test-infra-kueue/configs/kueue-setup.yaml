@@ -44,6 +44,7 @@ spec:
     - "test-locks/gke-g4-onspot"
     - "test-locks/ansible-vm"
     - "test-locks/batch-mpi"
+    - "test-locks/crd-ubuntu"
     flavors:
     - name: test-lock-flavor
       resources:
@@ -112,6 +113,8 @@ spec:
       - name: test-locks/ansible-vm
         nominalQuota: 1
       - name: test-locks/batch-mpi
+        nominalQuota: 1
+      - name: test-locks/crd-ubuntu
         nominalQuota: 1
 ---
 apiVersion: kueue.x-k8s.io/v1beta1
