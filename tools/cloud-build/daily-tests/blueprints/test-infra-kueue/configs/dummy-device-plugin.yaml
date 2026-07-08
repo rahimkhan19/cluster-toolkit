@@ -58,6 +58,7 @@ spec:
         - '--device={"name": "e2e", "groups": [{"count": 1000, "paths": [{"path": "/dev/null"}]}]}'
         - '--device={"name": "gke-inactive-reservation", "groups": [{"count": 1000, "paths": [{"path": "/dev/null"}]}]}'
         - '--device={"name": "gke-managed-hyperdisk", "groups": [{"count": 1000, "paths": [{"path": "/dev/null"}]}]}'
+        - '--device={"name": "gke-storage", "groups": [{"count": 1000, "paths": [{"path": "/dev/null"}]}]}'
         - --listen=:8085
         securityContext:
           privileged: true
