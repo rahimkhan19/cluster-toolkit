@@ -48,6 +48,7 @@ spec:
     - "test-locks/crd"
     - "test-locks/e2e"
     - "test-locks/gke-inactive-reservation"
+    - "test-locks/gke-managed-hyperdisk"
     flavors:
     - name: test-lock-flavor
       resources:
@@ -124,6 +125,8 @@ spec:
       - name: test-locks/e2e
         nominalQuota: 1
       - name: test-locks/gke-inactive-reservation
+        nominalQuota: 1
+      - name: test-locks/gke-managed-hyperdisk
         nominalQuota: 1
 ---
 apiVersion: kueue.x-k8s.io/v1beta1
