@@ -46,6 +46,7 @@ spec:
     - "test-locks/batch-mpi"
     - "test-locks/crd-ubuntu"
     - "test-locks/crd"
+    - "test-locks/e2e"
     flavors:
     - name: test-lock-flavor
       resources:
@@ -118,6 +119,8 @@ spec:
       - name: test-locks/crd-ubuntu
         nominalQuota: 1
       - name: test-locks/crd
+        nominalQuota: 1
+      - name: test-locks/e2e
         nominalQuota: 1
 ---
 apiVersion: kueue.x-k8s.io/v1beta1
