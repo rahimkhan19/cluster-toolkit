@@ -33,6 +33,7 @@ spec:
     - "test-locks/gke-a4x"
     - "test-locks/ml-a4-highgpu-onspot-slurm"
     - "test-locks/ml-gke-e2e"
+    - "test-locks/ml-gke"
     - "test-locks/g4-standard"
     - "test-locks/ml-g4-onspot-slurm"
     - "test-locks/ml-a4x-highgpu-slurm"
@@ -101,6 +102,8 @@ spec:
       - name: test-locks/ml-a4-highgpu-onspot-slurm
         nominalQuota: 1
       - name: test-locks/ml-gke-e2e
+        nominalQuota: 1
+      - name: test-locks/ml-gke
         nominalQuota: 1
       - name: test-locks/g4-standard
         nominalQuota: 1
