@@ -48,6 +48,10 @@ echo "Streaming logs from pod $POD_NAME..."
 while true; do
     # Stream logs
     kubectl logs -f "$POD_NAME" -n "$NAMESPACE" -c runner
+    # Allow the Kubernetes controller a few seconds to update the Job status 
+    # after the pod terminates. This prevents a race condition where we check
+    # the status before it's updated and accidentally restart the log stream.
+    sleep 5
     
     # Check if job is completed
     SUCCEEDED=$(kubectl get job "$JOB_NAME" -n "$NAMESPACE" -o jsonpath='{.status.succeeded}' 2>/dev/null)
@@ -56,8 +60,9 @@ while true; do
     if [ "$SUCCEEDED" = "1" ] || [ "$FAILED" = "1" ]; then
         break
     fi
-    echo "Logs disconnected but job is not finished. Reconnecting in 5s..."
-    sleep 5
+    echo "Logs disconnected but job is not finished. Reconnecting..."
+    # If it actually disconnected mid-job, sleep a moment before reconnecting
+    sleep 2
 done
 
 echo "Job finished execution. Fetching final status..."
