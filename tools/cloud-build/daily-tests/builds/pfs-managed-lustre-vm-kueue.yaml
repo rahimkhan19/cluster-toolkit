@@ -86,6 +86,8 @@ steps:
               value: "${_TEST_PREFIX}"
             - name: BUILD_ID
               value: "$BUILD_ID"
+            - name: GCLUSTER_GCS_PATH
+              value: "$$GCLUSTER_GCS_PATH"
             - name: TRIAGE_GCS_BUCKET
               value: "$$TRIAGE_GCS_BUCKET"
             - name: TRIAGE_PROJECT_NUMBER

@@ -87,6 +87,8 @@ steps:
               value: "/workspace/tools/cloud-build/ansible.cfg"
             - name: BUILD_ID
               value: "$BUILD_ID"
+            - name: GCLUSTER_GCS_PATH
+              value: "$$GCLUSTER_GCS_PATH"
             - name: _TEST_PREFIX
               value: "${_TEST_PREFIX}"
             - name: TRIAGE_GCS_BUCKET
@@ -142,13 +144,8 @@ steps:
               }
               trap cleanup_pod EXIT SIGTERM SIGINT
               
-              if [ "${_TEST_PREFIX}" == "daily-" ]; then
-                  gsutil cp gs://\$$GCLUSTER_GCS_PATH/latest/gcluster-bundle.zip .
-                  unzip -o gcluster-bundle.zip
-                  chmod +x gcluster
-              else
-                  make
-              fi
+              bash tools/get_binary.sh "${_TEST_PREFIX}"
+              
               BLUEPRINT="examples/pfs-managed-lustre-slurm.yaml"
               bash tools/add_ttl_label.sh "\$$BLUEPRINT"
               python3 tools/fix_vpc_name.py "\$$BLUEPRINT" "${_TEST_PREFIX}"
