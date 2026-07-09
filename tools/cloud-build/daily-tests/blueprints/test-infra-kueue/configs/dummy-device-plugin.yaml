@@ -68,6 +68,7 @@ spec:
         - '--device={"name": "htc-slurm", "groups": [{"count": 1000, "paths": [{"path": "/dev/null"}]}]}'
         - '--device={"name": "htcondor", "groups": [{"count": 1000, "paths": [{"path": "/dev/null"}]}]}'
         - '--device={"name": "monitoring", "groups": [{"count": 1000, "paths": [{"path": "/dev/null"}]}]}'
+        - '--device={"name": "packer", "groups": [{"count": 1000, "paths": [{"path": "/dev/null"}]}]}'
         - --listen=:8085
         securityContext:
           privileged: true

@@ -59,6 +59,7 @@ spec:
     - "test-locks/htc-slurm"
     - "test-locks/htcondor"
     - "test-locks/monitoring"
+    - "test-locks/packer"
     flavors:
     - name: test-lock-flavor
       resources:
@@ -157,6 +158,8 @@ spec:
       - name: test-locks/htcondor
         nominalQuota: 1
       - name: test-locks/monitoring
+        nominalQuota: 1
+      - name: test-locks/packer
         nominalQuota: 1
 ---
 apiVersion: kueue.x-k8s.io/v1beta1
