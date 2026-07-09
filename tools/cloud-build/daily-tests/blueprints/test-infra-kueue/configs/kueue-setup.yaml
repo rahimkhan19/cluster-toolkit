@@ -13,6 +13,7 @@ spec:
   - coveredResources:
     - "test-locks/slurm"
     - "test-locks/slurm-gcp-v6-rocky8"
+    - "test-locks/hpc-build-slurm-image"
     - "test-locks/hpc-enterprise-slurm"
     - "test-locks/hcls"
     - "test-locks/a2-highgpu"
@@ -58,6 +59,8 @@ spec:
       - name: test-locks/slurm
         nominalQuota: 5
       - name: test-locks/slurm-gcp-v6-rocky8
+        nominalQuota: 1
+      - name: test-locks/hpc-build-slurm-image
         nominalQuota: 1
       - name: test-locks/hpc-enterprise-slurm
         nominalQuota: 1
