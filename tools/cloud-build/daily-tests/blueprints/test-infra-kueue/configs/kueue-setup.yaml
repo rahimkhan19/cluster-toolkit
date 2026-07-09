@@ -53,6 +53,7 @@ spec:
     - "test-locks/gke-managed-hyperdisk"
     - "test-locks/gke-storage"
     - "test-locks/gke"
+    - "test-locks/htc-slurm"
     flavors:
     - name: test-lock-flavor
       resources:
@@ -139,6 +140,8 @@ spec:
       - name: test-locks/gke-storage
         nominalQuota: 1
       - name: test-locks/gke
+        nominalQuota: 1
+      - name: test-locks/htc-slurm
         nominalQuota: 1
 ---
 apiVersion: kueue.x-k8s.io/v1beta1
