@@ -51,19 +51,25 @@ vars:
   # The Customer-Managed Encryption Key (CMEK) path (required if enable_confidential_storage is true)
   disk_encryption_kms_key: ""
 
+  # VPC and Subnet Name overrides for primary (net-0) and secondary (net-1) networks
+  network_name_0: $(vars.deployment_name)-net-0
+  subnetwork_name_0: $(vars.deployment_name)-sub-0
+  network_name_1: $(vars.deployment_name)-net-1
+  subnetwork_name_1: $(vars.deployment_name)-sub-1
+
 deployment_groups:
 - group: primary
   modules:
   - id: gke-g4-net-0
     source: modules/network/vpc
     settings:
-      network_name: $(vars.deployment_name)-net-0
+      network_name: $(vars.network_name_0)
       subnetworks:
-      - subnet_name: $(vars.deployment_name)-sub-0
+      - subnet_name: $(vars.subnetwork_name_0)
         subnet_region: $(vars.region)
         subnet_ip: 192.168.0.0/18
       secondary_ranges_list:
-      - subnetwork_name: $(vars.deployment_name)-sub-0
+      - subnetwork_name: $(vars.subnetwork_name_0)
         ranges:
         - range_name: pods
           ip_cidr_range: 10.4.0.0/14
@@ -82,9 +88,9 @@ deployment_groups:
   - id: gke-g4-net-1
     source: modules/network/vpc
     settings:
-      network_name: $(vars.deployment_name)-net-1
+      network_name: $(vars.network_name_1)
       subnetworks:
-      - subnet_name: $(vars.deployment_name)-sub-1
+      - subnet_name: $(vars.subnetwork_name_1)
         subnet_region: $(vars.region)
         subnet_ip: 192.168.64.0/18
       firewall_rules:

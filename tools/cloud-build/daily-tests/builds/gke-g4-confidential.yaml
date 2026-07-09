@@ -14,17 +14,14 @@
 
 ---
 tags:
-- slurm6
-- m.managed-lustre
-- m.dashboard
-- m.filestore
-- m.private-service-access
-- m.schedmd-slurm-gcp-v6-controller
-- m.schedmd-slurm-gcp-v6-login
-- m.schedmd-slurm-gcp-v6-nodeset
-- m.schedmd-slurm-gcp-v6-partition
+- gke
+- m.gke-cluster
+- m.gke-node-pool
 - m.service-account
 - m.vpc
+- m.kubectl-apply
+- m.gke-job-template
+- m.gke-storage
 
 substitutions:
   _TEST_PREFIX: "" # Default to no prefix
@@ -34,13 +31,12 @@ steps:
 # While using static network names we are guarding against more than 1 instance running at a time (for multi-group tests)
 - id: check_for_running_build
   name: gcr.io/cloud-builders/gcloud
-  script: "tools/cloud-build/check_running_build.sh tools/cloud-build/daily-tests/builds/hpc-enterprise-slurm.yaml"
+  script: "tools/cloud-build/check_running_build.sh tools/cloud-build/daily-tests/builds/gke-g4-confidential.yaml"
 
-- id: hpc-enterprise-slurm-v6
+- id: gke-g4-confidential
   name: us-central1-docker.pkg.dev/$PROJECT_ID/hpc-toolkit-repo/test-runner
   entrypoint: /bin/bash
   env:
-  - "BUILD_ID=$BUILD_ID"
   - "ANSIBLE_HOST_KEY_CHECKING=false"
   - "ANSIBLE_CONFIG=/workspace/tools/cloud-build/ansible.cfg"
   args:
@@ -51,15 +47,31 @@ steps:
     bash tools/get_binary.sh "${_TEST_PREFIX}"
     BUILD_ID_FULL=$BUILD_ID
     BUILD_ID_SHORT=$${BUILD_ID_FULL:0:6}
-    BLUEPRINT="examples/hpc-enterprise-slurm.yaml"
-    bash tools/add_ttl_label.sh $${BLUEPRINT}
-    python3 tools/fix_vpc_name.py $${BLUEPRINT} "${_TEST_PREFIX}"
-
-    ansible-playbook tools/cloud-build/daily-tests/ansible_playbooks/slurm-integration-test.yml \
-      --extra-vars="test_prefix=${_TEST_PREFIX}" \
-      --extra-vars="use_fixed_vpc=true" \
-      --user=sa_106486320838376751393 --extra-vars="project=${PROJECT_ID} build=$${BUILD_ID_SHORT} full_build_id=$BUILD_ID" \
-      --extra-vars="@tools/cloud-build/daily-tests/tests/hpc-enterprise-slurm.yml" \
+    EXAMPLE_BP=examples/gke-g4-confidential/gke-g4-confidential.yaml
+    # adding vm to act as remote node
+    echo '  - id: remote-node'                           >> $${EXAMPLE_BP}
+    echo '    source: modules/compute/vm-instance'       >> $${EXAMPLE_BP}
+    echo '    use: [gke-g4-net-0]'                       >> $${EXAMPLE_BP}
+    echo '    settings:'                                 >> $${EXAMPLE_BP}
+    echo '      machine_type: e2-standard-2'             >> $${EXAMPLE_BP}
+    echo '      name_prefix: remote-node'                >> $${EXAMPLE_BP}
+    echo '      add_deployment_name_before_prefix: true' >> $${EXAMPLE_BP}
+    echo ''
+    echo '  - id: job_template_hostname'                       >> $${EXAMPLE_BP}
+    echo '    source: modules/compute/gke-job-template'        >> $${EXAMPLE_BP}
+    echo '    use: [g4-pool]'                                  >> $${EXAMPLE_BP}
+    echo '    settings:'                                       >> $${EXAMPLE_BP}
+    echo '      image: nvidia/cuda:12.6.0-base-ubuntu22.04'    >> $${EXAMPLE_BP}
+    echo '      command:'                                      >> $${EXAMPLE_BP}
+    echo '      - nvidia-smi'                                  >> $${EXAMPLE_BP}
+    echo '      node_count: 1'                                 >> $${EXAMPLE_BP}
+    echo '      k8s_service_account_name: workload-identity-k8s-sa' >> $${EXAMPLE_BP}
+    echo '    outputs: [instructions]'                         >> $${EXAMPLE_BP}
+    echo ''
+    bash tools/add_ttl_label.sh "$${EXAMPLE_BP}"
+    ansible-playbook tools/cloud-build/daily-tests/ansible_playbooks/base-integration-test.yml \
+        --user=sa_106486320838376751393 --extra-vars="project=${PROJECT_ID} build=$${BUILD_ID_SHORT} full_build_id=$BUILD_ID" \
+        --extra-vars="@tools/cloud-build/daily-tests/tests/gke-g4-confidential.yml" \
         --extra-vars="triage_gcs_bucket_override=$$TRIAGE_GCS_BUCKET" \
         --extra-vars="triage_project_number_override=$$TRIAGE_PROJECT_NUMBER" \
         --extra-vars="triage_invoker_sa_override=$$TRIAGE_INVOKER_SA" \
