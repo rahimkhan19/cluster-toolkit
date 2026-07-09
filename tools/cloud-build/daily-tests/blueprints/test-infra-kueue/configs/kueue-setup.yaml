@@ -61,6 +61,7 @@ spec:
     - "test-locks/monitoring"
     - "test-locks/packer"
     - "test-locks/pfs-managed-lustre-slurm"
+    - "test-locks/pfs-managed-lustre-vm"
     flavors:
     - name: test-lock-flavor
       resources:
@@ -163,6 +164,8 @@ spec:
       - name: test-locks/packer
         nominalQuota: 1
       - name: test-locks/pfs-managed-lustre-slurm
+        nominalQuota: 1
+      - name: test-locks/pfs-managed-lustre-vm
         nominalQuota: 1
 ---
 apiVersion: kueue.x-k8s.io/v1beta1
