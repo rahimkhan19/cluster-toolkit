@@ -80,6 +80,8 @@ steps:
             env:
             - name: BUILD_ID
               value: "$BUILD_ID"
+            - name: PROJECT_ID
+              value: "$PROJECT_ID"
             command: ["/bin/bash", "-c"]
             args:
             - |
@@ -108,12 +110,14 @@ steps:
                 
                 echo ""
                 echo "INITIATING RESCUE PLAYBOOK: Destroying leaked infrastructure for \$$DEPLOYMENT_NAME..."
-                echo "- hosts: localhost" > /workspace/cleanup-playbook.yml
-                echo "  tasks:" >> /workspace/cleanup-playbook.yml
-                echo "  - ansible.builtin.include_tasks:" >> /workspace/cleanup-playbook.yml
-                echo "      file: tools/cloud-build/daily-tests/ansible_playbooks/tasks/rescue_gcluster_failure.yml" >> /workspace/cleanup-playbook.yml
-                
-                ansible-playbook /workspace/cleanup-playbook.yml -e deployment_name="\$$DEPLOYMENT_NAME" -e workspace="/workspace" || true
+                if [ -d "\$$DEPLOYMENT_NAME" ]; then
+                  echo "- hosts: localhost" > /workspace/cleanup-playbook.yml
+                  echo "  tasks:" >> /workspace/cleanup-playbook.yml
+                  echo "  - ansible.builtin.include_tasks:" >> /workspace/cleanup-playbook.yml
+                  echo "      file: tools/cloud-build/daily-tests/ansible_playbooks/tasks/rescue_gcluster_failure.yml" >> /workspace/cleanup-playbook.yml
+                  
+                  ansible-playbook /workspace/cleanup-playbook.yml -e deployment_name="\$$DEPLOYMENT_NAME" -e workspace="/workspace" || true
+                fi
                 
                 echo "Graceful cleanup finished."
                 exit \$$exit_code
