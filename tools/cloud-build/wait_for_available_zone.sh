@@ -6,6 +6,7 @@
 while true; do
     # Run the script in a subshell, streaming stdout and stderr to the console and a log file.
     # To extract the exported variables, we have the subshell write them to a file.
+    set +e
     (
         source /workspace/tools/cloud-build/find_available_zone.sh
         # If it succeeds, these lines will execute and save the exports.
@@ -14,6 +15,7 @@ while true; do
     ) 2>&1 | tee /tmp/zone_output.log
     
     EXIT_CODE=${PIPESTATUS[0]}
+    set -e
     
     if [ $EXIT_CODE -eq 0 ]; then
         source /tmp/zone_export.sh
@@ -21,7 +23,7 @@ while true; do
     else
         # Check if the failure was specifically due to zone capacity
         if grep -q "Couldn't find a zone to deploy" /tmp/zone_output.log; then
-            echo "--- RETRYING in 5 minutes to maintain queue position... ---" >&2
+            echo "--- RETRYING in 5 minutes... ---" >&2
             sleep 300
         else
             echo "--- FATAL ERROR: find_available_zone.sh failed due to a configuration or system error. Exiting. ---" >&2
