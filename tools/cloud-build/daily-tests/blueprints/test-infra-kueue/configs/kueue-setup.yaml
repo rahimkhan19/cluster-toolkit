@@ -65,6 +65,7 @@ spec:
     - "test-locks/pfs-managed-lustre-slurm"
     - "test-locks/pfs-managed-lustre-vm"
     - "test-locks/slurm-flex"
+    - "test-locks/slurm-gcp-v6-simple-job-completion"
     flavors:
     - name: test-lock-flavor
       resources:
@@ -175,6 +176,8 @@ spec:
       - name: test-locks/pfs-managed-lustre-vm
         nominalQuota: 1
       - name: test-locks/slurm-flex
+        nominalQuota: 1
+      - name: test-locks/slurm-gcp-v6-simple-job-completion
         nominalQuota: 1
 ---
 apiVersion: kueue.x-k8s.io/v1beta1
