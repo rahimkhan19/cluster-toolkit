@@ -50,7 +50,7 @@ steps:
 - id: generate-job-manifest
   name: gcr.io/cloud-builders/gcloud
   entrypoint: /bin/bash
-  secretEnv: ['GCLUSTER_GCS_PATH']
+  secretEnv: ['GCLUSTER_GCS_PATH', 'TRIAGE_GCS_BUCKET', 'TRIAGE_PROJECT_NUMBER', 'TRIAGE_INVOKER_SA', 'TRIAGE_CLOUD_RUN_URL']
   args:
   - -c
   - |
@@ -89,6 +89,8 @@ steps:
               value: "false"
             - name: ANSIBLE_CONFIG
               value: "/workspace/tools/cloud-build/ansible.cfg"
+            - name: GCLUSTER_GCS_PATH
+              value: "$$GCLUSTER_GCS_PATH"
             - name: _TEST_PREFIX
               value: "${_TEST_PREFIX}"
             - name: TRIAGE_GCS_BUCKET
