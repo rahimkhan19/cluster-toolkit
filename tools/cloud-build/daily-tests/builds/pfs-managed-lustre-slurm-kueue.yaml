@@ -222,8 +222,8 @@ steps:
       
       # Check if the failure was specifically due to a lack of GCP zone capacity.
       # If so, retry. If it's a real error (like a terraform syntax error), fail immediately.
-      if grep -q "Couldn't find a zone to deploy\|ERROR: ZONE not found\|ZONE_RESOURCE_POOL_EXHAUSTED\|does not have enough resources available\|not enough resources available" /workspace/job_logs.txt; then
-        echo "WARNING: GCP is out of zone capacity. Kueue Job has already been deleted. Retrying in $$RETRY_DELAY seconds..."
+      if bash tools/cloud-build/check_retriable_error.sh /workspace/job_logs.txt; then
+        echo "WARNING: Retriable error detected. Kueue Job has already been deleted. Retrying in $$RETRY_DELAY seconds..."
       else
         echo "ERROR: Test failed due to an actual error (not zone capacity). Failing pipeline." >&2
         exit 1

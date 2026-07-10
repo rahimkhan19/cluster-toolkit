@@ -13,7 +13,7 @@ Create a new file with a `-kueue.yaml` postfix (e.g., `test-name-kueue.yaml`) al
 
 1. **Build Workspace Image**: Build and push a docker image containing the current repo codebase.
 2. **Generate Job Manifest**: Generate a `Job` YAML file defining a GKE Job that executes the test runner pod. 
-3. **Submit and Monitor**: Apply the Job to the `test-kueue-cluster` and monitor it using `tools/cloud-build/monitor_kueue_job.sh`. This step handles capacity exhaustion retries.
+3. **Submit and Monitor**: Apply the Job to the `test-kueue-cluster`. When monitoring the job, use `tools/cloud-build/check_retriable_error.sh` against the job logs to determine if a job failed due to a retriable quota error (like Terraform exhaustion) and should be requeued.
 4. **Cleanup Image**: Delete the built image to save costs.
 
 ## 2. GKE Job Specification Details
@@ -22,6 +22,7 @@ When generating the Job manifest (Step 2) using a bash `cat <<EOF > job.yaml` he
 - **`secretEnv` Variables**: If the legacy step used `secretEnv` (e.g., `GCLUSTER_GCS_PATH`), move it to the `generate-job-manifest` step. Since scripts running *inside* the Pod (like `get_binary.sh`) often expect these as environment variables, you MUST explicitly inject them into the Pod's `containers[0].env` array by referencing them as `$$ENV_VAR` in the heredoc (e.g., `- name: GCLUSTER_GCS_PATH` / `value: "$$GCLUSTER_GCS_PATH"`). This ensures the Cloud Build step resolves the secret and writes it into the generated Job manifest.
 - **Regular `env` Variables**: If the legacy step used standard `env` variables (e.g., `PROJECT_ID`, `BUILD_ID`, `NUM_NODES`), you MUST copy them into the Pod's `containers[0].env` array in the Job manifest. Ensure you use the exact name `BUILD_ID` because scripts inside the Pod (like `find_available_zone.sh`) explicitly expect the `BUILD_ID` variable and will fail with an `unbound variable` error if omitted!
 - **`OPTIONS_BUCKET` Logic**: If the legacy pipeline constructs an `OPTIONS_GCS_PATH` (either dynamically or via a hardcoded bucket like `hpc-ctk1357`), you MUST hardcode the `OPTIONS_BUCKET` to exactly `hpc-ctk1357` in the `generate-job-manifest` step (e.g., `OPTIONS_BUCKET="hpc-ctk1357"`). Then, construct the path dynamically in the Pod's `env` array (e.g., `value: "gs://$${OPTIONS_BUCKET}/a3uoptions.txt"`).
+- **Zone Finder Script**: If the legacy pipeline uses `source .../find_available_zone.sh`, you MUST replace it in the Kueue pipeline pod with `source /workspace/tools/cloud-build/wait_for_available_zone.sh`. This wrapper loops internally on capacity exhaustion rather than exiting the pod, which ensures the test safely holds onto its Kueue locks and queue position while waiting for GCP capacity to free up.
 - **Variable Escaping**: Proper variable escaping is critical because the pod's bash script is embedded inside a heredoc within a Cloud Build YAML file:
   - **Cloud Build substitutions** (e.g., `$PROJECT_ID`, `$BUILD_ID`) used in the Job `env` block must use a single `$` (e.g., `value: "$PROJECT_ID"`) so Cloud Build substitutes them before the heredoc generates the YAML.
   - **Host shell variables** defined within the Cloud Build step script (e.g., `BUILD_ID_SHORT`) must be escaped with `$$` (e.g., `$$BUILD_ID_SHORT`) so the host bash shell evaluates them when writing the YAML.
