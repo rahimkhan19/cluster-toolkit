@@ -15,6 +15,7 @@ spec:
     - "test-locks/ml-slurm"
     - "test-locks/slurm-gcp-v6-rocky8"
     - "test-locks/slurm-gcp-v6-debian"
+    - "test-locks/slurm-gcp-v6-reconfig-size"
     - "test-locks/hpc-build-slurm-image"
     - "test-locks/hpc-enterprise-slurm"
     - "test-locks/hcls"
@@ -74,6 +75,8 @@ spec:
       - name: test-locks/slurm-gcp-v6-rocky8
         nominalQuota: 1
       - name: test-locks/slurm-gcp-v6-debian
+        nominalQuota: 1
+      - name: test-locks/slurm-gcp-v6-reconfig-size
         nominalQuota: 1
       - name: test-locks/hpc-build-slurm-image
         nominalQuota: 1
