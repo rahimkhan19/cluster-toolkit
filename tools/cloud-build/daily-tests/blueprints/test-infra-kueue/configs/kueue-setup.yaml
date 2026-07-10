@@ -14,6 +14,7 @@ spec:
     - "test-locks/slurm"
     - "test-locks/ml-slurm"
     - "test-locks/slurm-gcp-v6-rocky8"
+    - "test-locks/slurm-gcp-v6-ubuntu"
     - "test-locks/slurm-gcp-v6-debian"
     - "test-locks/slurm-gcp-v6-reconfig-size"
     - "test-locks/slurm-gcp-v6-ssd"
@@ -77,6 +78,8 @@ spec:
       - name: test-locks/ml-slurm
         nominalQuota: 1
       - name: test-locks/slurm-gcp-v6-rocky8
+        nominalQuota: 1
+      - name: test-locks/slurm-gcp-v6-ubuntu
         nominalQuota: 1
       - name: test-locks/slurm-gcp-v6-debian
         nominalQuota: 1
