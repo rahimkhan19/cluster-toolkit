@@ -68,6 +68,7 @@ spec:
     - "test-locks/slurm-flex"
     - "test-locks/slurm-gcp-v6-simple-job"
     - "test-locks/slurm-gcp-v6-startup-scripts"
+    - "test-locks/slurm-gcp-v6-topology"
     flavors:
     - name: test-lock-flavor
       resources:
@@ -184,6 +185,8 @@ spec:
       - name: test-locks/slurm-gcp-v6-simple-job
         nominalQuota: 1
       - name: test-locks/slurm-gcp-v6-startup-scripts
+        nominalQuota: 1
+      - name: test-locks/slurm-gcp-v6-topology
         nominalQuota: 1
 ---
 apiVersion: kueue.x-k8s.io/v1beta1
