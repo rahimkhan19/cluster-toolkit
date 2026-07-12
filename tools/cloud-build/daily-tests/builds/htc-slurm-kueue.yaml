@@ -27,7 +27,8 @@ tags:
 substitutions:
   _TEST_PREFIX: "" # Default to no prefix
 
-timeout: 86400s  # 24hr
+timeout: 86400s
+queueTtl: 86400s  # 24hr
 
 steps:
 # 1. Build an image containing the current workspace
