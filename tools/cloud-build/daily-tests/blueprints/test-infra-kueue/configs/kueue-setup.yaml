@@ -73,6 +73,7 @@ spec:
     - "test-locks/slurm-rapid-storage"
     - "test-locks/slurm-gke"
     - "test-locks/spack-gromacs"
+    - "test-locks/gcluster-dockerfile"
     flavors:
     - name: test-lock-flavor
       resources:
@@ -199,6 +200,8 @@ spec:
       - name: test-locks/slurm-gke
         nominalQuota: 1
       - name: test-locks/spack-gromacs
+        nominalQuota: 1
+      - name: test-locks/gcluster-dockerfile
         nominalQuota: 1
 ---
 apiVersion: kueue.x-k8s.io/v1beta1
