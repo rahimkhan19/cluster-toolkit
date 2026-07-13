@@ -119,7 +119,7 @@ steps:
               bash tools/add_ttl_label.sh "\$$BLUEPRINT"
               
               echo "=== STAGE: create-deployment-folder ==="
-              gcluster create tools/cloud-build/daily-tests/blueprints/e2e.yaml --out /workspace --vars project_id=$$PROJECT_ID,deployment_name=dockerfile-test,region=us-central1,zone=us-central1-a
+              gcluster create tools/cloud-build/daily-tests/blueprints/e2e.yaml --out /workspace --vars project_id=$PROJECT_ID,deployment_name=dockerfile-test,region=us-central1,zone=us-central1-a
               
               echo "=== STAGE: deploy-resources ==="
               gcluster deploy /workspace/dockerfile-test --auto-approve
@@ -127,7 +127,7 @@ steps:
               echo "=== STAGE: check-on-resources ==="
               depl_name="dockerfile-test"
               zone="us-central1-a"
-              gcloud compute instances describe "\$${depl_name}-0" --project="$$PROJECT_ID" --zone="\$$zone" >/dev/null
+              gcloud compute instances describe "\$${depl_name}-0" --project="$PROJECT_ID" --zone="\$$zone" >/dev/null
               
               echo "=== STAGE: destroy-resources ==="
               gcluster destroy /workspace/dockerfile-test --auto-approve --robust
