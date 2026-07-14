@@ -64,6 +64,10 @@ steps:
       PRIORITY_LINE=""
     fi
 
+    SA_EMAIL="test-kueue-cluster-runner-gsa@$PROJECT_ID.iam.gserviceaccount.com"
+    SA_UNIQUE_ID=$$(gcloud iam service-accounts describe $$SA_EMAIL --format="value(uniqueId)")
+    OSLOGIN_USER="sa_$$SA_UNIQUE_ID"
+
     cat <<EOF > job.yaml
     apiVersion: batch/v1
     kind: Job
@@ -158,7 +162,7 @@ steps:
 
               ansible-playbook tools/cloud-build/daily-tests/ansible_playbooks/slurm-integration-test.yml \
                 --extra-vars="test_prefix=${_TEST_PREFIX} use_fixed_vpc=true" \
-                --user=sa_108481972033535374787 --extra-vars="project=$PROJECT_ID build=$$BUILD_ID_SHORT" \
+                --user="$$OSLOGIN_USER" --extra-vars="project=$PROJECT_ID build=$$BUILD_ID_SHORT" \
                 --extra-vars="@tools/cloud-build/daily-tests/tests/slurm-v6-rocky8.yml" \
                 --extra-vars="triage_gcs_bucket_override=\$$TRIAGE_GCS_BUCKET" \
                 --extra-vars="triage_project_number_override=\$$TRIAGE_PROJECT_NUMBER" \
