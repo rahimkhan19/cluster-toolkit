@@ -27,6 +27,10 @@ substitutions:
 
 timeout: 86400s
 queueTtl: 86400s  # 24hr
+
+options:
+  defaultLogsBucketBehavior: REGIONAL_USER_OWNED_BUCKET
+
 steps:
 # 1. Build and push workspace container containing the current code layer
 - id: build-workspace-image
@@ -59,6 +63,10 @@ steps:
     else
       PRIORITY_LINE=""
     fi
+
+    SA_EMAIL="test-kueue-cluster-runner-gsa@$PROJECT_ID.iam.gserviceaccount.com"
+    SA_UNIQUE_ID=$$(gcloud iam service-accounts describe $$SA_EMAIL --format="value(uniqueId)")
+    OSLOGIN_USER="sa_$$SA_UNIQUE_ID"
 
     cat <<EOF > job.yaml
     apiVersion: batch/v1
@@ -204,7 +212,7 @@ steps:
               sed -i '/reservation/d' \$$EXAMPLE_BP
 
               ansible-playbook tools/cloud-build/daily-tests/ansible_playbooks/base-integration-test.yml \
-                --user=sa_108481972033535374787 \
+                --user="$$OSLOGIN_USER" \
                 --extra-vars="project=\$$PROJECT_ID build=$$BUILD_ID_SHORT full_build_id=\$$BUILD_ID" \
                 --extra-vars="region=\$$REGION zone=\$$ZONE" \
                 --extra-vars="enable_spot=\$$ENABLE_SPOT" \
