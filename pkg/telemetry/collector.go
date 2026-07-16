@@ -42,6 +42,7 @@ var (
 		"static_node_count", // Used in GKE node pool. If set, autoscaling will be disabled. Defaults to 0.
 		"node_count_static", // Standalone Slurm V6 CPU and TPU nodesets use 'node_count_static'. Defaults to 0.
 		"instance_count",    // VM instances and Batch login nodes use 'instance_count' to define static nodes. Default is 1.
+		"target_size",       // Used by HTCondor execute points and MIGs for pool capacity.
 	}
 	staticNodeCountInlineKeys  = []string{"nodeset", "nodeset_tpu", "partition"} // Combine top-level explicit keys and complex inline object list keys for Slurm V6.
 	isGkeModulePatterns        = []string{"gke-node-pool", "gke-cluster"}
@@ -289,8 +290,10 @@ func getStaticNodeCounts(bp config.Blueprint) string {
 		return ""
 	}
 
-	// Trimming the curly braces safely extracts our exact format `"g4-standard-48":3,"a3-ultragpu-8g":2`
-	return strings.Trim(string(counts), "{}")
+	// Trim the curly braces and remove the double quotes for a cleaner metric.
+	// Expected return format: "g4-standard-48:3,a3-ultragpu-8g:2"
+	return strings.ReplaceAll(strings.Trim(string(counts), "{}"), `"`, "")
+
 }
 
 func getOSName() string {

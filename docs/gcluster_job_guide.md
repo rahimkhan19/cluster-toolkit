@@ -1082,6 +1082,8 @@ The `gcluster job submit` command deploys a container image as a job (Kubernetes
 | `--pathways-worker-env` | `stringArray` | Custom environment variables injected specifically into the Pathways worker containers (KEY=VALUE). |
 | `--pathways-colocated-python-sidecar-image` | `string` | Image for an optional Python-based sidecar container running alongside workers. |
 | `--pathways-head-np` | `string` | The node pool name to target for the Pathways head job. |
+| `--pathways-mtc-enabled` | `flag` | If present, enables Multi-Tier Checkpointing (MTC) for the Pathways workload. |
+| `--pathways-ramdisk-directory` | `string` | The ramdisk directory path for local checkpoints in MTC (defaults to `/tmp/mtc_checkpoints`). |
 
 #### 9.3.3 GPU Related Flags
 *Use these flags to tune specialized multi-GPU topologies and related node parameters.*
@@ -1121,6 +1123,10 @@ The `gcluster job submit` command deploys a container image as a job (Kubernetes
 | Flag | Type | Description |
 | :--- | :--- | :--- |
 | `-f, --follow` | `flag` | Stream logs continuously (like `tail -f`). |
+| `--main-only` | `bool` | Fetch logs only for the coordinator/leader pod (Rank 0) of the main replicated job (e.g. `main-job` or `pathways-head`). |
+
+> [!NOTE]
+> **Smart Logging Defaults**: If a job has more than 5 pods, `gcluster` dynamically defaults to `--main-only=true` to prevent terminal spam from duplicate worker rank logs. You can override this to stream logs from all pods by explicitly passing `--main-only=false`.
 
 ## 10. Troubleshooting: ImagePullBackOff
 

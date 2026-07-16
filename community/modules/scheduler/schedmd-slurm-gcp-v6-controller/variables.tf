@@ -281,13 +281,15 @@ variable "nodeset" {
     min_cpu_platform         = optional(string)
     network_tier             = optional(string, "STANDARD")
     network_storage = optional(list(object({
-      server_ip             = string
-      remote_mount          = string
-      local_mount           = string
-      fs_type               = string
-      mount_options         = string
-      client_install_runner = optional(map(string))
-      mount_runner          = optional(map(string))
+      server_ip               = string
+      remote_mount            = string
+      local_mount             = string
+      local_mount_owner       = optional(string)
+      local_mount_permissions = optional(string)
+      fs_type                 = string
+      mount_options           = string
+      client_install_runner   = optional(map(string))
+      mount_runner            = optional(map(string))
     })), [])
     on_host_maintenance   = optional(string)
     preemptible           = optional(bool, false)
@@ -368,13 +370,15 @@ variable "nodeset_tpu" {
     data_disks   = optional(list(string), [])
     docker_image = optional(string, "")
     network_storage = optional(list(object({
-      server_ip             = string
-      remote_mount          = string
-      local_mount           = string
-      fs_type               = string
-      mount_options         = string
-      client_install_runner = optional(map(string))
-      mount_runner          = optional(map(string))
+      server_ip               = string
+      remote_mount            = string
+      local_mount             = string
+      local_mount_owner       = optional(string)
+      local_mount_permissions = optional(string)
+      fs_type                 = string
+      mount_options           = string
+      client_install_runner   = optional(map(string))
+      mount_runner            = optional(map(string))
     })), [])
     subnetwork = string
     service_account = optional(object({
@@ -517,6 +521,18 @@ variable "experimental" {
   nullable = false
 }
 
+variable "enable_expedited_requeue" {
+  description = "Enables Expedited Requeue, which automatically requeues eligible jobs and grants them the highest priority upon node failure. (Usage: sbatch --requeue=expedite)"
+  type        = bool
+  default     = true
+}
+
+variable "enable_health_check_start_only" {
+  description = "Adjusts the Slurm HealthCheckNodeState behavior to run health checks solely upon node initialization. This prevents continuous health check polling."
+  type        = bool
+  default     = false
+}
+
 variable "enable_default_mounts" {
   description = <<-EOD
     Enable default global network storage from the controller
@@ -530,13 +546,15 @@ variable "enable_default_mounts" {
 variable "network_storage" {
   description = "An array of network attached storage mounts to be configured on all instances."
   type = list(object({
-    server_ip             = string,
-    remote_mount          = string,
-    local_mount           = string,
-    fs_type               = string,
-    mount_options         = string,
-    client_install_runner = optional(map(string))
-    mount_runner          = optional(map(string))
+    server_ip               = string,
+    remote_mount            = string,
+    local_mount             = string,
+    local_mount_owner       = optional(string)
+    local_mount_permissions = optional(string)
+    fs_type                 = string,
+    mount_options           = string,
+    client_install_runner   = optional(map(string))
+    mount_runner            = optional(map(string))
   }))
   default = []
 }
@@ -544,11 +562,13 @@ variable "network_storage" {
 variable "login_network_storage" {
   description = "An array of network attached storage mounts to be configured on all login nodes."
   type = list(object({
-    server_ip     = string,
-    remote_mount  = string,
-    local_mount   = string,
-    fs_type       = string,
-    mount_options = string,
+    server_ip               = string,
+    remote_mount            = string,
+    local_mount             = string,
+    local_mount_owner       = optional(string)
+    local_mount_permissions = optional(string)
+    fs_type                 = string,
+    mount_options           = string,
   }))
   default = []
 }

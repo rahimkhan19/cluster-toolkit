@@ -42,6 +42,10 @@ type PathwaysJobDefinition struct {
 	ColocatedPythonSidecarImage string // Default: ""
 
 	HeadNodePool string // Resolved node pool to use for the Pathways head job.
+
+	// Multi-Tier Checkpointing (MTC)
+	MTCEnabled       bool
+	RamdiskDirectory string
 }
 
 type VolumeDefinition struct {
@@ -127,6 +131,7 @@ type LogsOptions struct {
 	ClusterName     string
 	ClusterLocation string
 	Follow          bool
+	MainOnly        *bool
 }
 
 type JobOrchestrator interface {

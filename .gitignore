@@ -75,3 +75,5 @@ venv*/
 GEMINI.md
 
 test-kueue-cluster
+# Ignore Antigravity agents customizations
+.agents/

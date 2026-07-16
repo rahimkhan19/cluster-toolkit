@@ -187,9 +187,10 @@ deployment_groups:
               nvidia_packages:
                 - cuda-toolkit-13-0
                 - nvidia-container-toolkit
-                - datacenter-gpu-manager-4-cuda13
-                - datacenter-gpu-manager-4-dev
-                - datacenter-gpu-manager-4-core
+                - datacenter-gpu-manager-4-cuda13=1:4.6.0-1
+                - datacenter-gpu-manager-4-dev=1:4.6.0-1
+                - datacenter-gpu-manager-4-core=1:4.6.0-1
+
             tasks:
               - name: Install NVIDIA repository keyring
                 ansible.builtin.apt:
@@ -715,6 +716,9 @@ deployment_groups:
           ln -s "${SLURM_ROOT}/scripts/sudo-oslogin" "${SLURM_ROOT}/epilog_slurmd.d/sudo-oslogin.epilog_slurmd"
           curl -s -o "${SLURM_ROOT}/scripts/rxdm" \
               https://raw.githubusercontent.com/GoogleCloudPlatform/slurm-gcp/master/tools/prologs-epilogs/receive-data-path-manager-mega
+          sed -i -e 's|^NCCL_PLUGIN_IMAGE=.*|NCCL_PLUGIN_IMAGE=us-docker.pkg.dev/gce-ai-infra/gpudirect-tcpxo/nccl-plugin-gpudirecttcpx-dev:v1.0.17|' \
+                 -e 's|^RXDM_IMAGE=.*|RXDM_IMAGE=us-docker.pkg.dev/gce-ai-infra/gpudirect-tcpxo/tcpgpudmarxd-dev:v1.0.23|' \
+                 "${SLURM_ROOT}/scripts/rxdm"
           chmod 0755 "${SLURM_ROOT}/scripts/rxdm"
           ln -s "${SLURM_ROOT}/scripts/rxdm" "${SLURM_ROOT}/partition-$(vars.a3mega_partition_name)-prolog_slurmd.d/rxdm.prolog_slurmd"
           ln -s "${SLURM_ROOT}/scripts/rxdm" "${SLURM_ROOT}/partition-$(vars.a3mega_partition_name)-epilog_slurmd.d/rxdm.epilog_slurmd"

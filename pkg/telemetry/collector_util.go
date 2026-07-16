@@ -261,6 +261,9 @@ func getTopLevelNodeCount(m config.Module, bp config.Blueprint, topMachineType s
 		if count, ok := extractExplicitIntSetting(key, m, bp); ok {
 			baseCount = count
 			found = true
+			if key == "static_node_count" {
+				baseCount *= getZonalMultiplier(m, bp)
+			}
 			break
 		}
 	}
@@ -277,6 +280,9 @@ func getTopLevelNodeCount(m config.Module, bp config.Blueprint, topMachineType s
 		if count, ok := extractDefaultSetting[int](staticNodeCountSettings, m); ok {
 			baseCount = count
 			found = true
+			if ifModulesMatchPatterns([]string{string(m.Source)}, isGkeModulePatterns) == "true" {
+				baseCount *= getZonalMultiplier(m, bp)
+			}
 		}
 	}
 
@@ -289,6 +295,27 @@ func getTopLevelNodeCount(m config.Module, bp config.Blueprint, topMachineType s
 	multiplier := max(slices, pools)
 
 	return baseCount * multiplier, true
+}
+
+// getZonalMultiplier retrieves the length of the zones list if it exists.
+func getZonalMultiplier(m config.Module, bp config.Blueprint) int {
+	keys := []string{"zones", "system_node_pool_zones"}
+	for _, key := range keys {
+		if !m.Settings.Has(key) {
+			continue
+		}
+		evaluated, err := bp.Eval(m.Settings.Get(key))
+		if err != nil {
+			continue
+		}
+		unmarked, _ := evaluated.Unmark()
+		if unmarked.IsKnown() && !unmarked.IsNull() && (unmarked.Type().IsTupleType() || unmarked.Type().IsListType() || unmarked.Type().IsSetType()) {
+			if length := len(unmarked.AsValueSlice()); length > 0 {
+				return length
+			}
+		}
+	}
+	return 1
 }
 
 func getMultiplier(key string, m config.Module, bp config.Blueprint) int {
