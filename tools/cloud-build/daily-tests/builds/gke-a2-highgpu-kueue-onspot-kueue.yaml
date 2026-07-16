@@ -236,12 +236,12 @@ steps:
               RUN_CLEANUP=false
             resources:
               requests:
-                cpu: 800m
+                cpu: 200m
                 memory: "2Gi"
                 test-locks/a2-highgpu: 1
                 test-locks/gke-a2-highgpu-kueue-onspot: 1
               limits:
-                cpu: 800m
+                cpu: 1
                 memory: "2Gi"
                 test-locks/a2-highgpu: 1
                 test-locks/gke-a2-highgpu-kueue-onspot: 1

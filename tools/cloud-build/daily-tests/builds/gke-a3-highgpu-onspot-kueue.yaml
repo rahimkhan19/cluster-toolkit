@@ -207,12 +207,12 @@ steps:
               RUN_CLEANUP=false
             resources:
               requests:
-                cpu: 800m
+                cpu: 200m
                 memory: "2Gi"
                 test-locks/a3-highgpu: 1
                 test-locks/gke-a3-highgpu-onspot: 1
               limits:
-                cpu: 800m
+                cpu: 1
                 memory: "2Gi"
                 test-locks/a3-highgpu: 1
                 test-locks/gke-a3-highgpu-onspot: 1

@@ -179,13 +179,13 @@ steps:
               RUN_CLEANUP=false
             resources:
               requests:
-                cpu: 800m
+                cpu: 200m
                 memory: "2Gi"
                 test-locks/slurm: 1
                 test-locks/ml-a4x-highgpu-slurm: 1
                 test-locks/a4x: 1
               limits:
-                cpu: 800m
+                cpu: 1
                 memory: "2Gi"
                 test-locks/slurm: 1
                 test-locks/ml-a4x-highgpu-slurm: 1
