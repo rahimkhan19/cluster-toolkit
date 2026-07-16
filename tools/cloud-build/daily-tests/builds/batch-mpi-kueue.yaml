@@ -177,8 +177,12 @@ steps:
               RUN_CLEANUP=false
             resources:
               requests:
+                cpu: "1"
+                memory: "2Gi"
                 test-locks/batch-mpi: 1
               limits:
+                cpu: "1"
+                memory: "2Gi"
                 test-locks/batch-mpi: 1
     EOF
 

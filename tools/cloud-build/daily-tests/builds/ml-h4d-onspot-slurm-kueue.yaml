@@ -200,9 +200,13 @@ steps:
               RUN_CLEANUP=false
             resources:
               requests:
+                cpu: "1"
+                memory: "2Gi"
                 test-locks/h4d: 1
                 test-locks/ml-h4d-onspot-slurm: 1
               limits:
+                cpu: "1"
+                memory: "2Gi"
                 test-locks/h4d: 1
                 test-locks/ml-h4d-onspot-slurm: 1
     EOF

@@ -214,9 +214,13 @@ steps:
               RUN_CLEANUP=false
             resources:
               requests:
+                cpu: "1"
+                memory: "2Gi"
                 test-locks/a4-highgpu: 1
                 test-locks/gke-a4-onspot: 1
               limits:
+                cpu: "1"
+                memory: "2Gi"
                 test-locks/a4-highgpu: 1
                 test-locks/gke-a4-onspot: 1
     EOF

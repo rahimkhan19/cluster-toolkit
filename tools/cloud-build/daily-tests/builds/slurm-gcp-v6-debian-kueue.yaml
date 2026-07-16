@@ -162,9 +162,13 @@ steps:
               RUN_CLEANUP=false
             resources:
               requests:
+                cpu: "1"
+                memory: "2Gi"
                 test-locks/slurm: 1
                 test-locks/slurm-gcp-v6-debian: 1
               limits:
+                cpu: "1"
+                memory: "2Gi"
                 test-locks/slurm: 1
                 test-locks/slurm-gcp-v6-debian: 1
     EOF

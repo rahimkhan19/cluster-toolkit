@@ -190,9 +190,13 @@ steps:
               RUN_CLEANUP=false
             resources:
               requests:
+                cpu: "1"
+                memory: "2Gi"
                 test-locks/a3-ultragpu: 1
                 test-locks/ml-a3-ultragpu-onspot-jbvms: 1
               limits:
+                cpu: "1"
+                memory: "2Gi"
                 test-locks/a3-ultragpu: 1
                 test-locks/ml-a3-ultragpu-onspot-jbvms: 1
     EOF

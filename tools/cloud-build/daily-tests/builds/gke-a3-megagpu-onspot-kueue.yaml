@@ -227,9 +227,13 @@ steps:
               RUN_CLEANUP=false
             resources:
               requests:
+                cpu: "1"
+                memory: "2Gi"
                 test-locks/a3-megagpu: 1
                 test-locks/gke-a3-megagpu-onspot: 1
               limits:
+                cpu: "1"
+                memory: "2Gi"
                 test-locks/a3-megagpu: 1
                 test-locks/gke-a3-megagpu-onspot: 1
     EOF

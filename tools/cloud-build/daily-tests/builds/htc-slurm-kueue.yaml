@@ -159,8 +159,12 @@ steps:
               RUN_CLEANUP=false
             resources:
               requests:
+                cpu: "1"
+                memory: "2Gi"
                 test-locks/htc-slurm: 1
               limits:
+                cpu: "1"
+                memory: "2Gi"
                 test-locks/htc-slurm: 1
     EOF
   secretEnv: ['GCLUSTER_GCS_PATH', 'TRIAGE_GCS_BUCKET', 'TRIAGE_PROJECT_NUMBER', 'TRIAGE_INVOKER_SA', 'TRIAGE_CLOUD_RUN_URL']
