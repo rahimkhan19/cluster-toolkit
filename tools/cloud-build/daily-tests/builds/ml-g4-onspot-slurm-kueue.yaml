@@ -190,12 +190,12 @@ steps:
               RUN_CLEANUP=false
             resources:
               requests:
-                cpu: "1"
+                cpu: 800m
                 memory: "2Gi"
                 test-locks/g4-standard: 1
                 test-locks/ml-g4-onspot-slurm: 1
               limits:
-                cpu: "1"
+                cpu: 800m
                 memory: "2Gi"
                 test-locks/g4-standard: 1
                 test-locks/ml-g4-onspot-slurm: 1

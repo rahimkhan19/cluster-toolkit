@@ -200,12 +200,12 @@ steps:
               RUN_CLEANUP=false
             resources:
               requests:
-                cpu: "1"
+                cpu: 800m
                 memory: "2Gi"
                 test-locks/h4d: 1
                 test-locks/h4d-vm: 1
               limits:
-                cpu: "1"
+                cpu: 800m
                 memory: "2Gi"
                 test-locks/h4d: 1
                 test-locks/h4d-vm: 1

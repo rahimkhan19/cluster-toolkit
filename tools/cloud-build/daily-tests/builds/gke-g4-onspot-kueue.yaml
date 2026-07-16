@@ -215,12 +215,12 @@ steps:
               RUN_CLEANUP=false
             resources:
               requests:
-                cpu: "1"
+                cpu: 800m
                 memory: "2Gi"
                 test-locks/g4-standard: 1
                 test-locks/gke-g4-onspot: 1
               limits:
-                cpu: "1"
+                cpu: 800m
                 memory: "2Gi"
                 test-locks/g4-standard: 1
                 test-locks/gke-g4-onspot: 1

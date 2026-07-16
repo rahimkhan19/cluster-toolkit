@@ -163,11 +163,11 @@ steps:
               RUN_CLEANUP=false
             resources:
               requests:
-                cpu: "1"
+                cpu: 800m
                 memory: "2Gi"
                 test-locks/ml-gke-e2e: 1
               limits:
-                cpu: "1"
+                cpu: 800m
                 memory: "2Gi"
                 test-locks/ml-gke-e2e: 1
     EOF
