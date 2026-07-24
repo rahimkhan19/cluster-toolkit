@@ -113,6 +113,22 @@ variable "backup_zone" {
   default     = null
 }
 
+variable "enable_controller_load_balancer" {
+  description = "Enables an Internal Load Balancer (ILB) in front of the controllers for stable Virtual IP and network-level failover."
+  type        = bool
+  default     = false
+  validation {
+    condition     = var.enable_controller_load_balancer == false || var.enable_backup_controller == true
+    error_message = "The Internal Load Balancer ('enable_controller_load_balancer') can only be enabled if High Availability ('enable_backup_controller') is enabled."
+  }
+}
+
+variable "controller_load_balancer_ip" {
+  description = "Optional static IP address to assign to the controller Internal Load Balancer (VIP). If null, one will be dynamically assigned from the subnetwork."
+  type        = string
+  default     = null
+}
+
 #########
 # LOGIN #
 #########
@@ -208,6 +224,10 @@ variable "login_nodes" {
     termination_action                  = optional(string)
     disk_encryption_key                 = optional(string)
     disk_encryption_key_service_account = optional(string)
+    startup_script = optional(list(object({
+      filename = string
+      content  = string
+    })), [])
   }))
   default = []
   validation {
@@ -447,9 +467,27 @@ variable "controller_state_disk" {
   }
 }
 
+variable "slurm_control_host_port" {
+  type        = string
+  description = "The port number that the Slurm controller, slurmctld, listens to for work."
+  default     = "6818"
+
+  validation {
+    condition     = can(tonumber(var.slurm_control_host_port)) ? (tonumber(var.slurm_control_host_port) >= 1 && tonumber(var.slurm_control_host_port) <= 65535) : false
+    error_message = "The slurm_control_host_port must be a valid port number between 1 and 65535."
+  }
+}
+
+
 variable "enable_debug_logging" {
   type        = bool
   description = "Enables debug logging mode."
+  default     = false
+}
+
+variable "enable_openmetrics" {
+  description = "Enable native Prometheus OpenMetrics telemetry via Slurm and Google Cloud Ops Agent"
+  type        = bool
   default     = false
 }
 

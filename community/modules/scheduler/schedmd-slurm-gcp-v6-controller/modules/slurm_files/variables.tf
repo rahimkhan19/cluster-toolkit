@@ -33,6 +33,12 @@ variable "enable_debug_logging" {
   default     = false
 }
 
+variable "enable_openmetrics" {
+  description = "Enable native Prometheus OpenMetrics telemetry via Slurm and Google Cloud Ops Agent"
+  type        = bool
+  default     = false
+}
+
 variable "extra_logging_flags" {
   type        = map(bool)
   description = "The only available flag is `trace_api`"
@@ -77,6 +83,12 @@ variable "slurm_backup_controller_ip" {
   type        = string
   description = "The backup controller static IP."
   default     = null
+}
+
+variable "enable_controller_load_balancer" {
+  type        = bool
+  description = "Whether an Internal Load Balancer is configured in front of the controllers."
+  default     = false
 }
 
 variable "accounting_storage_backup_host" {
