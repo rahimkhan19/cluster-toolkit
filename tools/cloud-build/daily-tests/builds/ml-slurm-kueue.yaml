@@ -75,6 +75,9 @@ steps:
       suspend: true # Required for Kueue: the job must be created in suspended state for Kueue to manage it
       backoffLimit: 0
       template:
+        metadata:
+          annotations:
+            cluster-autoscaler.kubernetes.io/safe-to-evict: "false"
         spec:
           $$PRIORITY_LINE
           terminationGracePeriodSeconds: 1800 # Grants 30 minutes for terraform destroy to finish gracefully if cancelled
@@ -132,6 +135,8 @@ steps:
                 if [ -n "\$${ANSIBLE_PID:-}" ]; then
                     kill -TERM \$$ANSIBLE_PID 2>/dev/null || true
                     wait \$$ANSIBLE_PID 2>/dev/null || true
+                    echo "Waiting 15s for Terraform to release GCS backend state locks..."
+                    sleep 15
                 fi
                 
                 echo ""

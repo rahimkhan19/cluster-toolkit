@@ -70,6 +70,9 @@ steps:
       suspend: true
       backoffLimit: 0
       template:
+        metadata:
+          annotations:
+            cluster-autoscaler.kubernetes.io/safe-to-evict: "false"
         spec:
           $$PRIORITY_LINE
           terminationGracePeriodSeconds: 1800
