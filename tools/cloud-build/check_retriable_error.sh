@@ -11,7 +11,7 @@ fi
 # Define all retriable errors here.
 # Note: "Couldn't find a zone to deploy" and "ERROR: ZONE not found" are not included here
 # because find_available_zone.sh now internally loops and waits for zone capacity to maintain Kueue locks.
-RETRIABLE_ERRORS="ZONE_RESOURCE_POOL_EXHAUSTED|does not have enough resources available|not enough resources available|stockout"
+RETRIABLE_ERRORS="ZONE_RESOURCE_POOL_EXHAUSTED|does not have enough resources available|not enough resources available|stockout|os-login.*ssh-keys.*add|resourceInUseByAnotherResource|Error acquiring the state lock|412 Precondition Failed|conditionNotMet"
 
 if grep -q -i -E "$RETRIABLE_ERRORS" "$LOG_FILE"; then
     exit 0
