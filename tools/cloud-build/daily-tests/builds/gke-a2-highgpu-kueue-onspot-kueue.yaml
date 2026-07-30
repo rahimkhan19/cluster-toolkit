@@ -276,7 +276,7 @@ steps:
     }
     trap cleanup_cb SIGTERM SIGINT
     
-    MAX_RETRIES=280
+    MAX_RETRIES=10
     RETRY_DELAY=300
     ATTEMPT=1
     
