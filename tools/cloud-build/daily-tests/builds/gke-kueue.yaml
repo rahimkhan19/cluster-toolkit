@@ -27,6 +27,9 @@ substitutions:
 timeout: 86400s
 queueTtl: 86400s  # 24hr
 
+options:
+  defaultLogsBucketBehavior: REGIONAL_USER_OWNED_BUCKET
+
 steps:
 # 1. Build an image containing the current workspace
 - id: build-workspace-image
