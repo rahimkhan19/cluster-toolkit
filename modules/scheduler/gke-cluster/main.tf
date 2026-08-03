@@ -19,6 +19,10 @@ locals {
   labels = merge(var.labels, { ghpc_module = "gke-cluster", ghpc_role = "scheduler" })
 }
 
+resource "time_static" "exclusion_start" {
+  count = length(var.maintenance_exclusions) > 0 ? 1 : 0
+}
+
 locals {
   upgrade_settings = {
     strategy        = var.upgrade_settings.strategy
@@ -52,6 +56,11 @@ locals {
     "SYSTEM_COMPONENTS",
     "WORKLOADS"
   ]
+
+  # Choose the default based on confidential mode
+  default_system_node_pool_machine_type = var.enable_confidential_nodes ? "n2d-standard-4" : "e2-standard-4"
+  # Fallback to the default if the user left it null
+  system_node_pool_machine_type = coalesce(var.system_node_pool_machine_type, local.default_system_node_pool_machine_type)
 }
 
 # GKE Node Auto-Provisioning (NAP) locals
@@ -271,15 +280,18 @@ resource "google_container_cluster" "gke_cluster" {
   min_master_version = local.master_version
 
   maintenance_policy {
-    daily_maintenance_window {
-      start_time = var.maintenance_start_time
+    dynamic "daily_maintenance_window" {
+      for_each = var.maintenance_start_time != null ? [1] : []
+      content {
+        start_time = var.maintenance_start_time
+      }
     }
 
     dynamic "maintenance_exclusion" {
       for_each = var.maintenance_exclusions
       content {
         exclusion_name = maintenance_exclusion.value.name
-        start_time     = maintenance_exclusion.value.start_time
+        start_time     = coalesce(maintenance_exclusion.value.start_time, time_static.exclusion_start[0].rfc3339)
         end_time       = maintenance_exclusion.value.end_time
         exclusion_options {
           scope             = maintenance_exclusion.value.exclusion_scope
@@ -359,7 +371,7 @@ resource "google_container_cluster" "gke_cluster" {
   }
 
   node_config {
-    machine_type = var.enable_confidential_nodes ? var.system_node_pool_machine_type : "e2-medium"
+    machine_type = local.system_node_pool_machine_type
     shielded_instance_config {
       enable_secure_boot          = var.system_node_pool_enable_secure_boot
       enable_integrity_monitoring = true
@@ -406,8 +418,8 @@ resource "google_container_cluster" "gke_cluster" {
       error_message = "FQDN Network Policy requires GKE Dataplane V2 to be enabled."
     }
     precondition {
-      condition     = !var.enable_confidential_nodes || !var.system_node_pool_enabled || can(regex("^(n2d-|c2d-|c3d?-|t2d-|g4-)", var.system_node_pool_machine_type))
-      error_message = "The system_node_pool_machine_type must be a confidential-compatible machine type (e.g., n2d, c2d, c3d, c3, t2d, g4) when enable_confidential_nodes is true and system_node_pool_enabled is true."
+      condition     = !var.enable_confidential_nodes || can(regex("^(n2d-|c2d-|c3d?-|t2d-|g4-)", local.system_node_pool_machine_type))
+      error_message = "The system_node_pool_machine_type must be a confidential-compatible machine type (e.g., n2d, c2d, c3d, c3, t2d, g4) when enable_confidential_nodes is true."
     }
   }
 
@@ -467,7 +479,7 @@ resource "google_container_node_pool" "system_node_pools" {
     resource_labels             = local.labels
     service_account             = var.service_account_email
     oauth_scopes                = var.service_account_scopes
-    machine_type                = var.system_node_pool_machine_type
+    machine_type                = local.system_node_pool_machine_type
     disk_size_gb                = var.system_node_pool_disk_size_gb
     disk_type                   = var.system_node_pool_disk_type
     enable_confidential_storage = var.enable_confidential_storage

@@ -225,6 +225,27 @@ func (m *MockMachineTypeClient) GetMachineType(project, zone, machineType string
 	return nil, fmt.Errorf("mock not configured")
 }
 
+func injectDefaultMocksForShorthand(mockResponses map[string][]shell.CommandResult) {
+	if _, ok := mockResponses["kubectl get resourceflavors.kueue.x-k8s.io"]; !ok {
+		mockResponses["kubectl get resourceflavors.kueue.x-k8s.io"] = []shell.CommandResult{
+			{ExitCode: 0, Stdout: ""},
+			{ExitCode: 0, Stdout: ""},
+		}
+	}
+	if _, ok := mockResponses["kubectl get nodes -o jsonpath"]; !ok {
+		mockResponses["kubectl get nodes -o jsonpath"] = []shell.CommandResult{
+			{ExitCode: 0, Stdout: "16x16\n"},
+			{ExitCode: 0, Stdout: "16x16\n"},
+		}
+	}
+	if _, ok := mockResponses["kubectl get topologies.kueue.x-k8s.io -o json"]; !ok {
+		mockResponses["kubectl get topologies.kueue.x-k8s.io -o json"] = []shell.CommandResult{
+			{ExitCode: 0, Stdout: `{"items":[{"spec":{"levels":[{"nodeLabel":"cloud.google.com/gke-tpu-slice-4x8-id"}]}}]}`},
+			{ExitCode: 0, Stdout: `{"items":[{"spec":{"levels":[{"nodeLabel":"cloud.google.com/gke-tpu-slice-4x8-id"}]}}]}`},
+		}
+	}
+}
+
 func TestResolveAcceleratorShorthand(t *testing.T) {
 	setupMockMachineConfig(t)
 
@@ -338,12 +359,7 @@ func TestResolveAcceleratorShorthand(t *testing.T) {
 				mockResponses = make(map[string][]shell.CommandResult)
 			}
 			// Add default mocks for topology discovery if not provided
-			if _, ok := mockResponses["kubectl get resourceflavors"]; !ok {
-				mockResponses["kubectl get resourceflavors"] = []shell.CommandResult{{ExitCode: 0, Stdout: ""}}
-			}
-			if _, ok := mockResponses["kubectl get nodes -o jsonpath"]; !ok {
-				mockResponses["kubectl get nodes -o jsonpath"] = []shell.CommandResult{{ExitCode: 0, Stdout: "16x16\n"}}
-			}
+			injectDefaultMocksForShorthand(mockResponses)
 
 			mockExecutor := NewMockExecutor(mockResponses)
 			orc := newTestGKEOrchestrator(mockExecutor)
@@ -439,7 +455,7 @@ func TestVerifyStaticSlicingActive(t *testing.T) {
 			requestedTopo: "2x2",
 			mockResponses: map[string][]shell.CommandResult{
 				"kubectl get topologies.kueue.x-k8s.io -o json": {
-					{ExitCode: 0, Stdout: `{"items":[{"metadata":{"name":"tpu-topology"}}]}`},
+					{ExitCode: 0, Stdout: `{"items":[{"metadata":{"name":"tpu-topology"},"spec":{"levels":[{"nodeLabel":"cloud.google.com/gke-tpu-slice-2x2-id"}]}}]}`},
 				},
 				"kubectl get resourceflavors.kueue.x-k8s.io -o jsonpath={range .items[*]}{.spec.nodeLabels.cloud\\.google\\.com/gke-tpu-topology}{\"\\n\"}{end} -l cloud.google.com/gke-tpu-accelerator=tpu-v6e-slice": {
 					{ExitCode: 0, Stdout: "4x4\n"},
@@ -454,7 +470,7 @@ func TestVerifyStaticSlicingActive(t *testing.T) {
 			requestedTopo: "4x4",
 			mockResponses: map[string][]shell.CommandResult{
 				"kubectl get topologies.kueue.x-k8s.io -o json": {
-					{ExitCode: 0, Stdout: `{"items":[{"metadata":{"name":"tpu-topology"}}]}`},
+					{ExitCode: 0, Stdout: `{"items":[{"metadata":{"name":"tpu-topology"},"spec":{"levels":[{"nodeLabel":"cloud.google.com/gke-tpu-slice-4x4-id"}]}}]}`},
 				},
 				"kubectl get resourceflavors.kueue.x-k8s.io -o jsonpath={range .items[*]}{.spec.nodeLabels.cloud\\.google\\.com/gke-tpu-topology}{\"\\n\"}{end} -l cloud.google.com/gke-tpu-accelerator=tpu-v6e-slice": {
 					{ExitCode: 0, Stdout: "4x4\n"},
@@ -468,7 +484,7 @@ func TestVerifyStaticSlicingActive(t *testing.T) {
 			requestedTopo: "8x8",
 			mockResponses: map[string][]shell.CommandResult{
 				"kubectl get topologies.kueue.x-k8s.io -o json": {
-					{ExitCode: 0, Stdout: `{"items":[{"metadata":{"name":"tpu-topology"}}]}`},
+					{ExitCode: 0, Stdout: `{"items":[{"metadata":{"name":"tpu-topology"},"spec":{"levels":[{"nodeLabel":"cloud.google.com/gke-tpu-slice-4x4-id"}]}}]}`},
 				},
 				"kubectl get resourceflavors.kueue.x-k8s.io -o jsonpath={range .items[*]}{.spec.nodeLabels.cloud\\.google\\.com/gke-tpu-topology}{\"\\n\"}{end} -l cloud.google.com/gke-tpu-accelerator=tpu-v6e-slice": {
 					{ExitCode: 0, Stdout: "4x4\n"},
@@ -482,7 +498,7 @@ func TestVerifyStaticSlicingActive(t *testing.T) {
 			requestedTopo: "2x2",
 			mockResponses: map[string][]shell.CommandResult{
 				"kubectl get topologies.kueue.x-k8s.io -o json": {
-					{ExitCode: 0, Stdout: `{"items":[{"metadata":{"name":"tpu-topology"}}]}`},
+					{ExitCode: 0, Stdout: `{"items":[{"metadata":{"name":"tpu-topology"},"spec":{"levels":[{"nodeLabel":"cloud.google.com/gke-tpu-slice-2x2-id"}]}}]}`},
 				},
 				"kubectl get resourceflavors.kueue.x-k8s.io -o jsonpath={range .items[*]}{.spec.nodeLabels.cloud\\.google\\.com/gke-tpu-topology}{\"\\n\"}{end} -l cloud.google.com/gke-tpu-accelerator=tpu-v6e-slice": {
 					{ExitCode: 0, Stdout: ""},
@@ -583,7 +599,13 @@ func TestResolveHardwareRequirements_NAPIncompatibilities(t *testing.T) {
 			machineType:        "v6e-standard-8t",
 			topology:           "2x4",
 			mockResponses: map[string][]shell.CommandResult{
-				"kubectl get topologies.kueue.x-k8s.io": {{ExitCode: 0, Stdout: `{"items": [{"metadata":{"name":"tpu-v6e-slice"},"spec":{"topologies":["4x8"]}}]}`}},
+				"kubectl get topologies.kueue.x-k8s.io": {
+					{ExitCode: 0, Stdout: `{"items": [{"metadata":{"name":"tpu-v6e-slice"},"spec":{"levels":[{"nodeLabel":"cloud.google.com/gke-tpu-slice-2x4-id"}]}}]}`},
+					{ExitCode: 0, Stdout: `{"items": [{"metadata":{"name":"tpu-v6e-slice"},"spec":{"levels":[{"nodeLabel":"cloud.google.com/gke-tpu-slice-2x4-id"}]}}]}`},
+					{ExitCode: 0, Stdout: `{"items": [{"metadata":{"name":"tpu-v6e-slice"},"spec":{"levels":[{"nodeLabel":"cloud.google.com/gke-tpu-slice-2x4-id"}]}}]}`},
+				},
+				"kubectl get resourceflavors": {{ExitCode: 0, Stdout: ""}},
+				"kubectl get nodes":           {{ExitCode: 0, Stdout: "4x8\n"}},
 			},
 			wantErr:          true,
 			expectedErrMatch: "TPU Static Sub-slicing is not supported on GKE Node Auto-Provisioning (NAP) workloads",
@@ -784,6 +806,46 @@ func TestValidateConsumptionForStaticCluster(t *testing.T) {
 			wantErr:     true,
 			expectedErr: "unknown accelerator label: \"unknown-gpu\"",
 		},
+		{
+			name:       "NAP Cluster - TPU: Specific limit configured, requesting different TPU (Should Fail)",
+			napEnabled: true,
+			napLimits: map[string]int64{
+				"tpu-v6e-slice":  8,
+				"google.com/tpu": 8,
+			},
+			job: orchestrator.JobDefinition{
+				MachineType:        "ct5lp-hightpu-4t", // TPU v5e (tpu-v5-lite-podslice)
+				GKENAPProvisioning: "spot",
+			},
+			wantErr:     true,
+			expectedErr: "is not configured within your cluster's Node Auto-Provisioning (NAP) limits",
+		},
+		{
+			name:       "NAP Cluster - GPU: Specific limit configured, requesting different GPU (Should Fail)",
+			napEnabled: true,
+			napLimits: map[string]int64{
+				"nvidia-h100-mega-80gb": 8,
+				"nvidia.com/gpu":        8,
+			},
+			job: orchestrator.JobDefinition{
+				MachineType:        "g2-standard-12", // L4 GPU (nvidia-l4)
+				GKENAPProvisioning: "spot",
+			},
+			wantErr:     true,
+			expectedErr: "is not configured within your cluster's Node Auto-Provisioning (NAP) limits",
+		},
+		{
+			name:       "NAP Cluster - GPU: Generic limit only, requesting GPU (Should Pass)",
+			napEnabled: true,
+			napLimits: map[string]int64{
+				"nvidia.com/gpu": 8,
+			},
+			job: orchestrator.JobDefinition{
+				MachineType:        "g2-standard-12",
+				GKENAPProvisioning: "spot",
+			},
+			wantErr: false,
+		},
 	}
 
 	for _, tt := range tests {
@@ -807,6 +869,19 @@ func TestValidateConsumptionForStaticCluster(t *testing.T) {
 						{
 							Count: 1,
 							Type:  "unknown-gpu",
+						},
+					},
+				},
+				"g2-standard-12:": {
+					GuestCpus: 12,
+					MemoryMb:  48000,
+					Accelerators: []struct {
+						Count int    `json:"guestAcceleratorCount"`
+						Type  string `json:"guestAcceleratorType"`
+					}{
+						{
+							Count: 1,
+							Type:  "nvidia-l4",
 						},
 					},
 				},

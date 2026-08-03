@@ -5,7 +5,10 @@ metadata:
   labels:
     gcluster.google.com/workload: {{.WorkloadName}}
     kueue.x-k8s.io/queue-name: {{.KueueQueueName}}
+  annotations:
+    jobset.sigs.k8s.io/hack: "true"
 spec:
+  suspend: false
   ttlSecondsAfterFinished: {{.TtlSecondsAfterFinished}}
   network:
     enableDNSHostnames: true
@@ -22,7 +25,7 @@ spec:
 {{- end }}
   failurePolicy:
     maxRestarts: {{.MaxRestarts}}
-    restartStrategy: Recreate
+    restartStrategy: BlockingRecreate
     rules:
       - action: FailJobSet
         onJobFailureReasons:
@@ -41,12 +44,13 @@ spec:
         backoffLimit: 0
 {{- if .PodFailurePolicy }}
         podFailurePolicy:
-{{.PodFailurePolicy}}
+{{(StructuralData .PodFailurePolicy)}}
 {{- end }}
         template:
           metadata:
-{{- if .GCSFuseEnabled }}
             annotations:
+              kueue.x-k8s.io/safe-to-forcefully-delete: "true"
+{{- if .GCSFuseEnabled }}
               gke-gcsfuse/volumes: "true"
 {{- end }}
           spec:
@@ -63,7 +67,7 @@ spec:
 {{- end }}
 {{- if .ImagePullSecrets }}
             imagePullSecrets:
-{{.ImagePullSecrets}}
+{{(StructuralData .ImagePullSecrets)}}
 {{- end }}
 {{- if not .Pathways.Headless}}
             initContainers:
@@ -72,12 +76,13 @@ spec:
 {{- end }}
             - name: pathways-proxy
               image: {{.Pathways.ProxyServerImage}}
+              imagePullPolicy: Always
               ports:
               - containerPort: 29000
               args:
               - --server_port=29000
               - --resource_manager_address=$(PATHWAYS_HEAD):29001
-              - --gcs_scratch_location={{.Pathways.GCSLocation}}
+              - "--gcs_scratch_location={{.Pathways.GCSLocation}}"
               {{- if gt .Pathways.ElasticSlices 0}}
               - --num_elastic_slices={{.Pathways.ElasticSlices}}
               {{- end}}
@@ -104,15 +109,16 @@ spec:
                   memory: "100Gi"
             - name: pathways-rm
               image: {{.Pathways.ServerImage}}
+              imagePullPolicy: Always
               ports:
               - containerPort: 29001
               - containerPort: 29002
               args:
               - --server_port=29001
-              - --gcs_scratch_location={{.Pathways.GCSLocation}}
+              - "--gcs_scratch_location={{.Pathways.GCSLocation}}"
               - --node_type=resource_manager
               - --instance_count={{.NumSlices}}
-              - --instance_type={{.PathwaysInstanceType}}
+              - "--instance_type={{.PathwaysInstanceType}}"
               {{- range .ServerArgsList }}
               - {{.}}
               {{- end }}
@@ -148,6 +154,7 @@ spec:
             containers:
             - name: workload-container
               image: {{.FullImageName}}
+              imagePullPolicy: Always
               securityContext:
                 privileged: true
               resources:
@@ -193,18 +200,23 @@ spec:
                 wait $PID
                 EXIT_CODE=$?
                 echo "GCluster End: $(date)"
+                echo "Exit code: $EXIT_CODE"
                 exit $EXIT_CODE
-{{- if .VolumeMountsYAML }}
               volumeMounts:
-{{.VolumeMountsYAML}}
+              - name: shared-tmp
+                mountPath: /tmp
+{{- if .VolumeMountsYAML }}
+{{(StructuralData .VolumeMountsYAML)}}
 {{- end }}
             {{- end}}
-            {{- if .Pathways.ColocatedPythonSidecarImage}}
-            - name: python-sidecar
-              image: {{.Pathways.ColocatedPythonSidecarImage}}
-            {{- end}}
             volumes:
-{{.VolumesYAML}}
+            - name: shared-tmp
+              hostPath:
+                path: /tmp
+                type: DirectoryOrCreate
+{{- if .VolumesYAML }}
+{{(StructuralData .VolumesYAML)}}
+{{- end }}
   - name: worker
     replicas: {{.NumSlices}}
     template:
@@ -216,22 +228,25 @@ spec:
         parallelism: {{.NodesPerSlice}}
         completions: {{.NodesPerSlice}}
         backoffLimit: {{.WorkerBackoffLimit}}
+        backoffLimitPerIndex: 4000
+        podReplacementPolicy: Failed
+        maxFailedIndexes: 0
 {{- if .PodFailurePolicy }}
         podFailurePolicy:
-{{.PodFailurePolicy}}
+{{(StructuralData .PodFailurePolicy)}}
 {{- end }}
         template:
           metadata:
             labels:
               gcluster.google.com/workload: {{.WorkloadName}}
-{{- if or .TopologyAnnotation .GCSFuseEnabled }}
             annotations:
+                kueue.x-k8s.io/safe-to-forcefully-delete: "true"
+                cloud.google.com/skip-tpu-webhook-check: "true"
 {{- if .TopologyAnnotation }}
-{{.TopologyAnnotation}}
+{{(StructuralData .TopologyAnnotation)}}
 {{- end }}
 {{- if .GCSFuseEnabled }}
-              gke-gcsfuse/volumes: "true"
-{{- end }}
+                gke-gcsfuse/volumes: "true"
 {{- end }}
           spec:
             hostNetwork: true
@@ -242,15 +257,45 @@ spec:
 {{- end }}
 {{- if .ImagePullSecrets }}
             imagePullSecrets:
-{{.ImagePullSecrets}}
+{{(StructuralData .ImagePullSecrets)}}
 {{- end }}
 {{- if .PriorityClassName }}
             priorityClassName: {{.PriorityClassName}}
 {{- end }}
             terminationGracePeriodSeconds: {{.TerminationGracePeriodSeconds}}
+            {{- if .Pathways.ColocatedPythonSidecarImage}}
+            initContainers:
+            - name: colocated-python-sidecar
+              image: {{.Pathways.ColocatedPythonSidecarImage}}
+              imagePullPolicy: Always
+              restartPolicy: Always
+              ports:
+              - containerPort: 50051
+                protocol: TCP
+              resources: {}
+              env:
+              - name: TCMALLOC_RELEASE_RATE
+                value: "10"
+              - name: GRPC_SERVER_ADDRESS
+                value: '0.0.0.0:50051'
+              - name: CLOUD_PATHWAYS_SIDECAR_SHM_DIRECTORY
+                value: /tmp/sidecar
+              - name: PYTHONUNBUFFERED
+                value: "1"
+              volumeMounts:
+              - name: shared-tmp
+                mountPath: /tmp
+              {{- if .Pathways.MTCEnabled}}
+              - name: cache
+                mountPath: {{.Pathways.RamdiskDirectory}}
+              - name: sidecar-shared-memory
+                mountPath: /tmp/sidecar
+              {{- end}}
+            {{- end}}
             containers:
             - name: pathways-worker
               image: {{.Pathways.WorkerImage}}
+              imagePullPolicy: Always
               ports:
               - containerPort: 29005
               - containerPort: 29006
@@ -259,7 +304,10 @@ spec:
               args:
                 - --server_port=29005
                 - --resource_manager_address=$(PATHWAYS_HEAD):29001
-                - --gcs_scratch_location={{.Pathways.GCSLocation}}
+                - "--gcs_scratch_location={{.Pathways.GCSLocation}}"
+                {{- if .Pathways.MTCEnabled}}
+                - --cloud_pathways_sidecar_shm_directory=/tmp/sidecar
+                {{- end}}
                 {{- range .WorkerArgsList }}
                 - {{.}}
                 {{- end }}
@@ -304,18 +352,44 @@ spec:
               - name: {{ .Name }}
                 value: {{ printf "%q" .Value }}
               {{- end }}
-{{.ResourcesString}}
+{{(StructuralData .ResourcesString)}}
+              volumeMounts:
+              - name: shared-tmp
+                mountPath: /tmp
+              {{- if .Pathways.MTCEnabled}}
+              - name: cache
+                mountPath: {{.Pathways.RamdiskDirectory}}
+              - name: sidecar-shared-memory
+                mountPath: /tmp/sidecar
+              {{- end}}
+{{- if .VolumeMountsYAML }}
+{{(StructuralData .VolumeMountsYAML)}}
+{{- end }}
             volumes:
-{{.VolumesYAML}}
+            - name: shared-tmp
+              hostPath:
+                path: /tmp
+                type: DirectoryOrCreate
+            {{- if .Pathways.MTCEnabled}}
+            - name: cache
+              csi:
+                driver: multitier-checkpoint.csi.storage.gke.io
+            - name: sidecar-shared-memory
+              emptyDir:
+                medium: Memory
+            {{- end}}
+{{- if .VolumesYAML }}
+{{(StructuralData .VolumesYAML)}}
+{{- end }}
 {{- if .NodeSelector }}
             nodeSelector:
-{{.NodeSelector}}
+{{(StructuralData .NodeSelector)}}
 {{- end }}
 {{- if .Affinity }}
             affinity:
-{{.Affinity}}
+{{(StructuralData .Affinity)}}
 {{- end }}
 {{- if .Tolerations }}
             tolerations:
-{{.Tolerations}}
+{{(StructuralData .Tolerations)}}
 {{- end }}

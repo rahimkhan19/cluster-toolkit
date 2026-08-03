@@ -28,12 +28,16 @@ terraform {
       source  = "hashicorp/kubernetes"
       version = ">= 2.36"
     }
+    time = {
+      source  = "hashicorp/time"
+      version = "~> 0.13"
+    }
   }
   provider_meta "google" {
-    module_name = "blueprints/terraform/hpc-toolkit:gke-cluster/v1.96.0"
+    module_name = "blueprints/terraform/hpc-toolkit:gke-cluster/v1.98.0"
   }
 
   provider_meta "google-beta" {
-    module_name = "blueprints/terraform/hpc-toolkit:gke-cluster/v1.96.0"
+    module_name = "blueprints/terraform/hpc-toolkit:gke-cluster/v1.98.0"
   }
 }

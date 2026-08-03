@@ -79,6 +79,12 @@ variable "slurm_backup_controller_ip" {
   default     = null
 }
 
+variable "enable_controller_load_balancer" {
+  type        = bool
+  description = "Whether an Internal Load Balancer is configured in front of the controllers."
+  default     = false
+}
+
 variable "accounting_storage_backup_host" {
   type        = string
   description = "The backup accounting storage host."
@@ -333,11 +339,13 @@ Storage to mounted on all instances.
 - mount_options : Options to mount with.
 EOD
   type = list(object({
-    server_ip     = string
-    remote_mount  = string
-    local_mount   = string
-    fs_type       = string
-    mount_options = string
+    server_ip               = string
+    remote_mount            = string
+    local_mount             = string
+    local_mount_owner       = optional(string)
+    local_mount_permissions = optional(string)
+    fs_type                 = string
+    mount_options           = string
   }))
   default = []
 }
@@ -380,6 +388,27 @@ variable "cloud_parameters" {
   })
   default  = {}
   nullable = false
+}
+
+variable "experimental" {
+  description = "Experimental Slurm settings. These features are subject to change and may be modified in future releases."
+  type = object({
+    enable_async_reply = optional(bool, false)
+  })
+  default  = {}
+  nullable = false
+}
+
+variable "enable_expedited_requeue" {
+  description = "Enables Expedited Requeue, which automatically requeues eligible jobs and grants them the highest priority upon node failure. (Usage: sbatch --requeue=expedite)"
+  type        = bool
+  default     = true
+}
+
+variable "enable_health_check_start_only" {
+  description = "Adjusts the Slurm HealthCheckNodeState behavior to run health checks solely upon node initialization. This prevents continuous health check polling."
+  type        = bool
+  default     = false
 }
 
 ##########
