@@ -214,10 +214,10 @@ steps:
                   --extra-vars="region=\$$REGION zone=\$$ZONE" \
                   --extra-vars="enable_spot=\$$ENABLE_SPOT" \
                   --extra-vars="@\$$GKE_VARS_FILE" \
-                  --extra-vars="triage_gcs_bucket_override=\$$TRIAGE_GCS_BUCKET" \
-                  --extra-vars="triage_project_number_override=\$$TRIAGE_PROJECT_NUMBER" \
-                  --extra-vars="triage_invoker_sa_override=\$$TRIAGE_INVOKER_SA" \
-                  --extra-vars="triage_cloud_run_url_override=\$$TRIAGE_CLOUD_RUN_URL" &
+                  --extra-vars="triage_gcs_bucket_override=$$TRIAGE_GCS_BUCKET" \
+                  --extra-vars="triage_project_number_override=$$TRIAGE_PROJECT_NUMBER" \
+                  --extra-vars="triage_invoker_sa_override=$$TRIAGE_INVOKER_SA" \
+                  --extra-vars="triage_cloud_run_url_override=$$TRIAGE_CLOUD_RUN_URL" &
               ANSIBLE_PID=\$$!
 
               wait \$$ANSIBLE_PID

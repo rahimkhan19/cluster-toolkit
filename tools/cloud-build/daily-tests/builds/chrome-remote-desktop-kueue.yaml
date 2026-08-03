@@ -156,10 +156,10 @@ steps:
               ansible-playbook tools/cloud-build/daily-tests/ansible_playbooks/base-integration-test.yml \
                 --user=sa_108481972033535374787 --extra-vars="project=$PROJECT_ID build=$$BUILD_ID_SHORT full_build_id=$BUILD_ID os=default" \
                 --extra-vars="@tools/cloud-build/daily-tests/tests/chrome-remote-desktop.yml" \
-                --extra-vars="triage_gcs_bucket_override=\$$TRIAGE_GCS_BUCKET" \
-                --extra-vars="triage_project_number_override=\$$TRIAGE_PROJECT_NUMBER" \
-                --extra-vars="triage_invoker_sa_override=\$$TRIAGE_INVOKER_SA" \
-                --extra-vars="triage_cloud_run_url_override=\$$TRIAGE_CLOUD_RUN_URL" &
+                --extra-vars="triage_gcs_bucket_override=$$TRIAGE_GCS_BUCKET" \
+                --extra-vars="triage_project_number_override=$$TRIAGE_PROJECT_NUMBER" \
+                --extra-vars="triage_invoker_sa_override=$$TRIAGE_INVOKER_SA" \
+                --extra-vars="triage_cloud_run_url_override=$$TRIAGE_CLOUD_RUN_URL" &
               ANSIBLE_PID=\$$!
 
               wait \$$ANSIBLE_PID
