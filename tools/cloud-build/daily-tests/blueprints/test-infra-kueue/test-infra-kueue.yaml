@@ -66,6 +66,9 @@ deployment_groups:
       - container.admin
       - iam.serviceAccountAdmin
       - iam.serviceAccountTokenCreator
+      - secretmanager.admin
+      - cloudkms.cryptoKeyEncrypterDecrypter
+      - iap.tunnelResourceAccessor
 
   - id: node_pool_sa
     source: modules/project/service-account
