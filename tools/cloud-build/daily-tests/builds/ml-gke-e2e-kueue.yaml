@@ -163,7 +163,7 @@ steps:
               bash tools/add_ttl_label.sh \$$SG_EXAMPLE
 
               ansible-playbook tools/cloud-build/daily-tests/ansible_playbooks/base-integration-test.yml \
-                --user=sa_108481972033535374787 --extra-vars="project=$PROJECT_ID build=$$BUILD_ID_SHORT full_build_id=$$BUILD_ID" \
+                --user=sa_108481972033535374787 --extra-vars="project=$PROJECT_ID build=$$BUILD_ID_SHORT full_build_id=$BUILD_ID" \
                 --extra-vars="@tools/cloud-build/daily-tests/tests/ml-gke-e2e.yml" &
               ANSIBLE_PID=\$$!
 

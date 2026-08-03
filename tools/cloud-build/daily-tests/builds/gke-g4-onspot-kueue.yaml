@@ -209,7 +209,7 @@ steps:
               ansible-playbook tools/cloud-build/daily-tests/ansible_playbooks/base-integration-test.yml \
                 --extra-vars="test_prefix=${_TEST_PREFIX}" \
                   --user=sa_108481972033535374787 \
-                  --extra-vars="project=\$$PROJECT_ID build=$$BUILD_ID_SHORT full_build_id=$$BUILD_ID_FULL" \
+                  --extra-vars="project=\$$PROJECT_ID build=$$BUILD_ID_SHORT full_build_id=$BUILD_ID_FULL" \
                   --extra-vars="region=\$$REGION zone=\$$ZONE" \
                   --extra-vars="enable_spot=\$$ENABLE_SPOT" \
                   --extra-vars="@\$$GKE_VARS_FILE" \
