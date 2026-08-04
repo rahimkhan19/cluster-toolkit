@@ -114,6 +114,7 @@ steps:
             args:
             - |
               set -x -e
+              echo "\"test_file_path\": tools/cloud-build/daily-tests/builds/batch-mpi-kueue.yaml"
               cd /workspace
               
               DEPLOYMENT_NAME="batch-mpi-$$BUILD_ID_SHORT"

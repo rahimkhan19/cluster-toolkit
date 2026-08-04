@@ -116,6 +116,7 @@ steps:
             args:
             - |
               set -x -e
+              echo "\"test_file_path\": tools/cloud-build/daily-tests/builds/slurm-gke-kueue.yaml"
               cd /workspace
               
               DEPLOYMENT_NAME="slurm$$BUILD_ID_3CHAR"

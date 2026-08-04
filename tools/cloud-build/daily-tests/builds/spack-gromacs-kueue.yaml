@@ -112,6 +112,7 @@ steps:
             args:
             - |
               set -x -e
+              echo "\"test_file_path\": tools/cloud-build/daily-tests/builds/spack-gromacs-kueue.yaml"
               cd /workspace
               
               DEPLOYMENT_NAME="groma-$$BUILD_ID_SHORT"

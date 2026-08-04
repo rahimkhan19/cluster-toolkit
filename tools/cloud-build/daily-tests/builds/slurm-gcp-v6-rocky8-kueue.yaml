@@ -111,6 +111,7 @@ steps:
             args:
             - |
               set -x -e
+              echo "\"test_file_path\": tools/cloud-build/daily-tests/builds/slurm-gcp-v6-rocky8-kueue.yaml"
               cd /workspace
               
               DEPLOYMENT_NAME="rock-8-$$BUILD_ID_SHORT"

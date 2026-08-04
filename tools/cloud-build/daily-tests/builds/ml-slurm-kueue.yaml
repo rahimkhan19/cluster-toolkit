@@ -112,6 +112,7 @@ steps:
             args:
             - |
               set -x -e
+              echo "\"test_file_path\": tools/cloud-build/daily-tests/builds/ml-slurm-kueue.yaml"
               cd /workspace
               
               BUILD_ID_SHORT=\$$(echo "$$BUILD_ID" | cut -c1-6)

@@ -120,6 +120,7 @@ steps:
             args:
             - |
               set -x -e
+              echo "\"test_file_path\": tools/cloud-build/daily-tests/builds/gke-a4-onspot-kueue.yaml"
               cd /workspace
               
               DEPLOYMENT_NAME="gke-a4-spot-$$BUILD_ID_SHORT"

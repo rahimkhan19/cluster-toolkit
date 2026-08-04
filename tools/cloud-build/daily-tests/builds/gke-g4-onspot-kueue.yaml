@@ -132,6 +132,7 @@ steps:
                 exit 1
               fi
               set -x -e
+              echo "\"test_file_path\": tools/cloud-build/daily-tests/builds/gke-g4-onspot-kueue.yaml"
               cd /workspace
               
               BUILD_ID_FULL=$$BUILD_ID

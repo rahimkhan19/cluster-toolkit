@@ -110,6 +110,7 @@ steps:
             args:
             - |
               set -x -e
+              echo "\"test_file_path\": tools/cloud-build/daily-tests/builds/slurm-gcp-v6-debian-kueue.yaml"
               cd /workspace
               
               DEPLOYMENT_NAME="debi-v6-$$BUILD_ID_SHORT"

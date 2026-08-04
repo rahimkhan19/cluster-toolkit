@@ -93,6 +93,7 @@ steps:
             args:
             - |
               set -x -e
+              echo "\"test_file_path\": tools/cloud-build/daily-tests/builds/gcluster-dockerfile-kueue.yaml"
               cd /workspace
               
               RUN_CLEANUP=true

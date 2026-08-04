@@ -109,6 +109,7 @@ steps:
             args:
             - |
               set -x -e
+              echo "\"test_file_path\": tools/cloud-build/daily-tests/builds/hpc-build-slurm-image-kueue.yaml"
               cd /workspace
               
               DEPLOYMENT_NAME="build-slurm-$$BUILD_ID_SHORT"

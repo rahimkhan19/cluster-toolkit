@@ -129,6 +129,7 @@ steps:
             args:
             - |
               set -x -e
+              echo "\"test_file_path\": tools/cloud-build/daily-tests/builds/gke-tpu-v6e-kueue.yaml"
               cd /workspace
               
               DEPLOYMENT_NAME="gke-tpu-v6e-$$BUILD_ID_SHORT"

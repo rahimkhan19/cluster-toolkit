@@ -121,6 +121,7 @@ steps:
             args:
             - |
               set -e -u -o pipefail
+              echo "\"test_file_path\": tools/cloud-build/daily-tests/builds/gke-a3-ultragpu-onspot-kueue.yaml"
               echo "Sourcing find_available_zone.sh to determine zone."
               source /workspace/tools/cloud-build/wait_for_available_zone.sh
               if [ -z "\$${ZONE:-}" ]; then
@@ -128,6 +129,7 @@ steps:
                 exit 1
               fi
               set -x
+              echo "\"test_file_path\": tools/cloud-build/daily-tests/builds/gke-a3-ultragpu-onspot-kueue.yaml"
               cd /workspace
               
               DEPLOYMENT_NAME="gke-a3u-spot-$$BUILD_ID_SHORT"
@@ -274,6 +276,7 @@ steps:
       wait $$MONITOR_PID
       EXIT_CODE=$$?
       set -e
+      echo "\"test_file_path\": tools/cloud-build/daily-tests/builds/gke-a3-ultragpu-onspot-kueue.yaml"
       
       if [ $$EXIT_CODE -eq 0 ]; then
         echo "Job succeeded!"

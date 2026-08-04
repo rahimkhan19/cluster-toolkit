@@ -93,6 +93,7 @@ steps:
             args:
             - |
               set -x -e
+              echo "\"test_file_path\": tools/cloud-build/daily-tests/builds/slurm-gcp-v6-reconfig-size-kueue.yaml"
               cd /workspace
               
               DEPLOYMENT_NAME="$$BUILD_ID_SHORT-slurm-reconfig"

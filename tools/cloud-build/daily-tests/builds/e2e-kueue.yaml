@@ -91,6 +91,7 @@ steps:
             args:
             - |
               set -x -e
+              echo "\"test_file_path\": tools/cloud-build/daily-tests/builds/e2e-kueue.yaml"
               cd /workspace
               
               DEPLOYMENT_NAME="e2e-$$BUILD_ID_SHORT"

@@ -128,6 +128,7 @@ steps:
             args:
             - |
               set -x -e
+              echo "\"test_file_path\": tools/cloud-build/daily-tests/builds/gke-a2-highgpu-kueue-onspot-kueue.yaml"
               cd /workspace
               
               DEPLOYMENT_NAME="gke-a2h-spot-$$BUILD_ID_SHORT"

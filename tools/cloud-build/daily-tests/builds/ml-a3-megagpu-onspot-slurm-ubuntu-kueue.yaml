@@ -134,6 +134,7 @@ steps:
             args:
             - |
               set -x -e
+              echo "\"test_file_path\": tools/cloud-build/daily-tests/builds/ml-a3-megagpu-onspot-slurm-ubuntu-kueue.yaml"
               cd /workspace
               
               DEPLOYMENT_NAME="a3m-onspot-slurm-$$BUILD_ID_SHORT"

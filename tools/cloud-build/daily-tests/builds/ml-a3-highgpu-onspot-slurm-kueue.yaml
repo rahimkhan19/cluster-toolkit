@@ -133,6 +133,7 @@ steps:
             args:
             - |
               set -x -e -u -o pipefail
+              echo "\"test_file_path\": tools/cloud-build/daily-tests/builds/ml-a3-highgpu-onspot-slurm-kueue.yaml"
               cd /workspace
               
               DEPLOYMENT_NAME="a3h-onspot-$$BUILD_ID_SHORT"

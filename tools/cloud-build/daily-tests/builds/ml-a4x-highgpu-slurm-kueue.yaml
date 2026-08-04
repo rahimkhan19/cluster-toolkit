@@ -116,6 +116,7 @@ steps:
             args:
             - |
               set -x -e
+              echo "\"test_file_path\": tools/cloud-build/daily-tests/builds/ml-a4x-highgpu-slurm-kueue.yaml"
               cd /workspace
               
               DEPLOYMENT_NAME="a4x-$$BUILD_ID_SHORT"

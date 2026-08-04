@@ -104,6 +104,7 @@ steps:
             args:
             - |
               set -x -e
+              echo "\"test_file_path\": tools/cloud-build/daily-tests/builds/gke-a4x-kueue.yaml"
               cd /workspace
               
               DEPLOYMENT_NAME="gke-a4x-$$BUILD_ID_SHORT"

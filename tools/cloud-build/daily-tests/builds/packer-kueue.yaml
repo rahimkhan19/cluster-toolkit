@@ -110,6 +110,7 @@ steps:
             args:
             - |
               set -x -e
+              echo "\"test_file_path\": tools/cloud-build/daily-tests/builds/packer-kueue.yaml"
               cd /workspace
               
               DEPLOYMENT_NAME="pkrv6$$BUILD_ID_SHORT"

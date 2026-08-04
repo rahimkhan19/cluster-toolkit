@@ -107,6 +107,7 @@ steps:
             args:
             - |
               set -x -e
+              echo "\"test_file_path\": tools/cloud-build/daily-tests/builds/pfs-managed-lustre-vm-kueue.yaml"
               cd /workspace
               
               DEPLOYMENT_NAME="managed-lustre-vm-$$BUILD_ID_SHORT"

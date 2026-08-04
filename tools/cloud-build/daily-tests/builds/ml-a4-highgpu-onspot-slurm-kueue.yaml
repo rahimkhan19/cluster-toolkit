@@ -123,6 +123,7 @@ steps:
             args:
             - |
               set -e -u -o pipefail
+              echo "\"test_file_path\": tools/cloud-build/daily-tests/builds/ml-a4-highgpu-onspot-slurm-kueue.yaml"
               
               DEPLOYMENT_NAME="a4h-onspot-slurm-$$BUILD_ID_SHORT"
               
@@ -172,6 +173,7 @@ steps:
                 exit 1
               fi
               set -x
+              echo "\"test_file_path\": tools/cloud-build/daily-tests/builds/ml-a4-highgpu-onspot-slurm-kueue.yaml"
               cd /workspace
               bash tools/get_binary.sh "${_TEST_PREFIX}"
               REGION="\$${ZONE%-*}"
@@ -259,6 +261,7 @@ steps:
       wait $$MONITOR_PID
       EXIT_CODE=$$?
       set -e
+      echo "\"test_file_path\": tools/cloud-build/daily-tests/builds/ml-a4-highgpu-onspot-slurm-kueue.yaml"
       
       if [ $$EXIT_CODE -eq 0 ]; then
         echo "Job succeeded!"

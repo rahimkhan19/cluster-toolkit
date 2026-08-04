@@ -95,6 +95,7 @@ steps:
             args:
             - |
               set -x -e
+              echo "\"test_file_path\": tools/cloud-build/daily-tests/builds/slurm-flex-kueue.yaml"
               cd /workspace
               
               DEPLOYMENT_NAME="$$BUILD_ID_SHORT-slurm-flex"

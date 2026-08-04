@@ -95,6 +95,7 @@ steps:
             args:
             - |
               set -x -e
+              echo "\"test_file_path\": tools/cloud-build/daily-tests/builds/slurm-gcp-v6-simple-job-completion-kueue.yaml"
               cd /workspace
               
               # The python test derives DEPLOYMENT_NAME automatically using BUILD_ID

@@ -109,6 +109,7 @@ steps:
             args:
             - |
               set -x -e
+              echo "\"test_file_path\": tools/cloud-build/daily-tests/builds/netapp-volumes-kueue.yaml"
               cd /workspace
               
               DEPLOYMENT_NAME="netapp-volumes-$$BUILD_ID_SHORT"

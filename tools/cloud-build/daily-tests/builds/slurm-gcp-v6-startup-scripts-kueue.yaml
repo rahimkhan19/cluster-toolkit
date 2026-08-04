@@ -113,6 +113,7 @@ steps:
             args:
             - |
               set -x -e
+              echo "\"test_file_path\": tools/cloud-build/daily-tests/builds/slurm-gcp-v6-startup-scripts-kueue.yaml"
               cd /workspace
               
               DEPLOYMENT_NAME="ss-v6-$$BUILD_ID_SHORT"

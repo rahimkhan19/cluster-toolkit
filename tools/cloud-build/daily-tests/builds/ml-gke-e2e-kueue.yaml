@@ -99,6 +99,7 @@ steps:
             args:
             - |
               set -x -e
+              echo "\"test_file_path\": tools/cloud-build/daily-tests/builds/ml-gke-e2e-kueue.yaml"
               cd /workspace
               
               DEPLOYMENT_NAME="ml-gke-e2e-$$BUILD_ID_SHORT"

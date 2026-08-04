@@ -120,6 +120,7 @@ steps:
             args:
             - |
               set -x -e
+              echo "\"test_file_path\": tools/cloud-build/daily-tests/builds/hcls-kueue.yaml"
               cd /workspace
               
               DEPLOYMENT_NAME="hcls-v6-$$BUILD_ID_SHORT"

@@ -108,6 +108,7 @@ steps:
             args:
             - |
               set -x -e
+              echo "\"test_file_path\": tools/cloud-build/daily-tests/builds/slurm-gcp-v6-ubuntu-kueue.yaml"
               cd /workspace
               
               DEPLOYMENT_NAME="ubun-v6-$$BUILD_ID_SHORT"
