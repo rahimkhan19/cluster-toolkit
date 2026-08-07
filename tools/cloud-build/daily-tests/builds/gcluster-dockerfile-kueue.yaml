@@ -72,6 +72,7 @@ steps:
     spec:
       suspend: true
       backoffLimit: 0
+      activeDeadlineSeconds: 14400
       template:
         metadata:
           annotations:

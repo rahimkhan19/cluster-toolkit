@@ -85,6 +85,7 @@ steps:
     spec:
       suspend: true # Required for Kueue: the job must be created in suspended state for Kueue to manage it
       backoffLimit: 0
+      activeDeadlineSeconds: 14400
       template:
         metadata:
           annotations:

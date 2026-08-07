@@ -79,6 +79,7 @@ steps:
     spec:
       suspend: true # Required for Kueue
       backoffLimit: 0
+      activeDeadlineSeconds: 14400
       template:
         metadata:
           annotations:
