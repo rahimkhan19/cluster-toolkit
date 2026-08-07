@@ -30,7 +30,7 @@ timeout: 86400s
 queueTtl: 86400s  # 24hr
 
 options:
-  defaultLogsBucketBehavior: REGIONAL_USER_OWNED_BUCKET
+  defaultLogsBucketBehavior: LEGACY_BUCKET_BEHAVIOR
 
 steps:
 # 1. Build and push workspace container containing the current code layer
