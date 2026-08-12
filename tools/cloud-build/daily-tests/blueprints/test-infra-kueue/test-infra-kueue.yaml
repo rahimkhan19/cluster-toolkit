@@ -85,7 +85,7 @@ deployment_groups:
     source: modules/scheduler/gke-cluster
     use: [network1, node_pool_sa]
     settings:
-      system_node_pool_machine_type: e2-standard-2
+      system_node_pool_machine_type: e2-standard-4
       enable_private_endpoint: false
       gcp_public_cidrs_access_enabled: $(vars.gcp_public_cidrs_access_enabled)
       configure_workload_identity_sa: true
@@ -100,7 +100,7 @@ deployment_groups:
     source: modules/compute/gke-node-pool
     use: [gke_cluster, node_pool_sa]
     settings:
-      machine_type: e2-standard-2
+      machine_type: e2-standard-4
       initial_node_count: 1
       autoscaling_total_max_nodes: 100
       autoscaling_total_min_nodes: 1
