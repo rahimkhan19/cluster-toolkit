@@ -19,8 +19,12 @@ echo "🚀 Scheduling $NUM_RUNS test runs ($TRIGGER_COUNT triggers per run) over
 echo "--------------------------------------------------------"
 
 for i in $(seq 1 $NUM_RUNS); do
-  # Generate a random delay between 0 and MAX_DELAY_SECONDS
-  DELAY=$(shuf -i 0-${MAX_DELAY_SECONDS} -n 1)
+  # First run executes immediately, subsequent runs are randomized
+  if [ "$i" -eq 1 ]; then
+    DELAY=0
+  else
+    DELAY=$(shuf -i 1-${MAX_DELAY_SECONDS} -n 1)
+  fi
   
   # Calculate the actual scheduled time for display purposes
   if [[ "$OSTYPE" == "darwin"* ]]; then
