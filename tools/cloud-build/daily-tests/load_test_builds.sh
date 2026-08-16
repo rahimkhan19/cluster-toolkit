@@ -38,8 +38,8 @@ for i in $(seq 1 $NUM_RUNS); do
   # Background process that sleeps and then runs the suite
   (
     sleep $DELAY
-    TIMESTAMP=$(date +%s)
-    TEST_PREFIX="loadtest-${TIMESTAMP}-${i}"
+    # Use "daily-" prefix so that testing exactly mimics the official scheduled runs
+    TEST_PREFIX="daily-"
     
     for trigger in $TRIGGERS; do
       gcloud builds triggers run "$trigger" \
