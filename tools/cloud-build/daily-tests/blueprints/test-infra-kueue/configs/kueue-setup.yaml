@@ -220,6 +220,8 @@ spec:
     - test-locks/spack-gromacs
     - test-locks/gcluster-dockerfile
     - test-locks/gke-managed-lustre
+    - test-locks/z4m
+    - test-locks/z4m-vm
     flavors:
     - name: test-lock-flavor-2
       resources:
@@ -232,6 +234,10 @@ spec:
       - name: test-locks/gcluster-dockerfile
         nominalQuota: 1
       - name: test-locks/gke-managed-lustre
+        nominalQuota: 1
+      - name: test-locks/z4m
+        nominalQuota: 1
+      - name: test-locks/z4m-vm
         nominalQuota: 1
 ---
 apiVersion: kueue.x-k8s.io/v1beta1
