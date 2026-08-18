@@ -81,6 +81,7 @@ spec:
     - test-locks/gke-storage
     - test-locks/vm-storage
     - test-locks/slurm-storage
+    - test-locks/slurm-rapid-storage
     - test-locks/gke
     - test-locks/htc-slurm
     - test-locks/htcondor
@@ -193,6 +194,8 @@ spec:
       - name: test-locks/vm-storage
         nominalQuota: 1
       - name: test-locks/slurm-storage
+        nominalQuota: 1
+      - name: test-locks/slurm-rapid-storage
         nominalQuota: 1
       - name: test-locks/gke
         nominalQuota: 1
