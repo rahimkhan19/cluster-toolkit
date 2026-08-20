@@ -21,10 +21,12 @@ import (
 	"hpc-toolkit/pkg/config"
 	"hpc-toolkit/pkg/orchestrator"
 	"hpc-toolkit/pkg/shell"
+	"net/http"
 	"strings"
 
 	"cloud.google.com/go/filestore/apiv1/filestorepb"
 	compute "google.golang.org/api/compute/v1"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/dynamic"
 )
 
@@ -33,7 +35,28 @@ const (
 	tpuTopologyLabel = "cloud.google.com/gke-tpu-topology"
 	// nodePoolLabel is the GKE label for the node pool name.
 	nodePoolLabel = "cloud.google.com/gke-nodepool"
+	// multitierCheckpointCSIDriver is the CSI driver for Multi-Tier Checkpointing (MTC).
+	multitierCheckpointCSIDriver = "multitier-checkpoint.csi.storage.gke.io"
 )
+
+// checkpointConfigurationGVR defines the GroupVersionResource for GKE CheckpointConfiguration resources.
+var checkpointConfigurationGVR = schema.GroupVersionResource{
+	Group:    "checkpointing.gke.io",
+	Version:  "v1alpha1",
+	Resource: "checkpointconfigurations",
+}
+
+// namespaceGVR defines the GroupVersionResource for core Kubernetes Namespace resources.
+var namespaceGVR = schema.GroupVersionResource{
+	Group:    "",
+	Version:  "v1",
+	Resource: "namespaces",
+}
+
+// HTTPClient abstracts HTTP GET calls for testability and thread safety.
+type HTTPClient interface {
+	Get(url string) (*http.Response, error)
+}
 
 type Executor interface {
 	ExecuteCommand(name string, args ...string) shell.CommandResult
@@ -42,11 +65,10 @@ type Executor interface {
 
 // KubeClient defines the interface for specific Kubernetes API operations needed by the orchestrator.
 type KubeClient interface {
-	GetJobNamespace(workloadName string) (string, error)
 	ListWorkloads(namespace string, workloadName string) ([]string, error)
 	DeleteJobSet(namespace string, name string) error
-	ListJobSets(labelSelector string) ([]orchestrator.JobStatus, error)
-	GetCurrentNamespace() (string, error)
+	ListJobSets(namespace string, labelSelector string) ([]orchestrator.JobStatus, error)
+	GetCurrentNamespace(clusterName, location, projectID string) (string, error)
 }
 
 type MachineTypeClient interface {
@@ -75,6 +97,7 @@ type GKEOrchestrator struct {
 	clusterDesc                 gkeCluster
 	dynClient                   dynamic.Interface
 	kubeClient                  KubeClient
+	namespace                   string
 	machineTypeClient           MachineTypeClient
 	acceleratorToMachineType    map[string]string
 	machineCapCache             map[string]MachineTypeCap
@@ -85,8 +108,11 @@ type GKEOrchestrator struct {
 	dynamicSlicingCache         map[string]bool
 	staticSlicingCache          map[string]bool
 	topologyCache               map[string]string
+	policyCache                 map[string]string
 	slicingTopologiesChecked    bool
 	slicingTopologiesDetected   bool
+	gkeCustomTemplatesPath      string
+	httpClient                  HTTPClient
 }
 
 // Types for GetClusterInfo unmarshaling
@@ -179,6 +205,9 @@ type ManifestOptions struct {
 	IsStaticSlicing               bool
 	IsCPUMachine                  bool
 	Pathways                      orchestrator.PathwaysJobDefinition
+	IsPathwaysJob                 bool
+	GKEMTCEnabled                 bool
+	GKEMTCRamdiskDirectory        string
 	Verbose                       bool
 	Env                           map[string]string
 	AdditionalManifests           []string
@@ -199,6 +228,7 @@ type MountInfo struct {
 	MountPath string
 	Type      string
 	ReadOnly  bool
+	Options   string
 }
 
 type FlavorCapacity struct {
@@ -251,9 +281,10 @@ type gkeAutoscaling struct {
 }
 
 type gkePlacementPolicy struct {
-	AcceleratorTopologyMode string `json:"acceleratorTopologyMode"`
-	Type                    string `json:"type"`
-	TpuTopology             string `json:"tpuTopology"`
+	PolicyName              string `json:"policyName,omitempty"`
+	AcceleratorTopologyMode string `json:"acceleratorTopologyMode,omitempty"`
+	Type                    string `json:"type,omitempty"`
+	TpuTopology             string `json:"tpuTopology,omitempty"`
 }
 
 type gkeJobNodePool struct {
@@ -280,6 +311,15 @@ type gkeCluster struct {
 	NodePools                   []gkeJobNodePool             `json:"nodePools"`
 	Autoscaling                 gkeClusterAutoscaling        `json:"autoscaling"`
 	ControlPlaneEndpointsConfig *controlPlaneEndpointsConfig `json:"controlPlaneEndpointsConfig,omitempty"`
+	AddonsConfig                *gkeAddonsConfig             `json:"addonsConfig,omitempty"`
+}
+
+type gkeAddonsConfig struct {
+	HighScaleCheckpointingConfig *gkeHighScaleCheckpointingConfig `json:"highScaleCheckpointingConfig,omitempty"`
+}
+
+type gkeHighScaleCheckpointingConfig struct {
+	Enabled bool `json:"enabled"`
 }
 
 type controlPlaneEndpointsConfig struct {
@@ -362,6 +402,8 @@ type jobSetTemplateData struct {
 	PathwaysWorkerEnv             []EnvVar
 	IsTPU                         bool
 	IsGPU                         bool
+	GKEMTCEnabled                 bool
+	GKEMTCRamdiskDirectory        string
 }
 
 // Types for parsing kubectl get nodes -o json

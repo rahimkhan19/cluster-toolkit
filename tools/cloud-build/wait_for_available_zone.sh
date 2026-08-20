@@ -18,6 +18,7 @@
 # to prevent it from killing the pod.
 ZONE_EXPORT=$(mktemp)
 ZONE_OUTPUT=$(mktemp)
+trap 'rm -f "$ZONE_EXPORT" "$ZONE_OUTPUT"' EXIT
 
 while true; do
 	# Run the script in a subshell, streaming stdout and stderr to the console and a log file.
@@ -44,10 +45,10 @@ while true; do
 			sleep 300
 		else
 			echo "--- FATAL ERROR: find_available_zone.sh failed due to a configuration or system error. Exiting. ---" >&2
-			rm -f "$ZONE_EXPORT" "$ZONE_OUTPUT"
 			exit 1
 		fi
 	fi
 done
 
 rm -f "$ZONE_EXPORT" "$ZONE_OUTPUT"
+trap - EXIT

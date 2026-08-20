@@ -31,8 +31,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/google/safetext/yamltemplate"
-
 	"hpc-toolkit/pkg/orchestrator"
 
 	"gopkg.in/yaml.v2"
@@ -279,15 +277,22 @@ func (g *GKEOrchestrator) installKueue(version string) error {
 
 func (g *GKEOrchestrator) installPriorityClasses() error {
 	logging.Info("Installing Kueue PriorityClasses...")
-	priorityClassesTmpl, err := yamltemplate.New("priority_classes.tmpl").ParseFS(templatesFS, "templates/priority_classes.tmpl")
+	tmpl, err := g.parseGKETemplate("priority_classes.tmpl")
 	if err != nil {
-		return fmt.Errorf("failed to parse priority_classes.tmpl: %w", err)
+		return err
 	}
-	var priorityClassesBuf bytes.Buffer
-	if err := priorityClassesTmpl.Execute(&priorityClassesBuf, nil); err != nil {
-		return fmt.Errorf("failed to execute priority_classes.tmpl template: %w", err)
+
+	var buf bytes.Buffer
+	if err := tmpl.Execute(&buf, nil); err != nil {
+		return fmt.Errorf("failed to execute priority_classes template: %w", err)
 	}
-	return g.applyManifests(priorityClassesBuf.Bytes(), "priority-classes.yaml")
+
+	logging.Info("Applying Kueue priority classes...")
+	if err := g.applyManifests(buf.Bytes(), "kueue_priority_classes.yaml"); err != nil {
+		return fmt.Errorf("failed to apply Kueue priority classes: %w", err)
+	}
+
+	return nil
 }
 
 func (g *GKEOrchestrator) installKueueResources(cqName string, lqName string) error {
@@ -313,7 +318,7 @@ func (g *GKEOrchestrator) installKueueResources(cqName string, lqName string) er
 	}
 
 	// Install LocalQueue
-	localQueueTmpl, err := yamltemplate.New("local_queue.tmpl").ParseFS(templatesFS, "templates/local_queue.tmpl")
+	localQueueTmpl, err := g.parseGKETemplate("local_queue.tmpl")
 	if err != nil {
 		return fmt.Errorf("failed to parse local_queue.tmpl: %w", err)
 	}
@@ -558,8 +563,18 @@ func (g *GKEOrchestrator) renderResourceFlavor(name string, nodeLabels map[strin
 		},
 	}
 	if len(nodeLabels) > 0 {
-		rfMap["spec"] = map[string]interface{}{
-			"nodeLabels": nodeLabels,
+		filteredLabels := make(map[string]string)
+		for k, v := range nodeLabels {
+			if k != tpuTopologyLabel &&
+				!strings.HasPrefix(k, "cloud.google.com/gke-tpu-slice-") &&
+				!strings.HasPrefix(k, "cloud.google.com/gke-tpu-partition-") {
+				filteredLabels[k] = v
+			}
+		}
+		if len(filteredLabels) > 0 {
+			rfMap["spec"] = map[string]interface{}{
+				"nodeLabels": filteredLabels,
+			}
 		}
 	}
 	return yaml.Marshal(rfMap)
@@ -816,10 +831,16 @@ func (g *GKEOrchestrator) isJobSetCRDInstalled() (bool, error) {
 	return false, fmt.Errorf("failed to check for JobSet CRD: %s\n%s", res.Stderr, res.Stdout)
 }
 
+func (g *GKEOrchestrator) getHTTPClient() HTTPClient {
+	if g.httpClient != nil {
+		return g.httpClient
+	}
+	return &http.Client{Timeout: 30 * time.Second}
+}
+
 func (g *GKEOrchestrator) downloadManifests(url string) ([]byte, error) {
 	logging.Info("Downloading manifests from %s", url)
-	client := &http.Client{Timeout: 30 * time.Second}
-	resp, err := client.Get(url)
+	resp, err := g.getHTTPClient().Get(url)
 	if err != nil {
 		return nil, fmt.Errorf("failed to download manifests: %w", err)
 	}
@@ -1025,6 +1046,7 @@ func (g *GKEOrchestrator) removeDescriptionFields(data map[interface{}]interface
 func (g *GKEOrchestrator) ValidateClusterState(job *orchestrator.JobDefinition) error {
 	validators := []func() error{
 		g.checkClusterConnectivity,
+		func() error { return g.validateTargetNamespaceExists(job) },
 		func() error { return g.CheckAndInstallKueue("", job.ClusterName, job.ClusterLocation) },
 		g.checkAndInstallJobSetCRD,
 	}
@@ -1048,7 +1070,7 @@ func (g *GKEOrchestrator) ValidateClusterState(job *orchestrator.JobDefinition) 
 // It uses a short timeout to fail fast if IP is blocked by authorized networks.
 func (g *GKEOrchestrator) checkClusterConnectivity() error {
 	logging.Info("Checking cluster connectivity...")
-	res := g.executor.ExecuteCommand("kubectl", "get", "namespace", "default", "--request-timeout=5s")
+	res := g.executor.ExecuteCommand("kubectl", "version", "--request-timeout=5s")
 	if res.ExitCode != 0 {
 		return fmt.Errorf("failed to connect to GKE cluster. Please verify your IP is allowed in the cluster's authorized networks or that you have correct network access. Error: %s", res.Stderr)
 	}

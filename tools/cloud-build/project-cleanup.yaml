@@ -14,7 +14,7 @@
 
 ---
 options:
-  defaultLogsBucketBehavior: LEGACY_BUCKET_BEHAVIOR
+  defaultLogsBucketBehavior: REGIONAL_USER_OWNED_BUCKET
 
 timeout: 28800s
 steps:

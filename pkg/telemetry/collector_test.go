@@ -59,6 +59,7 @@ func TestCollectMetrics_Extensible(t *testing.T) {
 	expectedKeys := []string{
 		COMMAND_FLAGS,
 		MACHINE_TYPE,
+		MACHINE_CATEGORY,
 		REGION,
 		ZONE,
 		STATIC_NODE_COUNTS,
@@ -124,6 +125,7 @@ func TestCollectMetrics_Extensible(t *testing.T) {
 				REGION:             "us-central1",
 				ZONE:               "us-central1-a",
 				MACHINE_TYPE:       "c2-standard-8",
+				MACHINE_CATEGORY:   "c2-standard-8:CPU",
 				STATIC_NODE_COUNTS: "c2-standard-8:1",
 				OS_NAME:            getOSName(),           // Dynamically expect the current OS name
 				OS_VERSION:         getOSVersion(),        // Dynamically expect the current OS version
@@ -156,6 +158,7 @@ func TestCollectMetrics_Extensible(t *testing.T) {
 				OS_VERSION:         getOSVersion(),        // Verify OS info is still collected on failure
 				TERRAFORM_VERSION:  getTerraformVersion(), // Verify Terraform version is still collected on failure
 				MACHINE_TYPE:       "",                    // Verify empty machine type when no matching modules exist
+				MACHINE_CATEGORY:   "",
 				STATIC_NODE_COUNTS: "",
 				INSTALLATION_MODE:  BINARY,
 			},
@@ -1821,7 +1824,9 @@ func TestGetDeploymentFile(t *testing.T) {
 	mockJSON := `{
 		"tree": [
 			{"path": "examples/hpc-slurm.yaml", "type": "blob"},
-			{"path": "community/examples/ml-cluster.yml", "type": "blob"}
+			{"path": "community/examples/ml-cluster.yml", "type": "blob"},
+			{"path": "examples/machine-learning/a3-highgpu-8g/a3high-slurm-blueprint.yaml", "type": "blob"},
+			{"path": "tools/cloud-build/daily-tests/blueprints/ml-gke-e2e.yaml", "type": "blob"}
 		]
 	}`
 
@@ -1832,6 +1837,26 @@ func TestGetDeploymentFile(t *testing.T) {
 		mockResp   *http.Response
 		expected   string
 	}{
+		{
+			name:       "success: match machine learning deployment file",
+			flagValue:  "examples/machine-learning/a3-highgpu-8g/a3high-slurm-blueprint.yaml",
+			flagExists: true,
+			mockResp: &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       io.NopCloser(bytes.NewBufferString(mockJSON)),
+			},
+			expected: "examples/machine-learning/a3-highgpu-8g/a3high-slurm-blueprint.yaml",
+		},
+		{
+			name:       "success: match cloud build daily test blueprint",
+			flagValue:  "tools/cloud-build/daily-tests/blueprints/ml-gke-e2e.yaml",
+			flagExists: true,
+			mockResp: &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       io.NopCloser(bytes.NewBufferString(mockJSON)),
+			},
+			expected: "tools/cloud-build/daily-tests/blueprints/ml-gke-e2e.yaml",
+		},
 		{
 			name:       "success: exact match standard file",
 			flagValue:  "community/examples/ml-cluster.yml",
@@ -2302,6 +2327,66 @@ func TestGetErrorType(t *testing.T) {
 			name:     "Capitalization Test",
 			err:      errors.New("PERMISSION DENIED TO ACCESS THIS RESOURCE"),
 			expected: ErrTypePermissionDenied,
+		},
+		{
+			name:     "Extra Substring Match",
+			err:      errors.New("accelerator_topology must be divisible by number of gpus in machine"),
+			expected: ErrTypeA4XTopologyIssue,
+		},
+		{
+			name:     "Extra Regex Match",
+			err:      errors.New("container \"my-job-container\" in pod \"my-job-someid\" is waiting to start: trying and failing to pull image"),
+			expected: ErrTypeServerError,
+		},
+		{
+			name:     "Extra Multi Substring Match",
+			err:      errors.New("failed with error: mkdir: cannot create directory /run/enroot : Permission denied"),
+			expected: ErrTypeEnrootPermissionDenied,
+		},
+		{
+			name:     "Rate Limit Match",
+			err:      errors.New("Quota exceeded for quota metric 'Requests to public APIs' and limit 'Requests to public APIs per minute per user' of service 'file.googleapis.com'"),
+			expected: ErrTypeFilestoreApiRateLimit,
+		},
+		{
+			name:     "Spot Instance Not Found",
+			err:      errors.New("gcloud.compute.instances.update) HTTPError 404: The resource being requested"),
+			expected: ErrTypeGkeSpotInstanceNotFound,
+		},
+		{
+			name:     "Cluster Already Has Operation",
+			err:      errors.New("Cluster is running incompatible operation while executing"),
+			expected: ErrTypeClusterAlreadyHasOperation,
+		},
+		{
+			name:     "Validator Failed Match",
+			err:      errors.New("validator \"test_reservation_exists\" failed because it was not found in any zone of project"),
+			expected: ErrTypeValidatorReservationNotFound,
+		},
+		{
+			name:     "Extra Regex Subnet overlapping",
+			err:      errors.New("Error waiting to create Instance: Error waiting for Creating Instance: Error code 3, message: The request was invalid: Server subnetwork IP range [\"172.17.167.0/26\"] overlaps with restricted IP range [\"172.17.0.0/16\"]. Please choose a range explicitly that does not overlap for google_parallelstore_instance"),
+			expected: ErrTypeParallelstoreServerSubnetworkIpOverlapped,
+		},
+		{
+			name:     "Munge timeout match",
+			err:      errors.New("Timeout when waiting for file /var/run/munge/munge.socket.2"),
+			expected: ErrTypeSlurmV5MungeTimeout,
+		},
+		{
+			name:     "Compute VM create failure",
+			err:      errors.New("Error: Error waiting for instance to create: couldn't find resource for resource \"google_compute_instance\" \"compute_vm\" in region"),
+			expected: ErrTypeComputeVmCreateFail,
+		},
+		{
+			name:     "Syntax error matching",
+			err:      errors.New("unexpected EOF while looking for matching quote"),
+			expected: ErrTypeSyntaxError,
+		},
+		{
+			name:     "Network Timeout with Substrings",
+			err:      errors.New("RouterNat: googleapi: Error 404: The resource was not found"),
+			expected: ErrTypeRouternatResourceNotFound,
 		},
 	}
 
@@ -3006,6 +3091,166 @@ func TestGetIsAIAssisted(t *testing.T) {
 			actual := strconv.FormatBool(tt.bp.AIAssisted)
 			if actual != tt.expected {
 				t.Errorf("getIsAIAssisted() = %v, want %v", actual, tt.expected)
+			}
+		})
+	}
+}
+
+func TestGetMachineCategory(t *testing.T) {
+	tests := []struct {
+		name string
+		bp   config.Blueprint
+		want string
+	}{
+		{
+			name: "GPU, CPU and TPU mapping",
+			bp: config.Blueprint{
+				Groups: []config.Group{
+					{
+						Name: config.GroupName("primary"),
+						Modules: []config.Module{
+							{
+								ID: config.ModuleID("compute_node_1"),
+								Settings: config.NewDict(map[string]cty.Value{
+									"machine_type": cty.StringVal("g4-standard-48"),
+								}),
+							},
+							{
+								ID: config.ModuleID("compute_node_2"),
+								Settings: config.NewDict(map[string]cty.Value{
+									"machine_type": cty.StringVal("tpu7x-standard-4t"),
+								}),
+							},
+							{
+								ID: config.ModuleID("compute_node_3"),
+								Settings: config.NewDict(map[string]cty.Value{
+									"machine_type": cty.StringVal("c2-standard-4"),
+								}),
+							},
+						},
+					},
+				},
+			},
+			want: "g4-standard-48:GPU,tpu7x-standard-4t:TPU,c2-standard-4:CPU",
+		},
+		{
+			name: "Handles shorthand mapping for TPU and GPU",
+			bp: config.Blueprint{
+				Groups: []config.Group{
+					{
+						Name: config.GroupName("primary"),
+						Modules: []config.Module{
+							{
+								ID: config.ModuleID("compute_node_4"),
+								Settings: config.NewDict(map[string]cty.Value{
+									"machine_type": cty.StringVal("a100-40gb-1"), // g2 short hand actually a2
+								}),
+							},
+							{
+								ID: config.ModuleID("compute_node_5"),
+								Settings: config.NewDict(map[string]cty.Value{
+									"machine_type": cty.StringVal("v6e-4"), // v6e TPU shorthand
+								}),
+							},
+						},
+					},
+				},
+			},
+			want: "a100-40gb-1:GPU,v6e-4:TPU",
+		},
+		{
+			name: "Handles unknown machine types mapped to Other",
+			bp: config.Blueprint{
+				Groups: []config.Group{
+					{
+						Name: config.GroupName("primary"),
+						Modules: []config.Module{
+							{
+								ID: config.ModuleID("compute_unknown"),
+								Settings: config.NewDict(map[string]cty.Value{
+									"machine_type": cty.StringVal("bizarre-type-1"),
+								}),
+							},
+						},
+					},
+				},
+			},
+			want: "bizarre-type-1:Other",
+		},
+		{
+			name: "Handles trailing spaces and upper casing in machine types to normalize appropriately",
+			bp: config.Blueprint{
+				Groups: []config.Group{
+					{
+						Name: config.GroupName("primary"),
+						Modules: []config.Module{
+							{
+								ID: config.ModuleID("compute_noisy"),
+								Settings: config.NewDict(map[string]cty.Value{
+									"machine_type": cty.StringVal(" N2-Standard-4 "),
+								}),
+							},
+						},
+					},
+				},
+			},
+			want: "N2-Standard-4:CPU",
+		},
+		{
+			name: "Handles deduping duplicate machine types",
+			bp: config.Blueprint{
+				Groups: []config.Group{
+					{
+						Name: config.GroupName("primary"),
+						Modules: []config.Module{
+							{
+								ID: config.ModuleID("compute_1"),
+								Settings: config.NewDict(map[string]cty.Value{
+									"machine_type": cty.StringVal("e2-micro"),
+								}),
+							},
+							{
+								ID: config.ModuleID("compute_2"),
+								Settings: config.NewDict(map[string]cty.Value{
+									"machine_type": cty.StringVal("e2-micro"),
+								}),
+							},
+						},
+					},
+				},
+			},
+			want: "e2-micro:CPU",
+		},
+		{
+			name: "Returns empty string for blueprint with no compute instances",
+			bp: config.Blueprint{
+				Groups: []config.Group{
+					{
+						Name: config.GroupName("primary"),
+						Modules: []config.Module{
+							{
+								ID: config.ModuleID("storage"),
+								Settings: config.NewDict(map[string]cty.Value{
+									"disk_type": cty.StringVal("pd-standard"),
+								}),
+							},
+						},
+					},
+				},
+			},
+			want: "",
+		},
+		{
+			name: "Returns empty string for empty blueprint",
+			bp:   config.Blueprint{},
+			want: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := getMachineCategory(tt.bp); got != tt.want {
+				t.Errorf("getMachineCategory() = %v, want %v", got, tt.want)
 			}
 		})
 	}

@@ -14,7 +14,7 @@
 
 ---
 options:
-  defaultLogsBucketBehavior: LEGACY_BUCKET_BEHAVIOR
+  defaultLogsBucketBehavior: REGIONAL_USER_OWNED_BUCKET
 
 steps:
 - name: gcr.io/cloud-builders/gcloud
