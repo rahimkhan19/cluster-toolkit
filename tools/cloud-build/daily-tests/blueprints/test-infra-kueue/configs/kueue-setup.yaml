@@ -225,6 +225,13 @@ spec:
     - test-locks/gke-managed-lustre
     - test-locks/z4m
     - test-locks/z4m-vm
+    - test-locks/gke-g4-confidential
+    - test-locks/tpu7x-standard
+    - test-locks/gke-tpu-7x
+    - test-locks/tpu-v5e
+    - test-locks/gke-tpu-v5e
+    - test-locks/tpu-v5p
+    - test-locks/gke-tpu-v5p
     flavors:
     - name: test-lock-flavor-2
       resources:
@@ -241,6 +248,20 @@ spec:
       - name: test-locks/z4m
         nominalQuota: 1
       - name: test-locks/z4m-vm
+        nominalQuota: 1
+      - name: test-locks/gke-g4-confidential
+        nominalQuota: 1
+      - name: test-locks/tpu7x-standard
+        nominalQuota: 1
+      - name: test-locks/gke-tpu-7x
+        nominalQuota: 1
+      - name: test-locks/tpu-v5e
+        nominalQuota: 1
+      - name: test-locks/gke-tpu-v5e
+        nominalQuota: 1
+      - name: test-locks/tpu-v5p
+        nominalQuota: 1
+      - name: test-locks/gke-tpu-v5p
         nominalQuota: 1
 ---
 apiVersion: kueue.x-k8s.io/v1beta1
