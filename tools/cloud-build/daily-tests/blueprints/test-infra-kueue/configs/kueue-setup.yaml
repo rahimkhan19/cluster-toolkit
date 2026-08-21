@@ -116,15 +116,15 @@ spec:
       - name: test-locks/hcls
         nominalQuota: 1
       - name: test-locks/a2-highgpu
-        nominalQuota: 1
+        nominalQuota: 3
       - name: test-locks/gke-a2-highgpu-kueue-onspot
         nominalQuota: 1
       - name: test-locks/a3-ultragpu
-        nominalQuota: 1
+        nominalQuota: 3
       - name: test-locks/a3-highgpu
-        nominalQuota: 1
+        nominalQuota: 3
       - name: test-locks/a3-megagpu
-        nominalQuota: 1
+        nominalQuota: 3
       - name: test-locks/gke-a3-megagpu-onspot
         nominalQuota: 1
       - name: test-locks/ml-a3-highgpu-onspot-slurm
@@ -138,11 +138,11 @@ spec:
       - name: test-locks/ml-a3-ultragpu-onspot-jbvms
         nominalQuota: 1
       - name: test-locks/a4-highgpu
-        nominalQuota: 1
+        nominalQuota: 3
       - name: test-locks/gke-a4-onspot
         nominalQuota: 1
       - name: test-locks/a4x
-        nominalQuota: 1
+        nominalQuota: 3
       - name: test-locks/gke-a4x
         nominalQuota: 1
       - name: test-locks/ml-a4-highgpu-onspot-slurm
@@ -152,7 +152,7 @@ spec:
       - name: test-locks/ml-gke
         nominalQuota: 1
       - name: test-locks/g4-standard
-        nominalQuota: 1
+        nominalQuota: 3
       - name: test-locks/ml-g4-onspot-slurm
         nominalQuota: 1
       - name: test-locks/ml-a4x-highgpu-slurm
@@ -160,7 +160,7 @@ spec:
       - name: test-locks/ml-a3-megagpu-onspot-slurm
         nominalQuota: 1
       - name: test-locks/h4d
-        nominalQuota: 1
+        nominalQuota: 3
       - name: test-locks/h4d-vm
         nominalQuota: 1
       - name: test-locks/gke-h4d-onspot
@@ -168,7 +168,7 @@ spec:
       - name: test-locks/ml-h4d-onspot-slurm
         nominalQuota: 1
       - name: test-locks/tpu-v6e
-        nominalQuota: 1
+        nominalQuota: 3
       - name: test-locks/gke-tpu-v6e
         nominalQuota: 1
       - name: test-locks/gke-g4-onspot
@@ -232,6 +232,7 @@ spec:
     - test-locks/gke-tpu-v5e
     - test-locks/tpu-v5p
     - test-locks/gke-tpu-v5p
+    - test-locks/batch
     flavors:
     - name: test-lock-flavor-2
       resources:
@@ -246,22 +247,24 @@ spec:
       - name: test-locks/gke-managed-lustre
         nominalQuota: 1
       - name: test-locks/z4m
-        nominalQuota: 1
+        nominalQuota: 3
       - name: test-locks/z4m-vm
         nominalQuota: 1
       - name: test-locks/gke-g4-confidential
         nominalQuota: 1
       - name: test-locks/tpu7x-standard
-        nominalQuota: 1
+        nominalQuota: 3
       - name: test-locks/gke-tpu-7x
         nominalQuota: 1
       - name: test-locks/tpu-v5e
-        nominalQuota: 1
+        nominalQuota: 3
       - name: test-locks/gke-tpu-v5e
         nominalQuota: 1
       - name: test-locks/tpu-v5p
-        nominalQuota: 1
+        nominalQuota: 3
       - name: test-locks/gke-tpu-v5p
+        nominalQuota: 1
+      - name: test-locks/batch
         nominalQuota: 1
 ---
 apiVersion: kueue.x-k8s.io/v1beta1
