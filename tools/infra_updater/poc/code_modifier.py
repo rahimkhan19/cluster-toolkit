@@ -210,7 +210,7 @@ class OrchestratorAgent:
 
         # 5. Transition Status in SQLite (Doc Section 2.3 & 3.1: status = 'READY_FOR_REVIEW')
         cursor.execute("UPDATE candidate_updates SET status = 'READY_FOR_REVIEW' WHERE candidate_id = ?", (cand_id,))
-        cursor.execute("UPDATE packages SET current_version = ?, updated_at = CURRENT_TIMESTAMP WHERE package_id = ?", (cand_version, package_id))
+        cursor.execute("UPDATE packages SET current_version = ?, status = 'READY_FOR_REVIEW', updated_at = CURRENT_TIMESTAMP WHERE package_id = ?", (cand_version, package_id))
         conn.commit()
         conn.close()
 

@@ -156,30 +156,46 @@ function renderCandidates(candidates, packages) {
     return `
       <div class="candidate-card">
         <div class="candidate-header">
-          <div>
-            <div class="candidate-name">${escapeHtml(c.package_id)}</div>
-            <div class="version-jump">
-              <span class="code-pill">${escapeHtml(currVer)}</span>
-              <span class="version-arrow">→</span>
-              <span class="code-pill" style="color: var(--accent-green-light); font-weight: 600;">${escapeHtml(c.version)}</span>
-              ${statusBadge}
-            </div>
+          <div class="candidate-title-group">
+            <span class="candidate-name">${escapeHtml(c.package_id)}</span>
+            <span class="code-pill" style="color: var(--accent-blue)">${escapeHtml(pkg.name || c.package_id)}</span>
+            <span class="badge badge-blue">GA Production</span>
           </div>
-          <div>
-            <button class="btn ${isReady ? 'btn-secondary' : 'btn-primary'}" style="font-size: 12px;" onclick="triggerAction('apply', '${escapeHtml(c.package_id)}')" ${isReady ? 'disabled' : ''}>
-              ${isReady ? 'Applied (Ready for Review)' : 'Review &amp; Apply'}
+          <div class="candidate-action-group">
+            <button class="btn ${isReady ? 'btn-secondary' : 'btn-primary'}" onclick="triggerAction('apply', '${escapeHtml(c.package_id)}')" ${isReady ? 'disabled' : ''}>
+              ${isReady ? 'Applied &bull; Ready for Review' : 'Review &amp; Apply Update'}
             </button>
           </div>
         </div>
 
-        <div class="llm-section">
-          <div class="llm-section-title">
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 14 14"/></svg>
-            Compatibility Triage &bull; ${verdictBadge}
+        <div class="version-banner">
+          <div class="version-item">
+            <span class="version-label">Current:</span>
+            <span class="code-pill">${escapeHtml(currVer)}</span>
           </div>
-          <div class="llm-summary-text">${escapeHtml(c.changelog_summary)}</div>
-          <div class="pr-notes-box">
-            <strong style="color: var(--text-secondary);">Artifact URL:</strong> <a href="${escapeHtml(c.download_url)}" target="_blank" style="color: var(--accent-blue); text-decoration: none;">${escapeHtml(c.download_url)}</a>
+          <span class="version-arrow">→</span>
+          <div class="version-item">
+            <span class="version-label">Target:</span>
+            <span class="code-pill version-target">${escapeHtml(c.version)}</span>
+          </div>
+          <div class="version-badges">
+            ${statusBadge}
+            ${verdictBadge}
+          </div>
+        </div>
+
+        <div class="triage-section">
+          <div class="triage-header">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 14 14"/></svg>
+            Gemini Compatibility Triage
+          </div>
+          <div class="triage-summary">${escapeHtml(c.changelog_summary)}</div>
+        </div>
+
+        <div class="candidate-footer">
+          <div>
+            <span style="color: var(--text-muted); font-size: 11px; text-transform: uppercase; font-weight: 600; margin-right: 6px;">Artifact URL:</span>
+            <a href="${escapeHtml(c.download_url)}" target="_blank" class="candidate-url">${escapeHtml(c.download_url)}</a>
           </div>
         </div>
       </div>
@@ -195,21 +211,24 @@ function renderPackages(packages) {
     if (p.status === 'REGISTERED') {
       badgeClass = 'badge-blue';
       statusLabel = 'REGISTERED';
-    } else if (p.status === 'BLOCKED' || p.status === 'BLOCKED_BY_RULE') {
-      badgeClass = 'badge-red';
-      statusLabel = 'BLOCKED';
+    } else if (p.status === 'UPDATE_FOUND') {
+      badgeClass = 'badge-blue';
+      statusLabel = 'UPDATE_FOUND';
+    } else if (p.status === 'READY_FOR_REVIEW') {
+      badgeClass = 'badge-green';
+      statusLabel = 'READY_FOR_REVIEW';
     } else if (p.status === 'UP_TO_DATE') {
       badgeClass = 'badge-green';
       statusLabel = 'UP-TO-DATE';
+    } else if (p.status === 'BLOCKED' || p.status === 'BLOCKED_BY_RULE') {
+      badgeClass = 'badge-red';
+      statusLabel = 'BLOCKED';
     } else if (p.status === 'SNOOZED') {
       badgeClass = 'badge-amber';
       statusLabel = 'SNOOZED';
     } else if (p.status === 'OBSOLETE') {
       badgeClass = 'badge-amber';
       statusLabel = 'OBSOLETE';
-    } else if (p.status === 'QUALIFIED') {
-      badgeClass = 'badge-blue';
-      statusLabel = 'REGISTERED';
     }
 
     const upVerHtml = (p.upstream_version && p.upstream_version !== '-')

@@ -532,15 +532,14 @@ Assess:
 
         if not candidate:
             summary = f"Upstream source has no newer release than currently deployed version ({current_ver})."
-            self._update_package_db(package_id, "-", "REGISTERED", summary)
+            self._update_package_db(package_id, "-", "UP_TO_DATE", summary)
             return {
                 "package_id": package_id,
                 "name": pkg_name,
                 "current_version": current_ver,
                 "upstream_version": "-",
                 "candidate_version": None,
-                "workflow_status": "UP_TO_DATE",
-                "policy_status": "REGISTERED",
+                "status": "UP_TO_DATE",
                 "summary": summary
             }
 
@@ -556,28 +555,26 @@ Assess:
                     summary = f"Upstream version ({upstream_version}) is older than deployed blueprint ({current_ver})."
                 else:
                     summary = f"Deployed blueprint matches latest upstream release ({upstream_version})."
-                self._update_package_db(package_id, upstream_version, "REGISTERED", summary)
+                self._update_package_db(package_id, upstream_version, "UP_TO_DATE", summary)
                 return {
                     "package_id": package_id,
                     "name": pkg_name,
                     "current_version": current_ver,
                     "upstream_version": upstream_version,
                     "candidate_version": None,
-                    "workflow_status": "UP_TO_DATE",
-                    "policy_status": "REGISTERED",
+                    "status": "UP_TO_DATE",
                     "summary": summary
                 }
         elif upstream_version == current_ver:
             summary = f"Already at latest upstream version ({current_ver})."
-            self._update_package_db(package_id, upstream_version, "REGISTERED", summary)
+            self._update_package_db(package_id, upstream_version, "UP_TO_DATE", summary)
             return {
                 "package_id": package_id,
                 "name": pkg_name,
                 "current_version": current_ver,
                 "upstream_version": upstream_version,
                 "candidate_version": None,
-                "workflow_status": "UP_TO_DATE",
-                "policy_status": "REGISTERED",
+                "status": "UP_TO_DATE",
                 "summary": summary
             }
 
@@ -585,15 +582,14 @@ Assess:
         llm_ga = self.evaluate_ga_stability_with_llm(package_id, candidate)
         if not llm_ga.is_production_ga:
             summary = f"Upstream release {upstream_version} discarded as non-GA ({llm_ga.release_track}): {llm_ga.reasoning}"
-            self._update_package_db(package_id, upstream_version, "REGISTERED", summary)
+            self._update_package_db(package_id, upstream_version, "UP_TO_DATE", summary)
             return {
                 "package_id": package_id,
                 "name": pkg_name,
                 "current_version": current_ver,
                 "upstream_version": upstream_version,
                 "candidate_version": None,
-                "workflow_status": "REJECTED_UNSTABLE",
-                "policy_status": "REGISTERED",
+                "status": "UP_TO_DATE",
                 "summary": summary
             }
 
@@ -608,8 +604,7 @@ Assess:
                 "current_version": current_ver,
                 "upstream_version": upstream_version,
                 "candidate_version": None,
-                "workflow_status": "BLOCKED_BY_RULE",
-                "policy_status": "BLOCKED",
+                "status": "BLOCKED",
                 "rule_id": rule["rule_id"],
                 "reason": rule["reason"],
                 "summary": summary
@@ -623,15 +618,14 @@ Assess:
         # 5. Artifact Liveness Verification
         if not self.check_http_liveness(download_url):
             summary = f"Release {upstream_version} download URL unreachable."
-            self._update_package_db(package_id, upstream_version, "REGISTERED", summary)
+            self._update_package_db(package_id, upstream_version, "UP_TO_DATE", summary)
             return {
                 "package_id": package_id,
                 "name": pkg_name,
                 "current_version": current_ver,
                 "upstream_version": upstream_version,
                 "candidate_version": None,
-                "workflow_status": "UNREACHABLE",
-                "policy_status": "REGISTERED",
+                "status": "UNREACHABLE",
                 "summary": summary
             }
 
@@ -652,7 +646,7 @@ Assess:
         conn.close()
 
         summary = f"Update found ({upstream_version}): {llm_changelog.summary}"
-        self._update_package_db(package_id, upstream_version, "REGISTERED", summary)
+        self._update_package_db(package_id, upstream_version, "UPDATE_FOUND", summary)
 
         return {
             "candidate_id": candidate_id,
@@ -663,8 +657,7 @@ Assess:
             "candidate_version": upstream_version,
             "download_url": download_url,
             "filename": candidate.get("filename", ""),
-            "workflow_status": "UPDATE_FOUND",
-            "policy_status": "REGISTERED",
+            "status": "UPDATE_FOUND",
             "summary": summary,
             "llm_release_track": llm_ga.release_track,
             "llm_verdict": llm_changelog.compatibility_verdict,

@@ -18,7 +18,7 @@ Initializes and populates the SQLite state database for the Cluster Toolkit
 Automated Dependency Management pipeline.
 
 Fully aligned with Section 2 of the Implementation Guide:
-- Table: packages (Canonical Package Registry with long-term policy status: REGISTERED, SNOOZED, BLOCKED, OBSOLETE)
+- Table: packages (Canonical Package Registry with status: REGISTERED, UPDATE_FOUND, READY_FOR_REVIEW, UP_TO_DATE, SNOOZED, BLOCKED, OBSOLETE)
 - Table: blueprint_instances (Blueprint Locations with coupled variables and signature keywords)
 - Table: candidate_updates (Candidate Update Lifecycle: UPDATE_FOUND, TESTING, READY_FOR_REVIEW, MERGED, CANCELLED)
 - Table: learned_rules (Persistent Rule Engine with multi-blueprint scope, action, source, and expiration)
@@ -418,11 +418,11 @@ def preview_tables():
     cursor = conn.cursor()
 
     print("\n" + "=" * 145)
-    print("TABLE 1: packages (Canonical Package Registry - Long-Term Policy Status: REGISTERED, SNOOZED, BLOCKED, OBSOLETE)")
+    print("TABLE 1: packages (Canonical Package Registry - Status: REGISTERED, SNOOZED, BLOCKED, OBSOLETE)")
     print("=" * 145)
     cursor.execute("SELECT package_id, current_version, upstream_version, upstream_type, status, qualification_summary FROM packages ORDER BY package_id")
     rows = cursor.fetchall()
-    print(f"{'Package ID':<18} | {'Current':<16} | {'Upstream':<16} | {'Source Type':<16} | {'Policy Status':<14} | Upstream Assessment Summary")
+    print(f"{'Package ID':<18} | {'Current':<16} | {'Upstream':<16} | {'Source Type':<16} | {'Status':<14} | Upstream Assessment Summary")
     print("-" * 145)
     for r in rows:
         up = r[2] or "-"

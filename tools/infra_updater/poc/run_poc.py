@@ -56,7 +56,7 @@ def run_check_all(model: str = "gemini-3.8-flash"):
     agent = SourceQualificationAgent(model=model)
     results = agent.qualify_all()
 
-    header = f"{'Package ID':<18} | {'Current Ver':<14} | {'Latest Upstream':<16} | {'Target Update':<14} | {'Policy Check':<14} | {'Workflow Status':<18} | Summary & Rationale"
+    header = f"{'Package ID':<18} | {'Current Ver':<14} | {'Latest Upstream':<16} | {'Target Update':<14} | {'Policy Check':<14} | {'Status':<18} | Summary & Rationale"
     print("=" * 140)
     print(header)
     print("-" * 140)
@@ -66,13 +66,13 @@ def run_check_all(model: str = "gemini-3.8-flash"):
         curr_ver = r["current_version"]
         up_ver = r.get("upstream_version") or "-"
         target_ver = r.get("candidate_version") or "-"
-        status = r.get("workflow_status") or r.get("status")
+        status = r.get("status") or "-"
         summary = r.get("summary") or r.get("message") or "-"
 
         if status == "UPDATE_FOUND":
             policy_check = f"{GREEN}PASSED{RESET}"
             status_str = f"{GREEN}{BOLD}UPDATE_FOUND{RESET}"
-        elif status == "BLOCKED" or r.get("policy_status") == "BLOCKED":
+        elif status == "BLOCKED" or status == "BLOCKED_BY_RULE":
             policy_check = f"{RED}BLOCKED{RESET}"
             status_str = f"{RED}{BOLD}BLOCKED{RESET}"
         elif status == "UP_TO_DATE":
@@ -90,7 +90,7 @@ def run_check_all(model: str = "gemini-3.8-flash"):
     print("=" * 140)
     print(f"\n{BOLD}Changelog Summaries & Compatibility Verdicts:{RESET}")
     for r in results:
-        if r.get("workflow_status") == "UPDATE_FOUND":
+        if r.get("status") == "UPDATE_FOUND":
             print(f"  * {BOLD}{r['package_id']} ({r['candidate_version']}){RESET}:")
             print(f"    - Verdict:  {GREEN}{r.get('llm_verdict', 'COMPATIBLE')}{RESET} (Track: {r.get('llm_release_track')})")
             print(f"    - Summary:  {r.get('llm_summary')}")
@@ -222,7 +222,7 @@ def run_test_rule_blocking():
     print("=" * 110)
 
     for pkg_id, ver, desc, expected_verdict in test_cases:
-        is_blocked, rule, duration_ms = checker.check_version(pkg_id, ver)
+        is_blocked, rule = checker.check_version(pkg_id, ver)
 
         if is_blocked:
             decision = f"{RED}{BOLD}BLOCKED{RESET}"
@@ -261,14 +261,14 @@ def run_end_to_end(model: str = "gemini-3.8-flash"):
     # Stage 4: Orchestrator Agent Blueprint Modification & Variable Sync
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
-    cursor.execute("SELECT package_id FROM candidate_updates WHERE status = 'UPDATE_FOUND' ORDER BY created_at ASC LIMIT 1")
-    target_row = cursor.fetchone()
+    cursor.execute("SELECT package_id FROM candidate_updates WHERE status = 'UPDATE_FOUND' ORDER BY created_at ASC")
+    candidate_rows = cursor.fetchall()
     conn.close()
 
-    if target_row:
-        target_pkg = target_row[0]
-        print(f"\n{BOLD}[STAGE 4/4] Orchestrator Agent applying update to '{target_pkg}'...{RESET}")
-        run_apply(target_pkg)
+    if candidate_rows:
+        print(f"\n{BOLD}[STAGE 4/4] Orchestrator Agent applying updates across all {len(candidate_rows)} candidate package(s)...{RESET}")
+        for (target_pkg,) in candidate_rows:
+            run_apply(target_pkg)
     else:
         print(f"\n{BOLD}[STAGE 4/4] No candidate updates with status UPDATE_FOUND available to apply.{RESET}")
 
@@ -298,10 +298,10 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  python3 run_poc.py --check-all           # Run qualification (LLM GA filter + <1ms rules + LLM changelog)
+  python3 run_poc.py --check-all           # Run qualification (LLM GA filter + learned rules + LLM changelog)
   python3 run_poc.py --test-llm-triage     # Demonstrate LLM changelog & breaking change analysis
   python3 run_poc.py --apply <package_id>  # Apply update and show clean git diff
-  python3 run_poc.py --test-rule-blocking   # Benchmark < 1ms upfront rule filter
+  python3 run_poc.py --test-rule-blocking   # Evaluate upfront policy rule filter
   python3 run_poc.py --show-tables          # Preview all SQLite state tables
   python3 run_poc.py --reset                # Revert files and reset database
 """
@@ -311,7 +311,7 @@ Examples:
     parser.add_argument("-c", "--check-all", action="store_true", help="Run Source Qualification Agent across all packages")
     parser.add_argument("-l", "--test-llm-triage", action="store_true", help="Demonstrate Gemini LLM semantic changelog & deprecation triage")
     parser.add_argument("-a", "--apply", metavar="PACKAGE_ID", type=str, help="Apply qualified update for PACKAGE_ID")
-    parser.add_argument("-t", "--test-rule-blocking", action="store_true", help="Demonstrate upfront rule blocking (<1ms)")
+    parser.add_argument("-t", "--test-rule-blocking", action="store_true", help="Demonstrate upfront policy rule blocking")
     parser.add_argument("-s", "--show-tables", action="store_true", help="Display previews of all SQLite tables")
     parser.add_argument("-r", "--reset", action="store_true", help="Reset database and revert git modifications")
 
