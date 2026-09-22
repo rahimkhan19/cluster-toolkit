@@ -1,4 +1,4 @@
-// Frontend Logic for Cluster Toolkit Infrastructure Updater POC Dashboard
+// Frontend Logic for Cluster Toolkit Infrastructure Updater Dashboard
 
 let isPollingLogs = false;
 
@@ -27,6 +27,7 @@ function clearConsole() {
 }
 
 let latestPackages = [];
+let latestInstances = [];
 
 async function fetchState() {
   try {
@@ -34,6 +35,7 @@ async function fetchState() {
     if (!res.ok) return;
     const data = await res.json();
     latestPackages = data.packages || [];
+    latestInstances = data.instances || [];
 
     // 1. Update Metrics
     const pendingCount = data.stats.pending_updates !== undefined ? data.stats.pending_updates : (data.stats.qualified_candidates || 0);
@@ -153,6 +155,15 @@ function renderCandidates(candidates, packages) {
     const pkg = pkgMap[c.package_id] || {};
     const currVer = pkg.current_version || '-';
 
+    const instances = (latestInstances || []).filter(inst => inst.package_id === c.package_id);
+    const instCount = instances.length;
+    const blueprintPillHtml = instCount > 0
+      ? `<button class="btn-blueprint-pill" onclick="openBlueprintModal('${escapeHtml(c.package_id)}')" title="Click to view ${instCount} associated blueprint${instCount === 1 ? '' : 's'}">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+          <span>${instCount} Blueprint${instCount === 1 ? '' : 's'}</span>
+        </button>`
+      : '';
+
     return `
       <div class="candidate-card">
         <div class="candidate-header">
@@ -160,6 +171,7 @@ function renderCandidates(candidates, packages) {
             <span class="candidate-name">${escapeHtml(c.package_id)}</span>
             <span class="code-pill" style="color: var(--accent-blue)">${escapeHtml(pkg.name || c.package_id)}</span>
             <span class="badge badge-blue">GA Production</span>
+            ${blueprintPillHtml}
           </div>
           <div class="candidate-action-group">
             <button class="btn ${isReady ? 'btn-secondary' : 'btn-primary'}" onclick="triggerAction('apply', '${escapeHtml(c.package_id)}')" ${isReady ? 'disabled' : ''}>
@@ -197,6 +209,12 @@ function renderCandidates(candidates, packages) {
             <span style="color: var(--text-muted); font-size: 11px; text-transform: uppercase; font-weight: 600; margin-right: 6px;">Artifact URL:</span>
             <a href="${escapeHtml(c.download_url)}" target="_blank" class="candidate-url">${escapeHtml(c.download_url)}</a>
           </div>
+          ${instCount > 0 ? `
+            <button class="btn-text-link" onclick="openBlueprintModal('${escapeHtml(c.package_id)}')" title="Inspect target blueprint files and variable couplings">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+              <span>View ${instCount} Affected Blueprint${instCount === 1 ? '' : 's'} &rarr;</span>
+            </button>
+          ` : ''}
         </div>
       </div>
     `;
@@ -235,6 +253,15 @@ function renderPackages(packages) {
       ? `<span class="code-pill">${escapeHtml(p.upstream_version)}</span>`
       : `<span style="color: var(--text-muted)">-</span>`;
 
+    const instances = (latestInstances || []).filter(inst => inst.package_id === p.package_id);
+    const instCount = instances.length;
+    const blueprintBtnHtml = instCount > 0
+      ? `<button class="btn-blueprint-pill" onclick="openBlueprintModal('${escapeHtml(p.package_id)}')" title="View ${instCount} associated blueprint${instCount === 1 ? '' : 's'}">
+           <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+           <span>${instCount} blueprint${instCount === 1 ? '' : 's'}</span>
+         </button>`
+      : `<span style="color: var(--text-muted); font-size: 11px;">None</span>`;
+
     return `
       <tr>
         <td><span class="code-pill">${escapeHtml(p.package_id)}</span></td>
@@ -243,6 +270,7 @@ function renderPackages(packages) {
         <td>${upVerHtml}</td>
         <td><span class="code-pill" style="color: var(--accent-amber)">${escapeHtml(p.upstream_type || 'github_release')}</span></td>
         <td><span class="badge ${badgeClass}">${escapeHtml(statusLabel)}</span></td>
+        <td>${blueprintBtnHtml}</td>
         <td style="font-size: 12px; color: var(--text-secondary); line-height: 1.4; max-width: 380px;">${escapeHtml(p.qualification_summary || 'Baseline registered.')}</td>
         <td><a href="${escapeHtml(p.source_url)}" target="_blank" style="color: var(--accent-blue); text-decoration: none; font-size: 12px; word-break: break-all;">${escapeHtml(p.source_url)}</a></td>
       </tr>
@@ -389,6 +417,135 @@ function escapeHtml(str) {
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#039;');
 }
+
+function openBlueprintModal(packageId) {
+  const pkg = latestPackages.find(p => p.package_id === packageId) || { package_id: packageId, name: packageId };
+  const instances = (latestInstances || []).filter(inst => inst.package_id === packageId);
+
+  const titleEl = document.getElementById('modal-package-title');
+  const subtitleEl = document.getElementById('modal-package-subtitle');
+  const listEl = document.getElementById('modal-blueprint-list');
+  const countEl = document.getElementById('modal-instance-count');
+
+  if (titleEl) {
+    titleEl.textContent = `Associated Blueprints: ${pkg.package_id}`;
+  }
+  if (subtitleEl) {
+    subtitleEl.innerHTML = `<strong>${escapeHtml(pkg.name || pkg.package_id)}</strong> &bull; Current version: <code class="code-pill">${escapeHtml(pkg.current_version || '-')}</code>`;
+  }
+  if (countEl) {
+    countEl.textContent = `${instances.length} blueprint instance${instances.length === 1 ? '' : 's'} configured`;
+  }
+
+  if (!instances || instances.length === 0) {
+    listEl.innerHTML = `
+      <div style="text-align: center; padding: 32px 20px; color: var(--text-muted);">
+        No registered blueprint instances found for <code>${escapeHtml(packageId)}</code>.
+      </div>
+    `;
+  } else {
+    listEl.innerHTML = instances.map(inst => {
+      const coupled = Array.isArray(inst.coupled_vars) ? inst.coupled_vars : [];
+      let coupledHtml = '';
+      if (coupled.length > 0) {
+        coupledHtml = `
+          <div class="coupled-box">
+            <div class="coupled-title">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>
+              Coupled Sibling Variables (Atomic Synchronization)
+            </div>
+            <div class="coupled-list">
+              ${coupled.map(c => `
+                <div class="coupled-item">
+                  <span class="code-pill var-pill">${escapeHtml(c.variable_name)}</span>
+                  <span class="coupled-pattern">Pattern: <code>${escapeHtml(c.pattern || '{filename}')}</code></span>
+                </div>
+              `).join('')}
+            </div>
+          </div>
+        `;
+      } else {
+        coupledHtml = `
+          <div class="detail-row">
+            <span class="detail-label">Coupled Vars:</span>
+            <span style="color: var(--text-muted); font-size: 12px;">None (Standalone variable)</span>
+          </div>
+        `;
+      }
+
+      return `
+        <div class="blueprint-card">
+          <div class="blueprint-card-header">
+            <div class="blueprint-path-box">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+              <span>${escapeHtml(inst.blueprint_path)}</span>
+            </div>
+            <button class="btn-copy-path" onclick="copyBlueprintPath(this, '${escapeHtml(inst.blueprint_path)}')" title="Copy relative path to clipboard">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+              <span>Copy</span>
+            </button>
+          </div>
+          <div class="blueprint-card-details">
+            <div class="detail-row">
+              <span class="detail-label">Instance ID:</span>
+              <span class="code-pill">${escapeHtml(inst.instance_id)}</span>
+            </div>
+            <div class="detail-row">
+              <span class="detail-label">Target Variable:</span>
+              <span class="code-pill var-pill">${escapeHtml(inst.variable_name)}</span>
+            </div>
+            ${coupledHtml}
+          </div>
+        </div>
+      `;
+    }).join('');
+  }
+
+  const modal = document.getElementById('blueprint-modal');
+  if (modal) {
+    modal.classList.add('active');
+    document.body.style.overflow = 'hidden';
+  }
+}
+
+function closeBlueprintModal(event) {
+  if (event && event.target && event.target.id !== 'blueprint-modal' && !event.target.classList.contains('modal-close-btn') && !event.target.closest('.modal-close-btn') && event.target.tagName !== 'BUTTON') {
+    return;
+  }
+  const modal = document.getElementById('blueprint-modal');
+  if (modal) {
+    modal.classList.remove('active');
+    document.body.style.overflow = '';
+  }
+}
+
+function copyBlueprintPath(btn, path) {
+  if (!navigator.clipboard) {
+    prompt('Copy blueprint path:', path);
+    return;
+  }
+  navigator.clipboard.writeText(path).then(() => {
+    const origHtml = btn.innerHTML;
+    btn.innerHTML = `
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#3fb950" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>
+      <span style="color: #3fb950; font-weight: 600;">Copied!</span>
+    `;
+    setTimeout(() => {
+      btn.innerHTML = origHtml;
+    }, 1800);
+  }).catch(err => {
+    console.error('Failed to copy text:', err);
+  });
+}
+
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') {
+    const modal = document.getElementById('blueprint-modal');
+    if (modal && modal.classList.contains('active')) {
+      closeBlueprintModal();
+    }
+  }
+});
 
 // Initial setup
 document.addEventListener('DOMContentLoaded', () => {

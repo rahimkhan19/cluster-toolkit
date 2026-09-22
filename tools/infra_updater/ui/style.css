@@ -665,3 +665,301 @@ body {
   color: #58a6ff;
   display: block;
 }
+
+/* Blueprint Pill Buttons */
+.btn-blueprint-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  background: rgba(56, 139, 253, 0.08);
+  border: 1px solid rgba(56, 139, 253, 0.25);
+  color: var(--accent-blue);
+  padding: 3px 9px;
+  border-radius: 6px;
+  font-size: 11.5px;
+  font-family: var(--font-sans);
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  user-select: none;
+  white-space: nowrap;
+}
+
+.btn-blueprint-pill:hover {
+  background: rgba(56, 139, 253, 0.18);
+  border-color: rgba(56, 139, 253, 0.5);
+  color: #79c0ff;
+  transform: translateY(-1px);
+}
+
+.btn-blueprint-pill svg {
+  flex-shrink: 0;
+}
+
+/* Subtle Text Link Button */
+.btn-text-link {
+  background: none;
+  border: none;
+  color: var(--accent-blue);
+  font-size: 12px;
+  cursor: pointer;
+  padding: 2px 4px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-weight: 500;
+  font-family: var(--font-sans);
+  border-radius: 4px;
+  transition: all 0.15s ease;
+}
+
+.btn-text-link:hover {
+  color: #79c0ff;
+  background: rgba(56, 139, 253, 0.1);
+  text-decoration: none;
+}
+
+/* Associated Blueprints Modal */
+.modal-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100vw;
+  height: 100vh;
+  background: rgba(4, 7, 11, 0.75);
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
+  z-index: 9999;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  opacity: 0;
+  transition: opacity 0.2s ease;
+}
+
+.modal-overlay.active {
+  display: flex;
+  opacity: 1;
+}
+
+.modal-card {
+  background: var(--bg-surface);
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  width: 100%;
+  max-width: 720px;
+  max-height: 85vh;
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 20px 48px rgba(0, 0, 0, 0.7);
+  animation: modalPop 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+  overflow: hidden;
+}
+
+@keyframes modalPop {
+  from { transform: scale(0.96); opacity: 0; }
+  to { transform: scale(1); opacity: 1; }
+}
+
+.modal-header {
+  padding: 16px 22px;
+  border-bottom: 1px solid var(--border-color);
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  background: var(--bg-surface-elevated);
+}
+
+.modal-title-group {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.modal-title {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text-primary);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.modal-title svg {
+  color: var(--accent-blue);
+  flex-shrink: 0;
+}
+
+.modal-subtitle {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.modal-close-btn {
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  font-size: 16px;
+  cursor: pointer;
+  padding: 4px 8px;
+  border-radius: 4px;
+  transition: all 0.15s ease;
+  line-height: 1;
+}
+
+.modal-close-btn:hover {
+  background: rgba(255, 255, 255, 0.1);
+  color: var(--text-primary);
+}
+
+.modal-body {
+  padding: 20px 22px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  background: var(--bg-surface);
+}
+
+.blueprint-card {
+  background: var(--bg-surface-elevated);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  transition: border-color 0.15s ease;
+}
+
+.blueprint-card:hover {
+  border-color: rgba(56, 139, 253, 0.4);
+}
+
+.blueprint-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.blueprint-path-box {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--accent-blue);
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  font-weight: 500;
+  word-break: break-all;
+}
+
+.blueprint-path-box svg {
+  flex-shrink: 0;
+  color: var(--text-muted);
+}
+
+.btn-copy-path {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--border-color);
+  color: var(--text-secondary);
+  padding: 3px 8px;
+  border-radius: 4px;
+  font-size: 11px;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: all 0.15s ease;
+  font-family: var(--font-sans);
+}
+
+.btn-copy-path:hover {
+  background: rgba(255, 255, 255, 0.12);
+  color: var(--text-primary);
+  border-color: rgba(255, 255, 255, 0.2);
+}
+
+.blueprint-card-details {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  font-size: 12px;
+}
+
+.detail-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.detail-label {
+  color: var(--text-muted);
+  font-weight: 500;
+  min-width: 105px;
+  font-size: 11.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.var-pill {
+  color: #79c0ff !important;
+  background: rgba(56, 139, 253, 0.12) !important;
+  border-color: rgba(56, 139, 253, 0.35) !important;
+  font-weight: 600;
+}
+
+.coupled-box {
+  margin-top: 4px;
+  background: rgba(0, 0, 0, 0.25);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 6px;
+  padding: 10px 12px;
+}
+
+.coupled-title {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--accent-amber);
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+
+.coupled-list {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.coupled-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  flex-wrap: wrap;
+}
+
+.coupled-pattern {
+  color: var(--text-muted);
+  font-size: 11.5px;
+  font-family: var(--font-mono);
+}
+
+.modal-footer {
+  padding: 12px 22px;
+  border-top: 1px solid var(--border-color);
+  background: var(--bg-surface-elevated);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+

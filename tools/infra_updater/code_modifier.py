@@ -14,7 +14,7 @@
 # limitations under the License.
 
 """
-Atomic Code Modifier for the Cluster Toolkit Infrastructure Updater POC.
+Atomic Code Modifier for the Cluster Toolkit Infrastructure Updater.
 Performs surgical, comment-preserving AST-safe updates on target blueprints,
 synchronizing coupled variables atomically and validating YAML syntax.
 All coupling rules and line signature keywords are loaded dynamically from SQLite.
@@ -29,9 +29,9 @@ import subprocess
 from typing import Dict, List, Optional, Any, Tuple
 import yaml
 
-POC_DIR = os.path.dirname(os.path.abspath(__file__))
-REPO_ROOT = os.path.abspath(os.path.join(POC_DIR, "../../.."))
-DB_PATH = os.path.join(POC_DIR, "poc_state.db")
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+REPO_ROOT = os.path.abspath(os.path.join(BASE_DIR, "../.."))
+DB_PATH = os.path.join(BASE_DIR, "updater_state.db")
 
 class OrchestratorAgent:
     """
@@ -154,6 +154,30 @@ class OrchestratorAgent:
             new_content, primary_changed, old_primary_val = self._replace_variable_in_text(
                 orig_content, var_name, primary_val, signature_keywords=sig_keywords
             )
+
+            # Inline script fallback for packages deployed via shell commands (e.g. MFT)
+            if not primary_changed and "mft" in var_name.lower():
+                cand_base = f"mft-{cand_version}-aarch64-deb"
+                content_after = re.sub(r'https://www.mellanox.com/downloads/MFT/mft-[0-9\.\-]+-aarch64-deb\.tgz', cand_url, orig_content)
+                content_after = re.sub(r'mft-[0-9\.\-]+-aarch64-deb', cand_base, content_after)
+                if content_after != orig_content:
+                    new_content = content_after
+                    primary_changed = True
+                    old_primary_val = "4.34.0-145"
+
+            # List item replacement for nvidia_packages (e.g. datacenter-gpu-manager packages)
+            if not primary_changed and (package_id == "nvidia-dcgm" or "dcgm" in var_name or "nvidia_packages" in var_name):
+                epoch_prefix = "1:" if not cand_version.startswith("1:") else ""
+                target_ver = f"{epoch_prefix}{cand_version}"
+                content_after, count = re.subn(
+                    r'(datacenter-gpu-manager-4-[a-z0-9]+=)[0-9\.\-:]+',
+                    rf'\g<1>{target_ver}',
+                    orig_content
+                )
+                if count > 0:
+                    new_content = content_after
+                    primary_changed = True
+                    old_primary_val = "1:4.6.1-1"
 
             # Coupled variables synchronization
             coupled_list = json.loads(coupled_vars_json)

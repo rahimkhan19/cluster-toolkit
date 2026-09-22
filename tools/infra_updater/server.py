@@ -14,7 +14,7 @@
 # limitations under the License.
 
 """
-Interactive Web UI Server for Cluster Toolkit Infrastructure Updater POC.
+Interactive Web UI Server for Cluster Toolkit Infrastructure Updater.
 Serves modern, minimal dashboard and provides REST API for end-to-end triggers.
 """
 
@@ -30,10 +30,10 @@ import sys
 import threading
 import time
 
-POC_DIR = os.path.dirname(os.path.abspath(__file__))
-REPO_ROOT = os.path.abspath(os.path.join(POC_DIR, "../../.."))
-UI_DIR = os.path.join(POC_DIR, "ui")
-DB_PATH = os.path.join(POC_DIR, "poc_state.db")
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+REPO_ROOT = os.path.abspath(os.path.join(BASE_DIR, "../.."))
+UI_DIR = os.path.join(BASE_DIR, "ui")
+DB_PATH = os.path.join(BASE_DIR, "updater_state.db")
 
 # Global execution state buffer
 class LogStreamBuffer:
@@ -72,7 +72,7 @@ def execute_cli_action(cmd_args, action_name):
 
     try:
         proc = subprocess.Popen(
-            [python_exec, "-u", os.path.join(POC_DIR, "run_poc.py")] + cmd_args,
+            [python_exec, "-u", os.path.join(BASE_DIR, "run_updater.py")] + cmd_args,
             cwd=REPO_ROOT,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
@@ -103,7 +103,7 @@ def execute_cli_action(cmd_args, action_name):
         GLOBAL_BUFFER.current_action = "IDLE"
 
 
-class POCDashboardHandler(SimpleHTTPRequestHandler):
+class DashboardHandler(SimpleHTTPRequestHandler):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, directory=UI_DIR, **kwargs)
 
@@ -125,125 +125,134 @@ class POCDashboardHandler(SimpleHTTPRequestHandler):
             self.send_error(404, "Endpoint not found")
 
     def handle_get_state(self):
-        if not os.path.exists(DB_PATH):
-            from init_db import init_database
-            init_database()
+        try:
+            if not os.path.exists(DB_PATH):
+                from init_db import init_database
+                init_database()
 
-        conn = sqlite3.connect(DB_PATH)
-        cursor = conn.cursor()
+            conn = sqlite3.connect(DB_PATH)
+            cursor = conn.cursor()
 
-        # 1. Packages
-        cursor.execute("PRAGMA table_info(packages)")
-        cols = [r[1] for r in cursor.fetchall()]
-        has_upstream = "upstream_version" in cols
-        has_summary = "qualification_summary" in cols
-        has_type = "upstream_type" in cols
-        has_pattern = "version_pattern" in cols
+            # 1. Packages
+            cursor.execute("PRAGMA table_info(packages)")
+            cols = [r[1] for r in cursor.fetchall()]
+            has_upstream = "upstream_version" in cols
+            has_summary = "qualification_summary" in cols
+            has_type = "upstream_type" in cols
+            has_pattern = "version_pattern" in cols
 
-        query = f"""
-            SELECT package_id, name, current_version, 
-                   {'upstream_version' if has_upstream else "'-'"} as upstream_ver,
-                   source_url, 
-                   {'upstream_type' if has_type else "'generic'"} as up_type,
-                   {'version_pattern' if has_pattern else "NULL"} as v_pattern,
-                   status, 
-                   {'qualification_summary' if has_summary else "'Registered baseline.'"} as qual_summary,
-                   updated_at 
-            FROM packages ORDER BY package_id
-        """
-        cursor.execute(query)
-        packages = [
-            {
-                "package_id": r[0], "name": r[1], "current_version": r[2],
-                "upstream_version": r[3] or "-", "source_url": r[4], 
-                "upstream_type": r[5] or "generic",
-                "version_pattern": r[6] or "",
-                "status": r[7], "qualification_summary": r[8] or "Baseline registered. Run qualification to evaluate.",
-                "updated_at": r[9]
+            query = f"""
+                SELECT package_id, name, current_version, 
+                       {'upstream_version' if has_upstream else "'-'"} as upstream_ver,
+                       source_url, 
+                       {'upstream_type' if has_type else "'generic'"} as up_type,
+                       {'version_pattern' if has_pattern else "NULL"} as v_pattern,
+                       status, 
+                       {'qualification_summary' if has_summary else "'Registered baseline.'"} as qual_summary,
+                       updated_at 
+                FROM packages ORDER BY package_id
+            """
+            cursor.execute(query)
+            packages = [
+                {
+                    "package_id": r[0], "name": r[1], "current_version": r[2],
+                    "upstream_version": r[3] or "-", "source_url": r[4], 
+                    "upstream_type": r[5] or "generic",
+                    "version_pattern": r[6] or "",
+                    "status": r[7], "qualification_summary": r[8] or "Baseline registered. Run qualification to evaluate.",
+                    "updated_at": r[9]
+                }
+                for r in cursor.fetchall()
+            ]
+
+            # 2. Blueprint Instances
+            cursor.execute("SELECT instance_id, package_id, blueprint_path, variable_name, coupled_vars FROM blueprint_instances ORDER BY instance_id")
+            instances = [
+                {
+                    "instance_id": r[0], "package_id": r[1], "blueprint_path": r[2],
+                    "variable_name": r[3], "coupled_vars": json.loads(r[4])
+                }
+                for r in cursor.fetchall()
+            ]
+
+            # 3. Learned Rules
+            cursor.execute("SELECT rule_id, package_id, rule_type, version_constraint, action, reason, created_at FROM learned_rules ORDER BY rule_id")
+            rules = [
+                {
+                    "rule_id": r[0], "package_id": r[1], "rule_type": r[2],
+                    "version_constraint": r[3], "action": r[4], "reason": r[5], "created_at": r[6]
+                }
+                for r in cursor.fetchall()
+            ]
+
+            # 4. Candidate Updates
+            cursor.execute("SELECT candidate_id, package_id, version, download_url, status, compatibility_verdict, changelog_summary, created_at FROM candidate_updates ORDER BY created_at DESC")
+            candidates = [
+                {
+                    "candidate_id": r[0], "package_id": r[1], "version": r[2],
+                    "download_url": r[3], "status": r[4],
+                    "compatibility_verdict": r[5] or "UNKNOWN",
+                    "changelog_summary": r[6] or "No changelog summary generated.",
+                    "created_at": r[7]
+                }
+                for r in cursor.fetchall()
+            ]
+
+            # 5. Benchmark Cases
+            cursor.execute("SELECT case_id, category, package_id, test_version, expected_verdict, description FROM benchmark_cases ORDER BY category, case_id")
+            benchmarks = [
+                {
+                    "case_id": r[0], "category": r[1], "package_id": r[2],
+                    "test_version": r[3], "expected_verdict": r[4], "description": r[5]
+                }
+                for r in cursor.fetchall()
+            ]
+
+            conn.close()
+
+            # Git diff stats
+            diff_proc = subprocess.run(
+                ["git", "diff", "--stat", "examples/"],
+                cwd=REPO_ROOT, stdout=subprocess.PIPE, text=True, check=False
+            )
+            git_diff_stat = diff_proc.stdout.strip()
+
+            payload = {
+                "packages": packages,
+                "instances": instances,
+                "rules": rules,
+                "candidates": candidates,
+                "benchmarks": benchmarks,
+                "git_diff_stat": git_diff_stat,
+                "has_modifications": bool(git_diff_stat),
+                "is_running": GLOBAL_BUFFER.is_running,
+                "current_action": GLOBAL_BUFFER.current_action,
+                "last_status": GLOBAL_BUFFER.last_status,
+                "stats": {
+                    "total_packages": len(packages),
+                    "total_instances": len(instances),
+                    "total_rules": len(rules),
+                    "total_benchmarks": len(benchmarks),
+                    "pending_updates": len([c for c in candidates if c["status"] in ("UPDATE_FOUND", "QUALIFIED")]),
+                    "ready_updates": len([c for c in candidates if c["status"] == "READY_FOR_REVIEW"]),
+                    "qualified_candidates": len([c for c in candidates if c["status"] in ("UPDATE_FOUND", "QUALIFIED")]),
+                    "applied_candidates": len([c for c in candidates if c["status"] in ("READY_FOR_REVIEW", "APPLIED")])
+                }
             }
-            for r in cursor.fetchall()
-        ]
 
-        # 2. Blueprint Instances
-        cursor.execute("SELECT instance_id, package_id, blueprint_path, variable_name, coupled_vars FROM blueprint_instances ORDER BY instance_id")
-        instances = [
-            {
-                "instance_id": r[0], "package_id": r[1], "blueprint_path": r[2],
-                "variable_name": r[3], "coupled_vars": json.loads(r[4])
-            }
-            for r in cursor.fetchall()
-        ]
-
-        # 3. Learned Rules
-        cursor.execute("SELECT rule_id, package_id, rule_type, version_constraint, action, reason, created_at FROM learned_rules ORDER BY rule_id")
-        rules = [
-            {
-                "rule_id": r[0], "package_id": r[1], "rule_type": r[2],
-                "version_constraint": r[3], "action": r[4], "reason": r[5], "created_at": r[6]
-            }
-            for r in cursor.fetchall()
-        ]
-
-        # 4. Candidate Updates
-        cursor.execute("SELECT candidate_id, package_id, version, download_url, status, compatibility_verdict, changelog_summary, created_at FROM candidate_updates ORDER BY created_at DESC")
-        candidates = [
-            {
-                "candidate_id": r[0], "package_id": r[1], "version": r[2],
-                "download_url": r[3], "status": r[4],
-                "compatibility_verdict": r[5] or "UNKNOWN",
-                "changelog_summary": r[6] or "No changelog summary generated.",
-                "created_at": r[7]
-            }
-            for r in cursor.fetchall()
-        ]
-
-        # 5. Benchmark Cases
-        cursor.execute("SELECT case_id, category, package_id, test_version, expected_verdict, description FROM benchmark_cases ORDER BY category, case_id")
-        benchmarks = [
-            {
-                "case_id": r[0], "category": r[1], "package_id": r[2],
-                "test_version": r[3], "expected_verdict": r[4], "description": r[5]
-            }
-            for r in cursor.fetchall()
-        ]
-
-        conn.close()
-
-        # Git diff stats
-        diff_proc = subprocess.run(
-            ["git", "diff", "--stat", "examples/"],
-            cwd=REPO_ROOT, stdout=subprocess.PIPE, text=True, check=False
-        )
-        git_diff_stat = diff_proc.stdout.strip()
-
-        payload = {
-            "packages": packages,
-            "instances": instances,
-            "rules": rules,
-            "candidates": candidates,
-            "benchmarks": benchmarks,
-            "git_diff_stat": git_diff_stat,
-            "has_modifications": bool(git_diff_stat),
-            "is_running": GLOBAL_BUFFER.is_running,
-            "current_action": GLOBAL_BUFFER.current_action,
-            "last_status": GLOBAL_BUFFER.last_status,
-            "stats": {
-                "total_packages": len(packages),
-                "total_instances": len(instances),
-                "total_rules": len(rules),
-                "total_benchmarks": len(benchmarks),
-                "pending_updates": len([c for c in candidates if c["status"] in ("UPDATE_FOUND", "QUALIFIED")]),
-                "ready_updates": len([c for c in candidates if c["status"] == "READY_FOR_REVIEW"]),
-                "qualified_candidates": len([c for c in candidates if c["status"] in ("UPDATE_FOUND", "QUALIFIED")]),
-                "applied_candidates": len([c for c in candidates if c["status"] in ("READY_FOR_REVIEW", "APPLIED")])
-            }
-        }
-
-        self.send_response(200)
-        self.send_header("Content-Type", "application/json")
-        self.send_header("Access-Control-Allow-Origin", "*")
-        self.end_headers()
-        self.wfile.write(json.dumps(payload).encode("utf-8"))
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            self.wfile.write(json.dumps(payload).encode("utf-8"))
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            self.send_response(500)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            self.wfile.write(json.dumps({"error": str(e)}).encode("utf-8"))
 
     def handle_get_logs(self):
         payload = {
@@ -325,7 +334,7 @@ class POCDashboardHandler(SimpleHTTPRequestHandler):
 
 
 def run_server(port=8080):
-    server = ThreadingHTTPServer(("0.0.0.0", port), POCDashboardHandler)
+    server = ThreadingHTTPServer(("0.0.0.0", port), DashboardHandler)
     print(f"\n======================================================================")
     print(f"  CLUSTER TOOLKIT UPDATER - WEB DASHBOARD SERVER")
     print(f"======================================================================")

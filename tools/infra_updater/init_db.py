@@ -29,8 +29,8 @@ import json
 import os
 import sqlite3
 
-POC_DIR = os.path.dirname(os.path.abspath(__file__))
-DB_PATH = os.path.join(POC_DIR, "poc_state.db")
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+DB_PATH = os.path.join(BASE_DIR, "updater_state.db")
 
 def init_database():
     if os.path.exists(DB_PATH):
@@ -125,9 +125,9 @@ def init_database():
             "nvidia-cuda-x86",
             "NVIDIA CUDA Toolkit (x86_64)",
             "13.0.3_580.126.20",
-            "https://developer.nvidia.com/cuda-toolkit-archive",
+            "https://developer.nvidia.com/cuda-downloads",
             "archive_scraper",
-            r"https://developer\.download\.nvidia\.com/compute/cuda/[0-9\.]+/local_installers/cuda_([0-9\.]+_[0-9\._]+)_linux\.run",
+            r"https://developer\.download\.nvidia\.com/compute/cuda/[0-9\.]+/local_installers/cuda_([0-9\.]+).*_linux\.run",
             "REGISTERED",
             None
         ),
@@ -135,9 +135,9 @@ def init_database():
             "nvidia-cuda-arm64",
             "NVIDIA CUDA Toolkit (ARM64 SBSA)",
             "13.0.0_580.65.06",
-            "https://developer.nvidia.com/cuda-toolkit-archive",
+            "https://developer.nvidia.com/cuda-downloads",
             "archive_scraper",
-            r"https://developer\.download\.nvidia\.com/compute/cuda/[0-9\.]+/local_installers/cuda_([0-9\.]+_[0-9\._]+)_linux_sbsa\.run",
+            r"https://developer\.download\.nvidia\.com/compute/cuda/[0-9\.]+/local_installers/cuda_([0-9\.]+).*_linux_sbsa\.run",
             "REGISTERED",
             None
         ),
@@ -155,8 +155,8 @@ def init_database():
             "mft",
             "Mellanox Firmware Tools",
             "4.34.0-145",
-            "https://www.mellanox.com/downloads/MFT/",
-            "raw_manifest",
+            "https://network.nvidia.com/products/adapter-software/firmware-tools/",
+            "mft_api",
             r"mft-([0-9\.\-]+)-",
             "REGISTERED",
             None
@@ -201,6 +201,46 @@ def init_database():
             "REGISTERED",
             None
         ),
+        (
+            "nvidia-dcgm",
+            "NVIDIA Data Center GPU Manager",
+            "1:4.6.1-1",
+            "https://developer.download.nvidia.com/compute/cuda/repos/",
+            "apt_repository",
+            r"datacenter-gpu-manager-4-[a-z0-9]+[=:]([0-9\.\-:]+)",
+            "REGISTERED",
+            None
+        ),
+        (
+            "mpi-operator",
+            "Kubeflow MPI Operator",
+            "v0.8.2",
+            "https://github.com/kubeflow/mpi-operator",
+            "github_release",
+            r"v[0-9\.]+",
+            "REGISTERED",
+            None
+        ),
+        (
+            "spack",
+            "Spack HPC Package Manager",
+            "v0.19.0",
+            "https://github.com/spack/spack",
+            "github_release",
+            r"v[0-9\.]+",
+            "REGISTERED",
+            None
+        ),
+        (
+            "openmpi",
+            "OpenMPI Library",
+            "5.0.8",
+            "https://github.com/open-mpi/ompi",
+            "github_release",
+            r"v?[0-9\.]+",
+            "REGISTERED",
+            None
+        ),
     ]
 
     cursor.executemany("""
@@ -212,6 +252,7 @@ def init_database():
     # Seed Blueprint Instances (Section 2.2 naming: <blueprint>-<package>)
     # -------------------------------------------------------------------------
     instances_data = [
+        # nvidia-cuda-x86
         (
             "a3ultra-slurm-cuda",
             "nvidia-cuda-x86",
@@ -228,6 +269,8 @@ def init_database():
             json.dumps([{"variable_name": "cuda_installer_file", "pattern": "/tmp/{filename}"}]),
             json.dumps(["cuda", "nvidia"])
         ),
+
+        # nvidia-cuda-arm64
         (
             "a4xhigh-slurm-cuda",
             "nvidia-cuda-arm64",
@@ -236,6 +279,8 @@ def init_database():
             json.dumps([{"variable_name": "cuda_installer_file", "pattern": "/tmp/{filename}"}]),
             json.dumps(["cuda", "nvidia"])
         ),
+
+        # gve-dkms
         (
             "a3m-image-gve",
             "gve-dkms",
@@ -252,30 +297,104 @@ def init_database():
             json.dumps([]),
             json.dumps(["gve", "ethernet"])
         ),
+
+        # mft
         (
             "a4xmax-slurm-mft",
             "mft",
             "examples/machine-learning/a4x-maxgpu-4g-metal/a4xmax-bm-slurm-blueprint.yaml",
             "mft_installer_url",
             json.dumps([]),
-            json.dumps(["mft"])
+            json.dumps(["mft", "mellanox"])
         ),
+        (
+            "a4x-vm-mft",
+            "mft",
+            "examples/machine-learning/a4x-highgpu-4g/a4x-vm.yaml",
+            "mft_installer_url",
+            json.dumps([]),
+            json.dumps(["mft", "mellanox"])
+        ),
+
+        # slurm-gcp
+        (
+            "shared-image-slurm",
+            "slurm-gcp",
+            "examples/machine-learning/build-service-images/shared.yaml",
+            "slurm_gcp_version",
+            json.dumps([]),
+            json.dumps(["slurm", "schedmd"])
+        ),
+        (
+            "a3high-slurm-gcp",
+            "slurm-gcp",
+            "examples/machine-learning/a3-highgpu-8g/a3high-slurm-blueprint.yaml",
+            "build_slurm_from_git_ref",
+            json.dumps([]),
+            json.dumps(["slurm", "schedmd"])
+        ),
+        (
+            "a3mega-slurm-gcp",
+            "slurm-gcp",
+            "examples/machine-learning/a3-megagpu-8g/a3mega-slurm-blueprint.yaml",
+            "build_slurm_from_git_ref",
+            json.dumps([]),
+            json.dumps(["slurm", "schedmd"])
+        ),
+        (
+            "a3mega-gcsfuse-slurm-gcp",
+            "slurm-gcp",
+            "examples/machine-learning/a3-megagpu-8g/a3mega-slurm-gcsfuse-lssd-blueprint.yaml",
+            "build_slurm_from_git_ref",
+            json.dumps([]),
+            json.dumps(["slurm", "schedmd"])
+        ),
+        (
+            "a4xmax-slurm-gcp",
+            "slurm-gcp",
+            "examples/machine-learning/a4x-maxgpu-4g-metal/a4xmax-bm-slurm-blueprint.yaml",
+            "build_slurm_from_git_ref",
+            json.dumps([]),
+            json.dumps(["slurm", "schedmd"])
+        ),
+        (
+            "ml-slurm-g4-gcp",
+            "slurm-gcp",
+            "examples/ml-slurm-g4.yaml",
+            "build_slurm_from_git_ref",
+            json.dumps([]),
+            json.dumps(["slurm", "schedmd"])
+        ),
+        (
+            "ml-slurm-g4-vgpu-gcp",
+            "slurm-gcp",
+            "examples/ml-slurm-g4-vgpu.yaml",
+            "build_slurm_from_git_ref",
+            json.dumps([]),
+            json.dumps(["slurm", "schedmd"])
+        ),
+
+        # nccl-tcpx
         (
             "gke-a3-tcpx",
             "nccl-tcpx",
             "examples/gke-a3-highgpu/gke-a3-highgpu.yaml",
             "nccl_tcpx_version",
             json.dumps([]),
-            json.dumps(["tcpx"])
+            json.dumps(["tcpx", "nccl"])
         ),
+
+        # nccl-tcpxo
         (
             "gke-a3mega-tcpxo",
             "nccl-tcpxo",
             "examples/gke-a3-megagpu/gke-a3-megagpu.yaml",
             "nccl_tcpxo_version",
             json.dumps([]),
-            json.dumps(["tcpxo"])
+            json.dumps(["tcpxo", "nccl"])
         ),
+
+        # nccl-plugin
         (
             "a4xmax-slurm-nccl",
             "nccl-plugin",
@@ -284,14 +403,94 @@ def init_database():
             json.dumps([]),
             json.dumps(["nccl", "rdma"])
         ),
+
+        # nvidia-dcgm
         (
-            "shared-image-slurm",
-            "slurm-gcp",
-            "examples/machine-learning/build-service-images/shared.yaml",
-            "slurm_gcp_version",
+            "a3ultra-slurm-dcgm",
+            "nvidia-dcgm",
+            "examples/machine-learning/a3-ultragpu-8g/a3ultra-slurm-blueprint.yaml",
+            "nvidia_packages",
             json.dumps([]),
-            json.dumps(["slurm"])
+            json.dumps(["dcgm", "datacenter-gpu-manager"])
         ),
+        (
+            "a4high-slurm-dcgm",
+            "nvidia-dcgm",
+            "examples/machine-learning/a4-highgpu-8g/a4high-slurm-blueprint.yaml",
+            "nvidia_packages",
+            json.dumps([]),
+            json.dumps(["dcgm", "datacenter-gpu-manager"])
+        ),
+        (
+            "a4xhigh-slurm-dcgm",
+            "nvidia-dcgm",
+            "examples/machine-learning/a4x-highgpu-4g/a4xhigh-slurm-blueprint.yaml",
+            "nvidia_packages",
+            json.dumps([]),
+            json.dumps(["dcgm", "datacenter-gpu-manager"])
+        ),
+        (
+            "a3mega-slurm-dcgm",
+            "nvidia-dcgm",
+            "examples/machine-learning/a3-megagpu-8g/a3mega-slurm-blueprint.yaml",
+            "nvidia_packages",
+            json.dumps([]),
+            json.dumps(["dcgm", "datacenter-gpu-manager"])
+        ),
+        (
+            "a4xmax-slurm-dcgm",
+            "nvidia-dcgm",
+            "examples/machine-learning/a4x-maxgpu-4g-metal/a4xmax-bm-slurm-blueprint.yaml",
+            "nvidia_packages",
+            json.dumps([]),
+            json.dumps(["dcgm", "datacenter-gpu-manager"])
+        ),
+        (
+            "a3high-slurm-dcgm",
+            "nvidia-dcgm",
+            "examples/machine-learning/a3-highgpu-8g/a3high-slurm-blueprint.yaml",
+            "nvidia_packages",
+            json.dumps([]),
+            json.dumps(["dcgm", "datacenter-gpu-manager"])
+        ),
+
+        # mpi-operator
+        (
+            "gke-h4d-mpi-operator",
+            "mpi-operator",
+            "examples/gke-h4d/gke-h4d.yaml",
+            "source",
+            json.dumps([]),
+            json.dumps(["mpi-operator", "kubeflow"])
+        ),
+        (
+            "dws-gke-h4d-mpi-operator",
+            "mpi-operator",
+            "examples/gke-consumption-options/dws-flex-start-compact-placement/gke-h4d/gke-h4d.yaml",
+            "source",
+            json.dumps([]),
+            json.dumps(["mpi-operator", "kubeflow"])
+        ),
+
+        # spack
+        (
+            "batch-mpi-spack",
+            "spack",
+            "examples/batch-mpi.yaml",
+            "spack_ref",
+            json.dumps([]),
+            json.dumps(["spack", "mpi"])
+        ),
+
+        # openmpi
+        (
+            "a4x-vm-openmpi",
+            "openmpi",
+            "examples/machine-learning/a4x-highgpu-4g/a4x-vm.yaml",
+            "openmpi_version",
+            json.dumps([]),
+            json.dumps(["openmpi", "mpi"])
+        )
     ]
 
     cursor.executemany("""

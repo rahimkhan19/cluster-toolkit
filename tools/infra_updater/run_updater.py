@@ -14,7 +14,7 @@
 # limitations under the License.
 
 """
-Master CLI Runner for the Cluster Toolkit Infrastructure Updater POC.
+Master CLI Runner for the Cluster Toolkit Infrastructure Updater.
 Aligns with Implementation Guide: Automated Dependency Management.
 Demonstrates:
   1. Source Qualification Agent (Section 4.2): Upstream release discovery, GA stability filtering, policy rule checks.
@@ -33,9 +33,9 @@ import subprocess
 import sys
 import time
 
-POC_DIR = os.path.dirname(os.path.abspath(__file__))
-REPO_ROOT = os.path.abspath(os.path.join(POC_DIR, "../../.."))
-DB_PATH = os.path.join(POC_DIR, "poc_state.db")
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+REPO_ROOT = os.path.abspath(os.path.join(BASE_DIR, "../.."))
+DB_PATH = os.path.join(BASE_DIR, "updater_state.db")
 
 from init_db import init_database, preview_tables
 from source_agent import SourceQualificationAgent, UpfrontRuleChecker
@@ -98,7 +98,7 @@ def run_check_all(model: str = "gemini-3.8-flash"):
             print()
 
     print(f"[INFO] Qualified candidate updates stored in table '{BOLD}candidate_updates{RESET}'.")
-    print(f"[TIP] Run '{BOLD}python3 tools/infra_updater/poc/run_poc.py --apply <package_id>{RESET}' to apply changes to target blueprints.")
+    print(f"[TIP] Run '{BOLD}python3 tools/infra_updater/run_updater.py --apply <package_id>{RESET}' to apply changes to target blueprints.")
 
 
 def run_apply(package_id: str):
@@ -278,7 +278,7 @@ def run_end_to_end(model: str = "gemini-3.8-flash"):
     print(f"\n{BOLD}{GREEN}======================================================================{RESET}")
     print(f"{BOLD}{GREEN}                   PIPELINE EXECUTION COMPLETE                        {RESET}")
     print(f"{BOLD}{GREEN}======================================================================{RESET}\n")
-    print(f"[TIP] Run '{BOLD}python3 tools/infra_updater/poc/run_poc.py --reset{RESET}' to restore files and reset database.\n")
+    print(f"[TIP] Run '{BOLD}python3 tools/infra_updater/run_updater.py --reset{RESET}' to restore files and reset database.\n")
 
 
 def run_reset():
@@ -294,16 +294,16 @@ def run_reset():
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Cluster Toolkit Infrastructure Updater - Proof of Concept Runner",
+        description="Cluster Toolkit Infrastructure Updater - Automated Dependency Management Runner",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  python3 run_poc.py --check-all           # Run qualification (LLM GA filter + learned rules + LLM changelog)
-  python3 run_poc.py --test-llm-triage     # Demonstrate LLM changelog & breaking change analysis
-  python3 run_poc.py --apply <package_id>  # Apply update and show clean git diff
-  python3 run_poc.py --test-rule-blocking   # Evaluate upfront policy rule filter
-  python3 run_poc.py --show-tables          # Preview all SQLite state tables
-  python3 run_poc.py --reset                # Revert files and reset database
+  python3 run_updater.py --check-all           # Run qualification (LLM candidate extraction + learned rules + LLM changelog)
+  python3 run_updater.py --test-llm-triage     # Demonstrate LLM changelog & breaking change analysis
+  python3 run_updater.py --apply <package_id>  # Apply update and show clean git diff
+  python3 run_updater.py --test-rule-blocking   # Evaluate upfront policy rule filter
+  python3 run_updater.py --show-tables          # Preview all SQLite state tables
+  python3 run_updater.py --reset                # Revert files and reset database
 """
     )
     parser.add_argument("-m", "--model", default="gemini-3.8-flash", help="Gemini LLM model to use (default: gemini-3.8-flash)")
