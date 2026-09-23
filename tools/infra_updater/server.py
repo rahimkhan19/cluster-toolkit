@@ -24,16 +24,20 @@ import io
 import json
 import os
 import re
-import sqlite3
 import subprocess
 import sys
 import threading
 import time
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+if BASE_DIR not in sys.path:
+    sys.path.insert(0, BASE_DIR)
 REPO_ROOT = os.path.abspath(os.path.join(BASE_DIR, "../.."))
+if REPO_ROOT not in sys.path:
+    sys.path.insert(0, REPO_ROOT)
 UI_DIR = os.path.join(BASE_DIR, "ui")
-DB_PATH = os.path.join(BASE_DIR, "updater_state.db")
+
+from tools.infra_updater.datastore import get_datastore
 
 # Global execution state buffer
 class LogStreamBuffer:
@@ -60,6 +64,23 @@ class LogStreamBuffer:
             return "".join(self.lines)
 
 GLOBAL_BUFFER = LogStreamBuffer()
+
+_GIT_DIFF_CACHE = {"stat": "", "timestamp": 0.0}
+_GIT_DIFF_TTL_SEC = 5.0
+
+def get_cached_git_diff_stat(force: bool = False) -> str:
+    now = time.time()
+    if force or (now - _GIT_DIFF_CACHE["timestamp"] > _GIT_DIFF_TTL_SEC):
+        diff_proc = subprocess.run(
+            ["git", "diff", "--stat", "examples/"],
+            cwd=REPO_ROOT, stdout=subprocess.PIPE, text=True, check=False
+        )
+        _GIT_DIFF_CACHE["stat"] = diff_proc.stdout.strip()
+        _GIT_DIFF_CACHE["timestamp"] = now
+    return _GIT_DIFF_CACHE["stat"]
+
+def invalidate_git_diff_cache():
+    _GIT_DIFF_CACHE["timestamp"] = 0.0
 
 def execute_cli_action(cmd_args, action_name):
     GLOBAL_BUFFER.is_running = True
@@ -89,9 +110,11 @@ def execute_cli_action(cmd_args, action_name):
         return_code = proc.wait()
 
         if return_code == 0:
+            invalidate_git_diff_cache()
             GLOBAL_BUFFER.last_status = "SUCCESS"
             GLOBAL_BUFFER.write_line(f"\n>>> [{time.strftime('%H:%M:%S')}] COMPLETED SUCCESSFULLY <<<\n")
         else:
+            invalidate_git_diff_cache()
             GLOBAL_BUFFER.last_status = "FAILED"
             GLOBAL_BUFFER.write_line(f"\n>>> [{time.strftime('%H:%M:%S')}] FAILED WITH CODE {return_code} <<<\n")
 
@@ -99,6 +122,7 @@ def execute_cli_action(cmd_args, action_name):
         GLOBAL_BUFFER.last_status = "ERROR"
         GLOBAL_BUFFER.write_line(f"\n>>> [ERROR] Exception executing {action_name}: {e} <<<\n")
     finally:
+        invalidate_git_diff_cache()
         GLOBAL_BUFFER.is_running = False
         GLOBAL_BUFFER.current_action = "IDLE"
 
@@ -106,6 +130,12 @@ def execute_cli_action(cmd_args, action_name):
 class DashboardHandler(SimpleHTTPRequestHandler):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, directory=UI_DIR, **kwargs)
+
+    def end_headers(self):
+        self.send_header("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0")
+        self.send_header("Pragma", "no-cache")
+        self.send_header("Expires", "0")
+        super().end_headers()
 
     def do_GET(self):
         if self.path == "/api/state":
@@ -126,102 +156,23 @@ class DashboardHandler(SimpleHTTPRequestHandler):
 
     def handle_get_state(self):
         try:
-            if not os.path.exists(DB_PATH):
-                from init_db import init_database
-                init_database()
+            store = get_datastore()
+            packages = store.list_packages()
+            instances = store.list_all_blueprints()
+            rules = store.list_rules()
+            candidates = store.list_candidates()
+            audit_runs = store.list_audit_runs(limit=20)
+            benchmarks = store.list_benchmarks()
 
-            conn = sqlite3.connect(DB_PATH)
-            cursor = conn.cursor()
-
-            # 1. Packages
-            cursor.execute("PRAGMA table_info(packages)")
-            cols = [r[1] for r in cursor.fetchall()]
-            has_upstream = "upstream_version" in cols
-            has_summary = "qualification_summary" in cols
-            has_type = "upstream_type" in cols
-            has_pattern = "version_pattern" in cols
-
-            query = f"""
-                SELECT package_id, name, current_version, 
-                       {'upstream_version' if has_upstream else "'-'"} as upstream_ver,
-                       source_url, 
-                       {'upstream_type' if has_type else "'generic'"} as up_type,
-                       {'version_pattern' if has_pattern else "NULL"} as v_pattern,
-                       status, 
-                       {'qualification_summary' if has_summary else "'Registered baseline.'"} as qual_summary,
-                       updated_at 
-                FROM packages ORDER BY package_id
-            """
-            cursor.execute(query)
-            packages = [
-                {
-                    "package_id": r[0], "name": r[1], "current_version": r[2],
-                    "upstream_version": r[3] or "-", "source_url": r[4], 
-                    "upstream_type": r[5] or "generic",
-                    "version_pattern": r[6] or "",
-                    "status": r[7], "qualification_summary": r[8] or "Baseline registered. Run qualification to evaluate.",
-                    "updated_at": r[9]
-                }
-                for r in cursor.fetchall()
-            ]
-
-            # 2. Blueprint Instances
-            cursor.execute("SELECT instance_id, package_id, blueprint_path, variable_name, coupled_vars FROM blueprint_instances ORDER BY instance_id")
-            instances = [
-                {
-                    "instance_id": r[0], "package_id": r[1], "blueprint_path": r[2],
-                    "variable_name": r[3], "coupled_vars": json.loads(r[4])
-                }
-                for r in cursor.fetchall()
-            ]
-
-            # 3. Learned Rules
-            cursor.execute("SELECT rule_id, package_id, rule_type, version_constraint, action, reason, created_at FROM learned_rules ORDER BY rule_id")
-            rules = [
-                {
-                    "rule_id": r[0], "package_id": r[1], "rule_type": r[2],
-                    "version_constraint": r[3], "action": r[4], "reason": r[5], "created_at": r[6]
-                }
-                for r in cursor.fetchall()
-            ]
-
-            # 4. Candidate Updates
-            cursor.execute("SELECT candidate_id, package_id, version, download_url, status, compatibility_verdict, changelog_summary, created_at FROM candidate_updates ORDER BY created_at DESC")
-            candidates = [
-                {
-                    "candidate_id": r[0], "package_id": r[1], "version": r[2],
-                    "download_url": r[3], "status": r[4],
-                    "compatibility_verdict": r[5] or "UNKNOWN",
-                    "changelog_summary": r[6] or "No changelog summary generated.",
-                    "created_at": r[7]
-                }
-                for r in cursor.fetchall()
-            ]
-
-            # 5. Benchmark Cases
-            cursor.execute("SELECT case_id, category, package_id, test_version, expected_verdict, description FROM benchmark_cases ORDER BY category, case_id")
-            benchmarks = [
-                {
-                    "case_id": r[0], "category": r[1], "package_id": r[2],
-                    "test_version": r[3], "expected_verdict": r[4], "description": r[5]
-                }
-                for r in cursor.fetchall()
-            ]
-
-            conn.close()
-
-            # Git diff stats
-            diff_proc = subprocess.run(
-                ["git", "diff", "--stat", "examples/"],
-                cwd=REPO_ROOT, stdout=subprocess.PIPE, text=True, check=False
-            )
-            git_diff_stat = diff_proc.stdout.strip()
+            # Git diff stats (cached with 5s TTL to prevent continuous subprocess execution)
+            git_diff_stat = get_cached_git_diff_stat()
 
             payload = {
                 "packages": packages,
                 "instances": instances,
                 "rules": rules,
                 "candidates": candidates,
+                "audit_runs": audit_runs,
                 "benchmarks": benchmarks,
                 "git_diff_stat": git_diff_stat,
                 "has_modifications": bool(git_diff_stat),
@@ -233,10 +184,10 @@ class DashboardHandler(SimpleHTTPRequestHandler):
                     "total_instances": len(instances),
                     "total_rules": len(rules),
                     "total_benchmarks": len(benchmarks),
-                    "pending_updates": len([c for c in candidates if c["status"] in ("UPDATE_FOUND", "QUALIFIED")]),
-                    "ready_updates": len([c for c in candidates if c["status"] == "READY_FOR_REVIEW"]),
-                    "qualified_candidates": len([c for c in candidates if c["status"] in ("UPDATE_FOUND", "QUALIFIED")]),
-                    "applied_candidates": len([c for c in candidates if c["status"] in ("READY_FOR_REVIEW", "APPLIED")])
+                    "pending_updates": len([c for c in candidates if c.get("status") in ("UPDATE_FOUND", "QUALIFIED")]),
+                    "ready_updates": len([c for c in candidates if c.get("status") == "READY_FOR_REVIEW"]),
+                    "qualified_candidates": len([c for c in candidates if c.get("status") in ("UPDATE_FOUND", "QUALIFIED")]),
+                    "applied_candidates": len([c for c in candidates if c.get("status") in ("READY_FOR_REVIEW", "APPLIED")])
                 }
             }
 
@@ -317,7 +268,7 @@ class DashboardHandler(SimpleHTTPRequestHandler):
             action_name = f"Orchestrator Agent Update ({pkg_id})"
         elif action == "reset":
             cmd_args = ["--reset"]
-            action_name = "Reset Environment & Database"
+            action_name = "Reset Environment & State"
         else:
             self.send_error(400, f"Unknown action: {action}")
             return

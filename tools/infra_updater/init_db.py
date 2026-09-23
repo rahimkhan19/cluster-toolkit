@@ -14,109 +14,31 @@
 # limitations under the License.
 
 """
-Initializes and populates the SQLite state database for the Cluster Toolkit
+Initializes and populates the canonical state store for the Cluster Toolkit
 Automated Dependency Management pipeline.
 
 Fully aligned with Section 2 of the Implementation Guide:
-- Table: packages (Canonical Package Registry with status: REGISTERED, UPDATE_FOUND, READY_FOR_REVIEW, UP_TO_DATE, SNOOZED, BLOCKED, OBSOLETE)
-- Table: blueprint_instances (Blueprint Locations with coupled variables and signature keywords)
-- Table: candidate_updates (Candidate Update Lifecycle: UPDATE_FOUND, TESTING, READY_FOR_REVIEW, MERGED, CANCELLED)
-- Table: learned_rules (Persistent Rule Engine with multi-blueprint scope, action, source, and expiration)
-- Table: benchmark_cases (Dynamic Test Data for upfront rule enforcement and semantic changelog triage)
+- Entity: packages (Canonical Package Registry with status: REGISTERED, UPDATE_FOUND, READY_FOR_REVIEW, UP_TO_DATE, SNOOZED, BLOCKED, OBSOLETE)
+- Entity: blueprint_instances (Blueprint Locations with coupled variables and signature keywords)
+- Entity: candidate_updates (Candidate Update Lifecycle: UPDATE_FOUND, TESTING, READY_FOR_REVIEW, MERGED, CANCELLED)
+- Entity: learned_rules (Persistent Rule Engine with multi-blueprint scope, action, source, and expiration)
+- Entity: benchmark_cases (Dynamic Test Data for upfront rule enforcement and semantic changelog triage)
 """
 
 import json
 import os
-import sqlite3
+import sys
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-DB_PATH = os.path.join(BASE_DIR, "updater_state.db")
+if BASE_DIR not in sys.path:
+    sys.path.insert(0, BASE_DIR)
+REPO_ROOT = os.path.dirname(os.path.dirname(BASE_DIR))
+if REPO_ROOT not in sys.path:
+    sys.path.insert(0, REPO_ROOT)
 
-def init_database():
-    if os.path.exists(DB_PATH):
-        os.remove(DB_PATH)
-        print(f"[INFO] Cleared existing database at {DB_PATH}")
+JSON_PATH = os.path.join(BASE_DIR, "updater_state.json")
 
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-
-    # 1. Table: packages (Canonical Package Registry - Section 2.1)
-    # Long-term policy state: REGISTERED, SNOOZED, BLOCKED, OBSOLETE
-    cursor.execute("""
-    CREATE TABLE packages (
-        package_id VARCHAR(64) PRIMARY KEY,
-        name VARCHAR(64) NOT NULL,
-        current_version VARCHAR(64) NOT NULL,
-        upstream_version VARCHAR(64) NULL,
-        source_url TEXT NOT NULL,
-        upstream_type VARCHAR(32) NOT NULL DEFAULT 'github_release',
-        version_pattern TEXT NULL,
-        status VARCHAR(32) NOT NULL DEFAULT 'REGISTERED',
-        qualification_summary TEXT NULL,
-        snooze_until TIMESTAMP NULL,
-        updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
-    );
-    """)
-
-    # 2. Table: blueprint_instances (Blueprint Locations - Section 2.2)
-    # instance_id format: <blueprint-slug>-<package-slug>
-    cursor.execute("""
-    CREATE TABLE blueprint_instances (
-        instance_id VARCHAR(64) PRIMARY KEY,
-        package_id VARCHAR(64) NOT NULL REFERENCES packages(package_id),
-        blueprint_path VARCHAR(255) NOT NULL,
-        variable_name VARCHAR(64) NOT NULL,
-        coupled_vars JSON NOT NULL DEFAULT '[]',
-        signature_keywords JSON NOT NULL DEFAULT '[]'
-    );
-    """)
-
-    # 3. Table: candidate_updates (Candidate Update Lifecycle - Section 2.3 & 3.1)
-    # Workflow states: UPDATE_FOUND, TESTING, READY_FOR_REVIEW, TEST_FAILED, MERGED, SUPERSEDED, CANCELLED
-    cursor.execute("""
-    CREATE TABLE candidate_updates (
-        candidate_id VARCHAR(36) PRIMARY KEY,
-        package_id VARCHAR(64) NOT NULL REFERENCES packages(package_id),
-        version VARCHAR(64) NOT NULL,
-        download_url TEXT NOT NULL,
-        checksum VARCHAR(128) NULL,
-        pr_url TEXT NULL,
-        status VARCHAR(32) NOT NULL DEFAULT 'UPDATE_FOUND',
-        compatibility_verdict VARCHAR(32) NULL,
-        changelog_summary TEXT NULL,
-        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
-    );
-    """)
-
-    # 4. Table: learned_rules (Persistent Rule Engine with Scope - Section 2.4 & Case 3)
-    cursor.execute("""
-    CREATE TABLE learned_rules (
-        rule_id VARCHAR(36) PRIMARY KEY,
-        package_id VARCHAR(64) NOT NULL REFERENCES packages(package_id),
-        rule_type VARCHAR(32) NOT NULL,
-        version_constraint VARCHAR(64) NOT NULL,
-        scope JSON NOT NULL DEFAULT '{"blueprint": "*"}',
-        action VARCHAR(32) NOT NULL DEFAULT 'BLOCK',
-        reason TEXT NOT NULL,
-        source VARCHAR(32) NOT NULL DEFAULT 'CI_FAILURE_LOG',
-        expires_at TIMESTAMP NULL,
-        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
-    );
-    """)
-
-    # 5. Table: benchmark_cases (Dynamic Test Suites)
-    cursor.execute("""
-    CREATE TABLE benchmark_cases (
-        case_id VARCHAR(64) PRIMARY KEY,
-        category VARCHAR(32) NOT NULL,
-        package_id VARCHAR(64) NOT NULL REFERENCES packages(package_id),
-        test_version VARCHAR(64) NOT NULL,
-        sample_changelog TEXT NULL,
-        expected_verdict VARCHAR(32) NOT NULL,
-        description TEXT NOT NULL
-    );
-    """)
-
+def init_database(preserve_candidates: bool = False):
     # -------------------------------------------------------------------------
     # Seed Canonical Infrastructure Packages (Section 2.1)
     # -------------------------------------------------------------------------
@@ -127,7 +49,6 @@ def init_database():
             "13.0.3_580.126.20",
             "https://developer.nvidia.com/cuda-downloads",
             "archive_scraper",
-            r"https://developer\.download\.nvidia\.com/compute/cuda/[0-9\.]+/local_installers/cuda_([0-9\.]+).*_linux\.run",
             "REGISTERED",
             None
         ),
@@ -137,7 +58,6 @@ def init_database():
             "13.0.0_580.65.06",
             "https://developer.nvidia.com/cuda-downloads",
             "archive_scraper",
-            r"https://developer\.download\.nvidia\.com/compute/cuda/[0-9\.]+/local_installers/cuda_([0-9\.]+).*_linux_sbsa\.run",
             "REGISTERED",
             None
         ),
@@ -147,7 +67,6 @@ def init_database():
             "1.4.3",
             "https://github.com/GoogleCloudPlatform/compute-virtual-ethernet-linux",
             "github_release",
-            r".*\.deb$",
             "REGISTERED",
             None
         ),
@@ -157,7 +76,6 @@ def init_database():
             "4.34.0-145",
             "https://network.nvidia.com/products/adapter-software/firmware-tools/",
             "mft_api",
-            r"mft-([0-9\.\-]+)-",
             "REGISTERED",
             None
         ),
@@ -167,7 +85,6 @@ def init_database():
             "v3.1.9",
             "https://raw.githubusercontent.com/GoogleCloudPlatform/container-engine-accelerators/master/gpudirect-tcpx/nccl-tcpx-installer.yaml",
             "raw_manifest",
-            r"nccl-plugin-gpudirecttcpx-dev:(v[0-9\.]+)",
             "REGISTERED",
             None
         ),
@@ -177,7 +94,6 @@ def init_database():
             "v1.0.15",
             "https://raw.githubusercontent.com/GoogleCloudPlatform/container-engine-accelerators/master/gpudirect-tcpxo/nccl-tcpxo-installer.yaml",
             "raw_manifest",
-            r"nccl-plugin-gpudirecttcpx-dev:(v[0-9\.]+)",
             "REGISTERED",
             None
         ),
@@ -187,7 +103,6 @@ def init_database():
             "v1.1.1",
             "https://raw.githubusercontent.com/GoogleCloudPlatform/container-engine-accelerators/master/gpudirect-rdma/nccl-rdma-installer-a4x.yaml",
             "raw_manifest",
-            r"nccl-plugin-gib-arm64:(v[0-9\.]+)",
             "REGISTERED",
             None
         ),
@@ -197,7 +112,6 @@ def init_database():
             "6.13.1",
             "https://github.com/GoogleCloudPlatform/slurm-gcp",
             "github_release",
-            None,
             "REGISTERED",
             None
         ),
@@ -207,7 +121,6 @@ def init_database():
             "1:4.6.1-1",
             "https://developer.download.nvidia.com/compute/cuda/repos/",
             "apt_repository",
-            r"datacenter-gpu-manager-4-[a-z0-9]+[=:]([0-9\.\-:]+)",
             "REGISTERED",
             None
         ),
@@ -217,7 +130,6 @@ def init_database():
             "v0.8.2",
             "https://github.com/kubeflow/mpi-operator",
             "github_release",
-            r"v[0-9\.]+",
             "REGISTERED",
             None
         ),
@@ -227,7 +139,6 @@ def init_database():
             "v0.19.0",
             "https://github.com/spack/spack",
             "github_release",
-            r"v[0-9\.]+",
             "REGISTERED",
             None
         ),
@@ -237,7 +148,6 @@ def init_database():
             "5.0.8",
             "https://github.com/open-mpi/ompi",
             "github_release",
-            r"v?[0-9\.]+",
             "REGISTERED",
             None
         ),
@@ -247,7 +157,6 @@ def init_database():
             "v25.8.0",
             "https://github.com/kubernetes-sigs/dra-driver-nvidia-gpu",
             "github_release",
-            r"v[0-9\.]+",
             "REGISTERED",
             None
         ),
@@ -257,7 +166,6 @@ def init_database():
             "13.0.0-base-ubuntu24.04",
             "https://hub.docker.com/v2/repositories/nvidia/cuda/tags",
             "docker_hub",
-            r"[0-9\.]+-(?:base|runtime)-ubuntu[0-9\.]+",
             "REGISTERED",
             None
         ),
@@ -267,7 +175,6 @@ def init_database():
             "0.17.1",
             "https://github.com/kubernetes-sigs/kueue",
             "github_release",
-            r"v?[0-9\.]+",
             "REGISTERED",
             None
         ),
@@ -277,7 +184,6 @@ def init_database():
             "3.26.0",
             "https://github.com/Kitware/CMake",
             "github_release",
-            r"v?[0-9\.]+",
             "REGISTERED",
             None
         ),
@@ -287,16 +193,10 @@ def init_database():
             "24.7.1-2",
             "https://github.com/conda-forge/miniforge",
             "github_release",
-            r"[0-9\.\-]+",
             "REGISTERED",
             None
         ),
     ]
-
-    cursor.executemany("""
-    INSERT INTO packages (package_id, name, current_version, source_url, upstream_type, version_pattern, status, snooze_until)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?);
-    """, packages_data)
 
     # -------------------------------------------------------------------------
     # Seed Blueprint Instances (Section 2.2 naming: <blueprint>-<package>)
@@ -684,43 +584,10 @@ def init_database():
         )
     ]
 
-    cursor.executemany("""
-    INSERT INTO blueprint_instances (instance_id, package_id, blueprint_path, variable_name, coupled_vars, signature_keywords)
-    VALUES (?, ?, ?, ?, ?, ?);
-    """, instances_data)
-
     # -------------------------------------------------------------------------
     # Seed Learned Rules (Section 2.4 & Case 3 Multi-Blueprint Scoping)
     # -------------------------------------------------------------------------
-    rules_data = [
-        (
-            "rule-cuda-13-1-block",
-            "nvidia-cuda-x86",
-            "BAD_VERSION",
-            "== 13.1.0",
-            json.dumps({"blueprint": "*"}),
-            "BLOCK",
-            "Known compilation failure with GCC 12 on Debian 12",
-            "CI_FAILURE_LOG",
-            None
-        ),
-        (
-            "rule-gve-1-5-block",
-            "gve-dkms",
-            "INCOMPATIBILITY",
-            ">= 1.5.0, < 1.6.0",
-            json.dumps({"blueprint": "examples/machine-learning/build-service-images/a3m/blueprint.yaml"}),
-            "BLOCK",
-            "Kernel panic on Linux 6.1 LTS during heavy network load",
-            "CI_FAILURE_LOG",
-            None
-        )
-    ]
-
-    cursor.executemany("""
-    INSERT INTO learned_rules (rule_id, package_id, rule_type, version_constraint, scope, action, reason, source, expires_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);
-    """, rules_data)
+    rules_data = []
 
     # -------------------------------------------------------------------------
     # Seed Benchmark Cases (Dynamic Test Data)
@@ -794,72 +661,155 @@ def init_database():
         ),
     ]
 
-    cursor.executemany("""
-    INSERT INTO benchmark_cases (case_id, category, package_id, test_version, sample_changelog, expected_verdict, description)
-    VALUES (?, ?, ?, ?, ?, ?, ?);
-    """, benchmarks_data)
+    # Build seed_json for updater_state.json
+    pkgs = {}
+    for p in packages_data:
+        pkg_id = p[0]
+        pkgs[pkg_id] = {
+            "package_id": pkg_id,
+            "name": p[1],
+            "current_version": p[2],
+            "upstream_version": "-",
+            "source_url": p[3],
+            "upstream_type": p[4],
+            "status": p[5],
+            "qualification_summary": "Monitored baseline.",
+            "snooze_until": p[6],
+            "updated_at": "2026-09-23T06:00:00Z",
+            "blueprints": []
+        }
 
-    conn.commit()
-    conn.close()
-    print("[SUCCESS] SQLite database initialized and seeded successfully.")
+    for inst in instances_data:
+        pkg_id = inst[1]
+        bp_dict = {
+            "instance_id": inst[0],
+            "blueprint_path": inst[2],
+            "variable_name": inst[3],
+            "coupled_vars": json.loads(inst[4]) if isinstance(inst[4], str) else inst[4],
+            "signature_keywords": json.loads(inst[5]) if isinstance(inst[5], str) else inst[5]
+        }
+        if pkg_id in pkgs:
+            pkgs[pkg_id]["blueprints"].append(bp_dict)
+
+    rules = []
+    for r in rules_data:
+        rules.append({
+            "rule_id": r[0],
+            "package_id": r[1],
+            "rule_type": r[2],
+            "version_constraint": r[3],
+            "scope": json.loads(r[4]) if isinstance(r[4], str) else r[4],
+            "action": r[5],
+            "reason": r[6],
+            "source": r[7],
+            "expires_at": r[8],
+            "created_at": "2026-09-23T06:00:00Z"
+        })
+
+    benchmarks = []
+    for b in benchmarks_data:
+        benchmarks.append({
+            "case_id": b[0],
+            "category": b[1],
+            "package_id": b[2],
+            "test_version": b[3],
+            "sample_changelog": b[4],
+            "expected_verdict": b[5],
+            "description": b[6]
+        })
+
+    seed_json = {
+        "packages": pkgs,
+        "candidate_updates": {},
+        "learned_rules": rules,
+        "benchmark_cases": benchmarks,
+        "audit_runs": []
+    }
+
+    # Only preserve active candidates or qualified upstream versions if explicitly requested
+    if preserve_candidates and os.path.exists(JSON_PATH):
+        try:
+            with open(JSON_PATH, "r", encoding="utf-8") as f:
+                old_json = json.load(f)
+                if old_json.get("candidate_updates"):
+                    seed_json["candidate_updates"] = old_json["candidate_updates"]
+                for pid, old_pkg in old_json.get("packages", {}).items():
+                    if pid in seed_json["packages"]:
+                        if old_pkg.get("upstream_version") and old_pkg["upstream_version"] != "-":
+                            seed_json["packages"][pid]["upstream_version"] = old_pkg["upstream_version"]
+                        if old_pkg.get("qualification_summary"):
+                            seed_json["packages"][pid]["qualification_summary"] = old_pkg["qualification_summary"]
+        except Exception:
+            pass
+
+    with open(JSON_PATH, "w", encoding="utf-8") as f:
+        json.dump(seed_json, f, indent=2, ensure_ascii=False)
+    print(f"[SUCCESS] JSON state store initialized and seeded at {JSON_PATH}.")
+
+
+def get_seed_data() -> dict:
+    """Returns canonical seed data from JSON_PATH (initializing it if necessary)."""
+    if not os.path.exists(JSON_PATH):
+        init_database()
+    with open(JSON_PATH, "r", encoding="utf-8") as f:
+        return json.load(f)
+
 
 def preview_tables():
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
+    from tools.infra_updater.datastore import get_datastore
+    store = get_datastore()
+    packages = store.list_packages()
 
     print("\n" + "=" * 145)
-    print("TABLE 1: packages (Canonical Package Registry - Status: REGISTERED, SNOOZED, BLOCKED, OBSOLETE)")
+    print("STORE 1: packages (Canonical Package Registry - Status: REGISTERED, SNOOZED, BLOCKED, OBSOLETE)")
     print("=" * 145)
-    cursor.execute("SELECT package_id, current_version, upstream_version, upstream_type, status, qualification_summary FROM packages ORDER BY package_id")
-    rows = cursor.fetchall()
     print(f"{'Package ID':<18} | {'Current':<16} | {'Upstream':<16} | {'Source Type':<16} | {'Status':<14} | Upstream Assessment Summary")
     print("-" * 145)
-    for r in rows:
-        up = r[2] or "-"
-        src_type = r[3] or "generic"
-        summary = r[5] or "Monitored baseline."
-        print(f"{r[0]:<18} | {r[1]:<16} | {up:<16} | {src_type:<16} | {r[4]:<14} | {summary}")
+    for p in packages:
+        up = p.get("upstream_version") or "-"
+        src_type = p.get("upstream_type") or "generic"
+        summary = p.get("qualification_summary") or "Monitored baseline."
+        print(f"{p['package_id']:<18} | {p['current_version']:<16} | {up:<16} | {src_type:<16} | {p.get('status', '-'):<14} | {summary}")
     print("=" * 145)
+
+    blueprints = store.list_all_blueprints()
+    rules = store.list_rules()
+    candidates = store.list_candidates()
 
     print("\n" + "=" * 145)
-    print("TABLE 2: blueprint_instances (Tracked Blueprint Locations - Naming: <blueprint>-<package>)")
+    print("STORE 2: blueprints (Tracked Blueprint Locations - Naming: <blueprint>-<package>)")
     print("=" * 145)
-    cursor.execute("SELECT instance_id, package_id, variable_name, coupled_vars, signature_keywords, blueprint_path FROM blueprint_instances")
-    rows = cursor.fetchall()
     print(f"{'Instance ID':<24} | {'Package ID':<18} | {'Target Variable':<20} | {'Coupled':<10} | {'Keywords':<18} | Blueprint File Path")
     print("-" * 145)
-    for r in rows:
-        coupled = "None" if r[3] == "[]" else "Coupled"
-        keywords = ", ".join(json.loads(r[4]))
-        print(f"{r[0]:<24} | {r[1]:<18} | {r[2]:<20} | {coupled:<10} | {keywords:<18} | {r[5]}")
+    for bp in blueprints:
+        c_list = bp.get("coupled_vars", [])
+        coupled = "None" if not c_list else "Coupled"
+        kw_list = bp.get("signature_keywords", [])
+        keywords = ", ".join(kw_list) if isinstance(kw_list, list) else str(kw_list)
+        print(f"{bp.get('instance_id', ''):<24} | {bp.get('package_id', ''):<18} | {bp.get('variable_name', ''):<20} | {coupled:<10} | {keywords:<18} | {bp.get('blueprint_path', '')}")
 
     print("\n" + "=" * 135)
-    print("TABLE 3: learned_rules (Persistent Rule Engine with Scope & Source)")
+    print("STORE 3: learned_rules (Persistent Rule Engine with Scope & Source)")
     print("=" * 135)
-    cursor.execute("SELECT rule_id, package_id, rule_type, version_constraint, action, source, reason FROM learned_rules")
-    rows = cursor.fetchall()
     print(f"{'Rule ID':<22} | {'Package ID':<18} | {'Type':<16} | {'Constraint':<20} | {'Action':<6} | {'Source':<18} | Reason")
     print("-" * 135)
-    for r in rows:
-        print(f"{r[0]:<22} | {r[1]:<18} | {r[2]:<16} | {r[3]:<20} | {r[4]:<6} | {r[5]:<18} | {r[6]}")
+    for r in rules:
+        print(f"{r.get('rule_id', ''):<22} | {r.get('package_id', ''):<18} | {r.get('rule_type', ''):<16} | {r.get('version_constraint', ''):<20} | {r.get('action', ''):<6} | {r.get('source', ''):<18} | {r.get('reason', '')}")
 
     print("\n" + "=" * 135)
-    print("TABLE 4: candidate_updates (Candidate Update Lifecycle: UPDATE_FOUND -> READY_FOR_REVIEW -> MERGED)")
+    print("STORE 4: candidate_updates (Candidate Update Lifecycle: UPDATE_FOUND -> READY_FOR_REVIEW -> MERGED)")
     print("=" * 135)
-    cursor.execute("SELECT candidate_id, package_id, version, status, compatibility_verdict, changelog_summary FROM candidate_updates")
-    rows = cursor.fetchall()
-    if not rows:
+    if not candidates:
         print("Empty (No candidates currently queued).")
     else:
         print(f"{'Candidate ID':<15} | {'Package ID':<18} | {'Target Version':<18} | {'Workflow Status':<18} | {'LLM Verdict':<14} | Summary")
         print("-" * 135)
-        for r in rows:
-            summary = (r[5][:50] + "...") if r[5] and len(r[5]) > 50 else (r[5] or "N/A")
-            verdict = r[4] or "UNKNOWN"
-            print(f"{r[0]:<15} | {r[1]:<18} | {r[2]:<18} | {r[3]:<18} | {verdict:<14} | {summary}")
+        for c in candidates:
+            s = c.get("changelog_summary", "") or "N/A"
+            summary = (s[:50] + "...") if len(s) > 50 else s
+            verdict = c.get("compatibility_verdict") or "UNKNOWN"
+            print(f"{c.get('candidate_id', ''):<15} | {c.get('package_id', ''):<18} | {c.get('version', ''):<18} | {c.get('status', ''):<18} | {verdict:<14} | {summary}")
     print("=" * 135)
-
-    conn.close()
 
 if __name__ == "__main__":
     init_database()

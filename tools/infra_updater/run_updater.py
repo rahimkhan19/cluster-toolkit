@@ -19,24 +19,27 @@ Aligns with Implementation Guide: Automated Dependency Management.
 Demonstrates:
   1. Source Qualification Agent (Section 4.2): Upstream release discovery, GA stability filtering, policy rule checks.
   2. Orchestrator Agent (Section 4.3): Atomic blueprint updates, coupled variable synchronization, status transitions.
-  3. Upstream policy rules loaded dynamically from SQLite (Section 2.2).
+  3. Upstream policy rules loaded dynamically from DataStore (Section 2.2).
   4. Changelog semantic compatibility triage (Section 4.2).
 
 All evaluation rules, blueprint instances, and package registries are loaded dynamically
-from SQLite database tables (packages, blueprint_instances, learned_rules, benchmark_cases).
+from the DataStore (packages, blueprints, learned_rules, benchmark_cases).
 """
 
 import argparse
 import os
-import sqlite3
 import subprocess
 import sys
 import time
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+if BASE_DIR not in sys.path:
+    sys.path.insert(0, BASE_DIR)
 REPO_ROOT = os.path.abspath(os.path.join(BASE_DIR, "../.."))
-DB_PATH = os.path.join(BASE_DIR, "updater_state.db")
+if REPO_ROOT not in sys.path:
+    sys.path.insert(0, REPO_ROOT)
 
+from tools.infra_updater.datastore import get_datastore
 from init_db import init_database, preview_tables
 from source_agent import SourceQualificationAgent, UpfrontRuleChecker
 from code_modifier import OrchestratorAgent, AtomicCodeModifier
@@ -100,22 +103,34 @@ def run_check_all(model: str = "gemini-3.8-flash"):
     print(f"[INFO] Qualified candidate updates stored in table '{BOLD}candidate_updates{RESET}'.")
     print(f"[TIP] Run '{BOLD}python3 tools/infra_updater/run_updater.py --apply <package_id>{RESET}' to apply changes to target blueprints.")
 
+    # Record Operational Telemetry (Doc Section 2.5)
+    try:
+        store = get_datastore()
+        updates_found = len([r for r in results if r.get("status") == "UPDATE_FOUND"])
+        store.record_audit_run({
+            "trigger_type": "MANUAL",
+            "triggered_by": "cli_user",
+            "components_scanned": len(results),
+            "prs_opened": 0,
+            "summary": {"updates_found": updates_found, "total_scanned": len(results)}
+        })
+    except Exception:
+        pass
+
 
 def run_apply(package_id: str):
     print(f"\n{BOLD}{CYAN}=== STEP 2: Orchestrator Agent (Blueprint Update & Variable Synchronization) ==={RESET}")
     print(f"Target Package: {BOLD}{package_id}{RESET}\n")
 
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    cursor.execute("SELECT version, download_url, compatibility_verdict, changelog_summary FROM candidate_updates WHERE package_id = ? ORDER BY created_at DESC LIMIT 1", (package_id,))
-    cand = cursor.fetchone()
-    conn.close()
+    store = get_datastore()
+    candidates = store.list_candidates(package_id=package_id)
+    cand = candidates[-1] if candidates else None
 
     if cand:
-        print(f"{CYAN}[Triage Summary]{RESET} Compatibility: {GREEN}{cand[2]}{RESET}")
-        print(f"{CYAN}[Triage Summary]{RESET} Changelog:     {cand[3]}\n")
+        print(f"{CYAN}[Triage Summary]{RESET} Compatibility: {GREEN}{cand.get('compatibility_verdict', 'UNKNOWN')}{RESET}")
+        print(f"{CYAN}[Triage Summary]{RESET} Changelog:     {cand.get('changelog_summary', '')}\n")
 
-    agent = OrchestratorAgent()
+    agent = OrchestratorAgent(store=store)
     res = agent.apply_update(package_id)
 
     if res["status"] != "SUCCESS":
@@ -158,23 +173,21 @@ def run_test_llm_triage(model: str = "gemini-3.8-flash"):
         print(f"{RED}[ERROR] Gemini LLM client is not available.{RESET}")
         return
 
-    # Load test cases dynamically from SQLite table benchmark_cases (Zero Hardcoding)
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    cursor.execute("""
-        SELECT package_id, test_version, sample_changelog, description, expected_verdict
-        FROM benchmark_cases 
-        WHERE category = 'CHANGELOG_TRIAGE'
-        ORDER BY case_id
-    """)
-    test_cases = cursor.fetchall()
-    conn.close()
+    # Load test cases dynamically from DataStore benchmark_cases (Zero Hardcoding)
+    store = get_datastore()
+    all_benchmarks = store.list_benchmarks()
+    test_cases = [b for b in all_benchmarks if b.get("category") == "CHANGELOG_TRIAGE"]
 
     if not test_cases:
         print(f"{YELLOW}[WARN] No CHANGELOG_TRIAGE benchmark cases found in database.{RESET}")
         return
 
-    for pkg_id, ver, changelog, desc, expected_verdict in test_cases:
+    for case in test_cases:
+        pkg_id = case.get("package_id")
+        ver = case.get("test_version")
+        changelog = case.get("sample_changelog", "")
+        desc = case.get("description", "")
+        expected_verdict = case.get("expected_verdict", "")
         print(f"{BOLD}Scenario:{RESET} {desc} ({BOLD}{pkg_id} v{ver}{RESET}) [Expected: {expected_verdict}]")
         analysis = agent.analyze_changelog_with_llm(pkg_id, ver, changelog or "")
         
@@ -202,17 +215,10 @@ def run_test_rule_blocking():
 
     checker = UpfrontRuleChecker()
 
-    # Load test cases dynamically from SQLite table benchmark_cases (Zero Hardcoding)
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    cursor.execute("""
-        SELECT package_id, test_version, description, expected_verdict
-        FROM benchmark_cases 
-        WHERE category = 'RULE_GATE'
-        ORDER BY case_id
-    """)
-    test_cases = cursor.fetchall()
-    conn.close()
+    # Load test cases dynamically from DataStore benchmark_cases (Zero Hardcoding)
+    store = get_datastore()
+    all_benchmarks = store.list_benchmarks()
+    test_cases = [b for b in all_benchmarks if b.get("category") == "RULE_GATE"]
 
     if not test_cases:
         print(f"{YELLOW}[WARN] No RULE_GATE benchmark cases found in database.{RESET}")
@@ -221,7 +227,11 @@ def run_test_rule_blocking():
     print(f"{'Package ID':<18} | {'Candidate Ver':<18} | {'Decision':<14} | Details & Rationale")
     print("=" * 110)
 
-    for pkg_id, ver, desc, expected_verdict in test_cases:
+    for case in test_cases:
+        pkg_id = case.get("package_id")
+        ver = case.get("test_version")
+        desc = case.get("description", "")
+        expected_verdict = case.get("expected_verdict", "")
         is_blocked, rule = checker.check_version(pkg_id, ver)
 
         if is_blocked:
@@ -259,37 +269,35 @@ def run_end_to_end(model: str = "gemini-3.8-flash"):
     run_check_all(model=model)
 
     # Stage 4: Orchestrator Agent Blueprint Modification & Variable Sync
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    cursor.execute("SELECT package_id FROM candidate_updates WHERE status = 'UPDATE_FOUND' ORDER BY created_at ASC")
-    candidate_rows = cursor.fetchall()
-    conn.close()
+    store = get_datastore()
+    candidates = store.list_candidates()
+    candidate_pkgs = [c.get("package_id") for c in candidates if c.get("status") == "UPDATE_FOUND"]
 
-    if candidate_rows:
-        print(f"\n{BOLD}[STAGE 4/4] Orchestrator Agent applying updates across all {len(candidate_rows)} candidate package(s)...{RESET}")
-        for (target_pkg,) in candidate_rows:
+    if candidate_pkgs:
+        print(f"\n{BOLD}[STAGE 4/4] Orchestrator Agent applying updates across all {len(candidate_pkgs)} candidate package(s)...{RESET}")
+        for target_pkg in candidate_pkgs:
             run_apply(target_pkg)
     else:
         print(f"\n{BOLD}[STAGE 4/4] No candidate updates with status UPDATE_FOUND available to apply.{RESET}")
 
-    print(f"\n{BOLD}[FINAL STATE] Database Summary:{RESET}")
+    print(f"\n{BOLD}[FINAL STATE] DataStore State Summary:{RESET}")
     preview_tables()
 
     print(f"\n{BOLD}{GREEN}======================================================================{RESET}")
     print(f"{BOLD}{GREEN}                   PIPELINE EXECUTION COMPLETE                        {RESET}")
     print(f"{BOLD}{GREEN}======================================================================{RESET}\n")
-    print(f"[TIP] Run '{BOLD}python3 tools/infra_updater/run_updater.py --reset{RESET}' to restore files and reset database.\n")
+    print(f"[TIP] Run '{BOLD}python3 tools/infra_updater/run_updater.py --reset{RESET}' to restore files and reset state store.\n")
 
 
 def run_reset():
-    print(f"\n{BOLD}{YELLOW}[RESET] Reverting blueprint files and resetting database state...{RESET}")
+    print(f"\n{BOLD}{YELLOW}[RESET] Reverting blueprint files and resetting state store...{RESET}")
     agent = OrchestratorAgent()
     rev = agent.revert_update()
     for f in rev.get("reverted_files", []):
         print(f"  Reverted: {f}")
 
     init_database()
-    print(f"{GREEN}[SUCCESS] Environment and database reset to baseline.{RESET}\n")
+    print(f"{GREEN}[SUCCESS] Environment and state store reset to baseline.{RESET}\n")
 
 
 def main():
@@ -302,8 +310,8 @@ Examples:
   python3 run_updater.py --test-llm-triage     # Demonstrate LLM changelog & breaking change analysis
   python3 run_updater.py --apply <package_id>  # Apply update and show clean git diff
   python3 run_updater.py --test-rule-blocking   # Evaluate upfront policy rule filter
-  python3 run_updater.py --show-tables          # Preview all SQLite state tables
-  python3 run_updater.py --reset                # Revert files and reset database
+  python3 run_updater.py --show-tables          # Preview all datastore entities
+  python3 run_updater.py --reset                # Revert files and reset state store
 """
     )
     parser.add_argument("-m", "--model", default="gemini-3.8-flash", help="Gemini LLM model to use (default: gemini-3.8-flash)")
@@ -312,8 +320,8 @@ Examples:
     parser.add_argument("-l", "--test-llm-triage", action="store_true", help="Demonstrate Gemini LLM semantic changelog & deprecation triage")
     parser.add_argument("-a", "--apply", metavar="PACKAGE_ID", type=str, help="Apply qualified update for PACKAGE_ID")
     parser.add_argument("-t", "--test-rule-blocking", action="store_true", help="Demonstrate upfront policy rule blocking")
-    parser.add_argument("-s", "--show-tables", action="store_true", help="Display previews of all SQLite tables")
-    parser.add_argument("-r", "--reset", action="store_true", help="Reset database and revert git modifications")
+    parser.add_argument("-s", "--show-tables", action="store_true", help="Display previews of all datastore entities")
+    parser.add_argument("-r", "--reset", action="store_true", help="Reset state store and revert git modifications")
 
     if len(sys.argv) == 1:
         parser.print_help()

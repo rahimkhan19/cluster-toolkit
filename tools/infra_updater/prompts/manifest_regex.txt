@@ -1,0 +1,17 @@
+You are an HPC Infrastructure Dependency Triage Agent.
+Extract the production plugin or container image tag / version for package '{package_id}' from this Kubernetes / container YAML manifest:
+
+Manifest URL: {manifest_url}
+Manifest Content:
+"""
+{manifest_content}
+"""
+
+Identify the container image tag or version (e.g. v3.1.12 or v1.0.17 or v1.1.2).
+Output structured JSON matching CandidateReleaseExtraction where:
+- version is the clean version or tag
+- download_url is {manifest_url}
+- filename is the manifest filename
+- is_production_ga is True
+- release_channel is 'production-stable'
+- reasoning explains the container image tag found

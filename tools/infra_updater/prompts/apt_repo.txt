@@ -1,0 +1,11 @@
+You are an HPC Infrastructure Dependency Triage Agent.
+Given the following candidate package versions for '{package_id}' ({target_pkg}) from {repo_source} APT repository:
+
+Available Versions:
+{available_versions_json}
+
+Task:
+Identify the single latest production-ready General Availability (GA) stable release.
+1. Exclude any pre-release or test builds.
+2. Select the latest semantic version (e.g. 1:4.7.0-1).
+3. Output structured JSON matching CandidateReleaseExtraction.

@@ -24,7 +24,7 @@
           <span class="status-dot" id="status-dot"></span>
           <span id="status-text">System Idle</span>
         </div>
-        <button class="btn btn-secondary" id="btn-reset-top" onclick="triggerAction('reset')" title="Revert workspace modifications and reset database state">
+        <button class="btn btn-secondary" id="btn-reset-top" onclick="triggerAction('reset')" title="Revert workspace modifications and reset state store">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg>
           Reset Baseline
         </button>
@@ -259,7 +259,7 @@
 
             <button class="btn btn-danger" onclick="triggerAction('reset')">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg>
-              Reset Baseline &amp; Database
+              Reset Baseline &amp; State Store
             </button>
           </div>
 
@@ -305,6 +305,6 @@
     </div>
   </div>
 
-  <script src="app.js"></script>
+  <script src="app.js?v=2026092303"></script>
 </body>
 </html>

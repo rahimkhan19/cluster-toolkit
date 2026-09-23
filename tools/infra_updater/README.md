@@ -51,7 +51,7 @@ An automated driver and infrastructure update management system for Cluster Tool
 1. **`source_agent.py`**:
    - **Gemini LLM Candidate Extraction & GA Stability Filter**: Discovers upstream releases and evaluates tags/channel metadata to confirm production GA status.
    - **Gemini LLM Changelog Analysis**: Reads raw upstream markdown release notes to detect breaking syntax, dropped kernel versions (Linux 6.1/6.6 LTS), or deprecated CLI flags in the context of Debian 12 / Rocky 9.
-   - **Sub-Millisecond Upfront Rule Checker**: Evaluates SQLite `learned_rules` in `< 1ms` (~0.2ms) before making expensive network calls.
+   - **Sub-Millisecond Upfront Rule Checker**: Evaluates policy `learned_rules` in `< 1ms` (~0.2ms) before making expensive network calls.
    - **HTTP HEAD Liveness Check**: Validates that candidate artifacts exist and return HTTP 200.
 2. **`code_modifier.py`**:
    - Surgical, comment-preserving YAML modifier.
@@ -59,7 +59,9 @@ An automated driver and infrastructure update management system for Cluster Tool
    - Signature keyword filtering to protect generic variable names (`package_url`).
    - Local YAML AST validation (`yaml.safe_load`).
 3. **`init_db.py`**:
-   - Initializes SQLite database (`updater_state.db`) with 4 normalized tables.
+   - Initializes canonical JSON state store (`updater_state.json`) with seeded package registry, blueprint instances, learned rules, and benchmarks.
+4. **`datastore.py`**:
+   - Thread-safe, atomic transactional JSON datastore managing live package states, candidates, learned rules, and audit logs.
 4. **`run_updater.py`** (alias: `main.py`):
    - Master CLI runner with rich colored terminal output and comprehensive qualification flags.
 5. **`server.py`**:
@@ -75,7 +77,7 @@ From the repository root (`/usr/local/google/home/rahimkh/Desktop/Projects/clust
 ```bash
 python3 tools/infra_updater/run_updater.py --check-all
 ```
-*Queries upstream release archives, runs LLM candidate extraction and GA stability filtering, checks learned rules (<1ms), analyzes changelogs with Gemini, verifies HTTP 200, and records qualified candidates in SQLite.*
+*Queries upstream release archives, runs LLM candidate extraction and GA stability filtering, checks learned rules (<1ms), analyzes changelogs with Gemini, verifies HTTP 200, and records qualified candidates in updater_state.json.*
 
 ### B. Launch Web UI Dashboard
 ```bash
@@ -93,7 +95,7 @@ python3 tools/infra_updater/run_updater.py --test-llm-triage
 ```bash
 python3 tools/infra_updater/run_updater.py --test-rule-blocking
 ```
-*Demonstrates sub-millisecond SQLite rule evaluation blocking known faulty versions (e.g. CUDA 13.1.0 or GVE 1.5.0) in ~0.2ms before any network or file operations.*
+*Demonstrates sub-millisecond rule evaluation blocking known faulty versions (e.g. CUDA 13.1.0 or GVE 1.5.0) in ~0.2ms before any network or file operations.*
 
 ### E. Apply Atomic Blueprint Updates & View Git Diff
 ```bash
@@ -104,11 +106,11 @@ python3 tools/infra_updater/run_updater.py --apply nvidia-cuda-x86
 python3 tools/infra_updater/run_updater.py --apply gve-dkms
 ```
 
-### F. Preview State Tables or Reset
+### F. Preview State Entities or Reset
 ```bash
-# Preview all 4 SQLite state tables:
+# Preview all DataStore entities:
 python3 tools/infra_updater/run_updater.py --show-tables
 
-# Reset git files and database state:
+# Reset git files and state store:
 python3 tools/infra_updater/run_updater.py --reset
 ```

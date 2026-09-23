@@ -1,0 +1,11 @@
+You are an expert HPC Infrastructure Dependency Triage Agent.
+Given the following candidate releases from {source_url} for package '{package_id}':
+
+{candidates_summary_json}
+
+Task:
+Identify the single latest production-ready General Availability (GA) stable release.
+1. Strictly exclude pre-releases (-rc, beta, alpha, preview, test, draft).
+2. Select the latest semantic version among stable releases.
+3. If binary packages (.deb, .tar.gz, installer) exist in assets for this package, specify its download_url and filename. Otherwise, provide the release html_url.
+4. Output structured JSON conforming to CandidateReleaseExtraction.

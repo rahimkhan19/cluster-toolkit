@@ -1,0 +1,952 @@
+{
+  "packages": {
+    "nvidia-cuda-x86": {
+      "package_id": "nvidia-cuda-x86",
+      "name": "NVIDIA CUDA Toolkit (x86_64)",
+      "current_version": "13.0.3_580.126.20",
+      "upstream_version": "13.4.2",
+      "source_url": "https://developer.nvidia.com/cuda-downloads",
+      "upstream_type": "archive_scraper",
+      "status": "UPDATE_FOUND",
+      "qualification_summary": "Update found (13.4.2): Updates the nvidia-cuda-x86 installer to the latest GA release 13.4.2 using the official standalone runfile. No breaking syntax, kernel drops, or argument deprecations are indicated.",
+      "snooze_until": null,
+      "updated_at": "2026-09-23T10:47:06.159374+00:00",
+      "blueprints": [
+        {
+          "instance_id": "a3ultra-slurm-cuda",
+          "blueprint_path": "examples/machine-learning/a3-ultragpu-8g/a3ultra-slurm-blueprint.yaml",
+          "variable_name": "cuda_installer_url",
+          "coupled_vars": [
+            {
+              "variable_name": "cuda_installer_file",
+              "pattern": "/tmp/{filename}"
+            }
+          ],
+          "signature_keywords": [
+            "cuda",
+            "nvidia"
+          ]
+        },
+        {
+          "instance_id": "a4high-slurm-cuda",
+          "blueprint_path": "examples/machine-learning/a4-highgpu-8g/a4high-slurm-blueprint.yaml",
+          "variable_name": "cuda_installer_url",
+          "coupled_vars": [
+            {
+              "variable_name": "cuda_installer_file",
+              "pattern": "/tmp/{filename}"
+            }
+          ],
+          "signature_keywords": [
+            "cuda",
+            "nvidia"
+          ]
+        }
+      ]
+    },
+    "nvidia-cuda-arm64": {
+      "package_id": "nvidia-cuda-arm64",
+      "name": "NVIDIA CUDA Toolkit (ARM64 SBSA)",
+      "current_version": "13.0.0_580.65.06",
+      "upstream_version": "13.4.2",
+      "source_url": "https://developer.nvidia.com/cuda-downloads",
+      "upstream_type": "archive_scraper",
+      "status": "UPDATE_FOUND",
+      "qualification_summary": "Update found (13.4.2): CUDA 13.4.2 is a General Availability update providing the standalone runfile installer for arm64-sbsa systems. No breaking changes or dropped platform support were reported.",
+      "snooze_until": null,
+      "updated_at": "2026-09-23T10:46:52.720829+00:00",
+      "blueprints": [
+        {
+          "instance_id": "a4xhigh-slurm-cuda",
+          "blueprint_path": "examples/machine-learning/a4x-highgpu-4g/a4xhigh-slurm-blueprint.yaml",
+          "variable_name": "cuda_installer_url",
+          "coupled_vars": [
+            {
+              "variable_name": "cuda_installer_file",
+              "pattern": "/tmp/{filename}"
+            }
+          ],
+          "signature_keywords": [
+            "cuda",
+            "nvidia"
+          ]
+        }
+      ]
+    },
+    "gve-dkms": {
+      "package_id": "gve-dkms",
+      "name": "Google Virtual Ethernet Kernel Driver",
+      "current_version": "1.4.3",
+      "upstream_version": "1.4.11",
+      "source_url": "https://github.com/GoogleCloudPlatform/compute-virtual-ethernet-linux",
+      "upstream_type": "github_release",
+      "status": "UPDATE_FOUND",
+      "qualification_summary": "Update found (1.4.11): gve-dkms 1.4.11 delivers critical network stability fixes, resolving buffer corruption with HW-GRO header-split and preventing Rx queue stalls under memory pressure, while adopting standard generic power management.",
+      "snooze_until": null,
+      "updated_at": "2026-09-23T10:44:52.069919+00:00",
+      "blueprints": [
+        {
+          "instance_id": "a3m-image-gve",
+          "blueprint_path": "examples/machine-learning/build-service-images/a3m/blueprint.yaml",
+          "variable_name": "package_url",
+          "coupled_vars": [],
+          "signature_keywords": [
+            "gve",
+            "ethernet"
+          ]
+        },
+        {
+          "instance_id": "a3mega-image-gve",
+          "blueprint_path": "examples/machine-learning/a3-megagpu-8g/a3mega-slurm-gcsfuse-lssd-blueprint.yaml",
+          "variable_name": "package_url",
+          "coupled_vars": [],
+          "signature_keywords": [
+            "gve",
+            "ethernet"
+          ]
+        }
+      ]
+    },
+    "mft": {
+      "package_id": "mft",
+      "name": "Mellanox Firmware Tools",
+      "current_version": "4.34.0-145",
+      "upstream_version": "4.37.0-154",
+      "source_url": "https://network.nvidia.com/products/adapter-software/firmware-tools/",
+      "upstream_type": "mft_api",
+      "status": "UPDATE_FOUND",
+      "qualification_summary": "Update found (4.37.0-154): NVIDIA Mellanox Firmware Tools (MFT) 4.37.0-154 delivers maintenance updates, bug fixes, and expanded firmware management capabilities for ConnectX and BlueField adapters. The release maintains full compatibility with Rocky Linux 9, Debian 12, and 6.1/6.6 LTS Linux kernels without breaking CLI changes.",
+      "snooze_until": null,
+      "updated_at": "2026-09-23T10:45:31.426087+00:00",
+      "blueprints": [
+        {
+          "instance_id": "a4xmax-slurm-mft",
+          "blueprint_path": "examples/machine-learning/a4x-maxgpu-4g-metal/a4xmax-bm-slurm-blueprint.yaml",
+          "variable_name": "mft_installer_url",
+          "coupled_vars": [],
+          "signature_keywords": [
+            "mft",
+            "mellanox"
+          ]
+        },
+        {
+          "instance_id": "a4x-vm-mft",
+          "blueprint_path": "examples/machine-learning/a4x-highgpu-4g/a4x-vm.yaml",
+          "variable_name": "mft_installer_url",
+          "coupled_vars": [],
+          "signature_keywords": [
+            "mft",
+            "mellanox"
+          ]
+        }
+      ]
+    },
+    "nccl-tcpx": {
+      "package_id": "nccl-tcpx",
+      "name": "GPUDirect TCPX Network Plugin",
+      "current_version": "v3.1.9",
+      "upstream_version": "3.1.12",
+      "source_url": "https://raw.githubusercontent.com/GoogleCloudPlatform/container-engine-accelerators/master/gpudirect-tcpx/nccl-tcpx-installer.yaml",
+      "upstream_type": "raw_manifest",
+      "status": "UPDATE_FOUND",
+      "qualification_summary": "Update found (3.1.12): Updates the nccl-tcpx installer to use the v3.1.12 plugin container image. This release contains routine image updates without reported breaking changes or deprecated kernel and OS support.",
+      "snooze_until": null,
+      "updated_at": "2026-09-23T10:46:25.665940+00:00",
+      "blueprints": [
+        {
+          "instance_id": "gke-a3-tcpx",
+          "blueprint_path": "examples/gke-a3-highgpu/gke-a3-highgpu.yaml",
+          "variable_name": "nccl_tcpx_version",
+          "coupled_vars": [],
+          "signature_keywords": [
+            "tcpx",
+            "nccl"
+          ]
+        }
+      ]
+    },
+    "nccl-tcpxo": {
+      "package_id": "nccl-tcpxo",
+      "name": "GPUDirect TCPXO Network Plugin",
+      "current_version": "v1.0.15",
+      "upstream_version": "1.0.17",
+      "source_url": "https://raw.githubusercontent.com/GoogleCloudPlatform/container-engine-accelerators/master/gpudirect-tcpxo/nccl-tcpxo-installer.yaml",
+      "upstream_type": "raw_manifest",
+      "status": "UPDATE_FOUND",
+      "qualification_summary": "Update found (1.0.17): Updates the nccl-tcpxo-installer container image tag to version 1.0.17 within the Kubernetes DaemonSet manifest. No breaking changes, API deprecations, or dropped OS/kernel compatibility are indicated.",
+      "snooze_until": null,
+      "updated_at": "2026-09-23T10:46:37.471671+00:00",
+      "blueprints": [
+        {
+          "instance_id": "gke-a3mega-tcpxo",
+          "blueprint_path": "examples/gke-a3-megagpu/gke-a3-megagpu.yaml",
+          "variable_name": "nccl_tcpxo_version",
+          "coupled_vars": [],
+          "signature_keywords": [
+            "tcpxo",
+            "nccl"
+          ]
+        }
+      ]
+    },
+    "nccl-plugin": {
+      "package_id": "nccl-plugin",
+      "name": "GPUDirect RDMA NCCL Plugin",
+      "current_version": "v1.1.1",
+      "upstream_version": "1.1.2",
+      "source_url": "https://raw.githubusercontent.com/GoogleCloudPlatform/container-engine-accelerators/master/gpudirect-rdma/nccl-rdma-installer-a4x.yaml",
+      "upstream_type": "raw_manifest",
+      "status": "UPDATE_FOUND",
+      "qualification_summary": "Update found (1.1.2): Updates nccl-plugin to v1.1.2, introducing the nccl-plugin-gib-arm64 container image targeted at ARM64 nodes with NVIDIA GB200 accelerators.",
+      "snooze_until": null,
+      "updated_at": "2026-09-23T10:46:11.211930+00:00",
+      "blueprints": [
+        {
+          "instance_id": "a4xmax-slurm-nccl",
+          "blueprint_path": "examples/machine-learning/a4x-maxgpu-4g-metal/a4xmax-bm-slurm-blueprint.yaml",
+          "variable_name": "nccl_plugin_version",
+          "coupled_vars": [],
+          "signature_keywords": [
+            "nccl",
+            "rdma"
+          ]
+        },
+        {
+          "instance_id": "gke-a3ultra-gib",
+          "blueprint_path": "examples/gke-a3-ultragpu/gke-a3-ultragpu.yaml",
+          "variable_name": "version",
+          "coupled_vars": [],
+          "signature_keywords": [
+            "gib",
+            "template_vars"
+          ]
+        },
+        {
+          "instance_id": "gke-a4-gib",
+          "blueprint_path": "examples/gke-a4/gke-a4.yaml",
+          "variable_name": "version",
+          "coupled_vars": [],
+          "signature_keywords": [
+            "gib",
+            "template_vars"
+          ]
+        },
+        {
+          "instance_id": "gke-a4x-gib",
+          "blueprint_path": "examples/gke-a4x/gke-a4x.yaml",
+          "variable_name": "version",
+          "coupled_vars": [],
+          "signature_keywords": [
+            "gib",
+            "template_vars"
+          ]
+        },
+        {
+          "instance_id": "gke-a4xmax-gib",
+          "blueprint_path": "examples/gke-a4x-max-bm/gke-a4x-max-bm.yaml",
+          "variable_name": "version",
+          "coupled_vars": [],
+          "signature_keywords": [
+            "gib",
+            "template_vars"
+          ]
+        }
+      ]
+    },
+    "slurm-gcp": {
+      "package_id": "slurm-gcp",
+      "name": "SchedMD Slurm on GCP Engine",
+      "current_version": "6.13.1",
+      "upstream_version": "6.13.2",
+      "source_url": "https://github.com/GoogleCloudPlatform/slurm-gcp",
+      "upstream_type": "github_release",
+      "status": "UPDATE_FOUND",
+      "qualification_summary": "Update found (6.13.2): This patch release resolves an issue in Ansible playbook execution by correcting the DNF allowerasing parameter and the perftest tag for Rocky Linux and RHEL CIQ builds.",
+      "snooze_until": null,
+      "updated_at": "2026-09-23T10:50:00.187714+00:00",
+      "blueprints": [
+        {
+          "instance_id": "shared-image-slurm",
+          "blueprint_path": "examples/machine-learning/build-service-images/shared.yaml",
+          "variable_name": "slurm_gcp_version",
+          "coupled_vars": [],
+          "signature_keywords": [
+            "slurm",
+            "schedmd"
+          ]
+        },
+        {
+          "instance_id": "a3high-slurm-gcp",
+          "blueprint_path": "examples/machine-learning/a3-highgpu-8g/a3high-slurm-blueprint.yaml",
+          "variable_name": "build_slurm_from_git_ref",
+          "coupled_vars": [],
+          "signature_keywords": [
+            "slurm",
+            "schedmd"
+          ]
+        },
+        {
+          "instance_id": "a3mega-slurm-gcp",
+          "blueprint_path": "examples/machine-learning/a3-megagpu-8g/a3mega-slurm-blueprint.yaml",
+          "variable_name": "build_slurm_from_git_ref",
+          "coupled_vars": [],
+          "signature_keywords": [
+            "slurm",
+            "schedmd"
+          ]
+        },
+        {
+          "instance_id": "a3mega-gcsfuse-slurm-gcp",
+          "blueprint_path": "examples/machine-learning/a3-megagpu-8g/a3mega-slurm-gcsfuse-lssd-blueprint.yaml",
+          "variable_name": "build_slurm_from_git_ref",
+          "coupled_vars": [],
+          "signature_keywords": [
+            "slurm",
+            "schedmd"
+          ]
+        },
+        {
+          "instance_id": "a4xmax-slurm-gcp",
+          "blueprint_path": "examples/machine-learning/a4x-maxgpu-4g-metal/a4xmax-bm-slurm-blueprint.yaml",
+          "variable_name": "build_slurm_from_git_ref",
+          "coupled_vars": [],
+          "signature_keywords": [
+            "slurm",
+            "schedmd"
+          ]
+        },
+        {
+          "instance_id": "ml-slurm-g4-gcp",
+          "blueprint_path": "examples/ml-slurm-g4.yaml",
+          "variable_name": "build_slurm_from_git_ref",
+          "coupled_vars": [],
+          "signature_keywords": [
+            "slurm",
+            "schedmd"
+          ]
+        },
+        {
+          "instance_id": "ml-slurm-g4-vgpu-gcp",
+          "blueprint_path": "examples/ml-slurm-g4-vgpu.yaml",
+          "variable_name": "build_slurm_from_git_ref",
+          "coupled_vars": [],
+          "signature_keywords": [
+            "slurm",
+            "schedmd"
+          ]
+        }
+      ]
+    },
+    "nvidia-dcgm": {
+      "package_id": "nvidia-dcgm",
+      "name": "NVIDIA Data Center GPU Manager",
+      "current_version": "1:4.6.1-1",
+      "upstream_version": "1:4.7.0-1",
+      "source_url": "https://developer.download.nvidia.com/compute/cuda/repos/",
+      "upstream_type": "apt_repository",
+      "status": "UPDATE_FOUND",
+      "qualification_summary": "Update found (1:4.7.0-1): nvidia-dcgm version 1:4.7.0-1 is the latest production-stable General Availability release. No breaking syntax, dropped kernel/OS architectures, or API changes are indicated.",
+      "snooze_until": null,
+      "updated_at": "2026-09-23T10:47:26.663383+00:00",
+      "blueprints": [
+        {
+          "instance_id": "a3ultra-slurm-dcgm",
+          "blueprint_path": "examples/machine-learning/a3-ultragpu-8g/a3ultra-slurm-blueprint.yaml",
+          "variable_name": "nvidia_packages",
+          "coupled_vars": [],
+          "signature_keywords": [
+            "dcgm",
+            "datacenter-gpu-manager"
+          ]
+        },
+        {
+          "instance_id": "a4high-slurm-dcgm",
+          "blueprint_path": "examples/machine-learning/a4-highgpu-8g/a4high-slurm-blueprint.yaml",
+          "variable_name": "nvidia_packages",
+          "coupled_vars": [],
+          "signature_keywords": [
+            "dcgm",
+            "datacenter-gpu-manager"
+          ]
+        },
+        {
+          "instance_id": "a4xhigh-slurm-dcgm",
+          "blueprint_path": "examples/machine-learning/a4x-highgpu-4g/a4xhigh-slurm-blueprint.yaml",
+          "variable_name": "nvidia_packages",
+          "coupled_vars": [],
+          "signature_keywords": [
+            "dcgm",
+            "datacenter-gpu-manager"
+          ]
+        },
+        {
+          "instance_id": "a3mega-slurm-dcgm",
+          "blueprint_path": "examples/machine-learning/a3-megagpu-8g/a3mega-slurm-blueprint.yaml",
+          "variable_name": "nvidia_packages",
+          "coupled_vars": [],
+          "signature_keywords": [
+            "dcgm",
+            "datacenter-gpu-manager"
+          ]
+        },
+        {
+          "instance_id": "a4xmax-slurm-dcgm",
+          "blueprint_path": "examples/machine-learning/a4x-maxgpu-4g-metal/a4xmax-bm-slurm-blueprint.yaml",
+          "variable_name": "nvidia_packages",
+          "coupled_vars": [],
+          "signature_keywords": [
+            "dcgm",
+            "datacenter-gpu-manager"
+          ]
+        },
+        {
+          "instance_id": "a3high-slurm-dcgm",
+          "blueprint_path": "examples/machine-learning/a3-highgpu-8g/a3high-slurm-blueprint.yaml",
+          "variable_name": "nvidia_packages",
+          "coupled_vars": [],
+          "signature_keywords": [
+            "dcgm",
+            "datacenter-gpu-manager"
+          ]
+        }
+      ]
+    },
+    "mpi-operator": {
+      "package_id": "mpi-operator",
+      "name": "Kubeflow MPI Operator",
+      "current_version": "v0.8.2",
+      "upstream_version": "0.8.2",
+      "source_url": "https://github.com/kubeflow/mpi-operator",
+      "upstream_type": "github_release",
+      "status": "UP_TO_DATE",
+      "qualification_summary": "Deployed blueprint matches latest upstream release (0.8.2).",
+      "snooze_until": null,
+      "updated_at": "2026-09-23T10:45:48.522499+00:00",
+      "blueprints": [
+        {
+          "instance_id": "gke-h4d-mpi-operator",
+          "blueprint_path": "examples/gke-h4d/gke-h4d.yaml",
+          "variable_name": "source",
+          "coupled_vars": [],
+          "signature_keywords": [
+            "mpi-operator",
+            "kubeflow"
+          ]
+        },
+        {
+          "instance_id": "dws-gke-h4d-mpi-operator",
+          "blueprint_path": "examples/gke-consumption-options/dws-flex-start-compact-placement/gke-h4d/gke-h4d.yaml",
+          "variable_name": "source",
+          "coupled_vars": [],
+          "signature_keywords": [
+            "mpi-operator",
+            "kubeflow"
+          ]
+        }
+      ]
+    },
+    "spack": {
+      "package_id": "spack",
+      "name": "Spack HPC Package Manager",
+      "current_version": "v0.19.0",
+      "upstream_version": "1.2.2",
+      "source_url": "https://github.com/spack/spack",
+      "upstream_type": "github_release",
+      "status": "UPDATE_FOUND",
+      "qualification_summary": "Update found (1.2.2): Spack 1.2.2 is a patch release delivering bug fixes and performance enhancements to the concretization cache, repository handling, and locking mechanisms. It introduces no breaking changes or platform incompatibilities for Cluster Toolkit environments.",
+      "snooze_until": null,
+      "updated_at": "2026-09-23T10:50:12.377291+00:00",
+      "blueprints": [
+        {
+          "instance_id": "batch-mpi-spack",
+          "blueprint_path": "examples/batch-mpi.yaml",
+          "variable_name": "spack_ref",
+          "coupled_vars": [],
+          "signature_keywords": [
+            "spack",
+            "mpi"
+          ]
+        }
+      ]
+    },
+    "openmpi": {
+      "package_id": "openmpi",
+      "name": "OpenMPI Library",
+      "current_version": "5.0.8",
+      "upstream_version": "5.0.11",
+      "source_url": "https://github.com/open-mpi/ompi",
+      "upstream_type": "github_release",
+      "status": "UPDATE_FOUND",
+      "qualification_summary": "Update found (5.0.11): OpenMPI 5.0.11 is a routine maintenance patch release in the v5.0.x series focusing on stability and bug fixes. No breaking syntax, dropped platform support, or interface changes are indicated for Cluster Toolkit environments.",
+      "snooze_until": null,
+      "updated_at": "2026-09-23T10:49:47.516792+00:00",
+      "blueprints": [
+        {
+          "instance_id": "a4x-vm-openmpi",
+          "blueprint_path": "examples/machine-learning/a4x-highgpu-4g/a4x-vm.yaml",
+          "variable_name": "openmpi_version",
+          "coupled_vars": [],
+          "signature_keywords": [
+            "openmpi",
+            "mpi"
+          ]
+        }
+      ]
+    },
+    "nvidia-dra-driver": {
+      "package_id": "nvidia-dra-driver",
+      "name": "NVIDIA GPU DRA Driver for Kubernetes",
+      "current_version": "v25.8.0",
+      "upstream_version": "25.12.0",
+      "source_url": "https://github.com/kubernetes-sigs/dra-driver-nvidia-gpu",
+      "upstream_type": "github_release",
+      "status": "UPDATE_FOUND",
+      "qualification_summary": "Update found (25.12.0): NVIDIA DRA Driver 25.12.0 brings the GPU allocation plugin to General Availability, featuring major ComputeDomain formation speedups, alpha Dynamic MIG support for H100+ GPUs, and fail-fast crash behavior for degraded MNNVL fabrics.",
+      "snooze_until": null,
+      "updated_at": "2026-09-23T10:49:32.705798+00:00",
+      "blueprints": [
+        {
+          "instance_id": "gke-a4xmax-dra",
+          "blueprint_path": "examples/gke-a4x-max-bm/gke-a4x-max-bm.yaml",
+          "variable_name": "version",
+          "coupled_vars": [],
+          "signature_keywords": [
+            "nvidia_dra_driver"
+          ]
+        }
+      ]
+    },
+    "nvidia-cuda-image": {
+      "package_id": "nvidia-cuda-image",
+      "name": "NVIDIA CUDA Test Container Image",
+      "current_version": "13.0.0-base-ubuntu24.04",
+      "upstream_version": "-",
+      "source_url": "https://hub.docker.com/v2/repositories/nvidia/cuda/tags",
+      "upstream_type": "docker_hub",
+      "status": "UP_TO_DATE",
+      "qualification_summary": "Upstream source has no newer release than currently deployed version (13.0.0-base-ubuntu24.04).",
+      "snooze_until": null,
+      "updated_at": "2026-09-23T10:46:52.724865+00:00",
+      "blueprints": [
+        {
+          "instance_id": "gke-a3ultra-cuda-image",
+          "blueprint_path": "examples/gke-a3-ultragpu/gke-a3-ultragpu.yaml",
+          "variable_name": "image",
+          "coupled_vars": [],
+          "signature_keywords": [
+            "nvidia-smi"
+          ]
+        },
+        {
+          "instance_id": "gke-a4-cuda-image",
+          "blueprint_path": "examples/gke-a4/gke-a4.yaml",
+          "variable_name": "image",
+          "coupled_vars": [],
+          "signature_keywords": [
+            "nvidia-smi"
+          ]
+        },
+        {
+          "instance_id": "gke-a4x-cuda-image",
+          "blueprint_path": "examples/gke-a4x/gke-a4x.yaml",
+          "variable_name": "image",
+          "coupled_vars": [],
+          "signature_keywords": [
+            "nvidia-smi"
+          ]
+        },
+        {
+          "instance_id": "gke-a4xmax-cuda-image",
+          "blueprint_path": "examples/gke-a4x-max-bm/gke-a4x-max-bm.yaml",
+          "variable_name": "image",
+          "coupled_vars": [],
+          "signature_keywords": [
+            "nvidia-smi"
+          ]
+        },
+        {
+          "instance_id": "gke-g4-cuda-image",
+          "blueprint_path": "examples/gke-g4/gke-g4.yaml",
+          "variable_name": "image",
+          "coupled_vars": [],
+          "signature_keywords": [
+            "nvidia-smi"
+          ]
+        },
+        {
+          "instance_id": "gke-g4conf-cuda-image",
+          "blueprint_path": "examples/gke-g4-confidential/gke-g4-confidential.yaml",
+          "variable_name": "image",
+          "coupled_vars": [],
+          "signature_keywords": [
+            "nvidia-smi"
+          ]
+        }
+      ]
+    },
+    "kueue": {
+      "package_id": "kueue",
+      "name": "Kubernetes SIG Kueue Queueing System",
+      "current_version": "0.17.1",
+      "upstream_version": "0.19.5",
+      "source_url": "https://github.com/kubernetes-sigs/kueue",
+      "upstream_type": "github_release",
+      "status": "UPDATE_FOUND",
+      "qualification_summary": "Update found (0.19.5): Kueue 0.19.5 resolves key stability issues in Topology-Aware Scheduling (TAS), HA leader election lease renewals, and DRA workload requeuing. It also introduces a breaking Go interface change for custom ComposableJob implementations and stricter MPIJob/LeaderWorkerSet webhook validations.",
+      "snooze_until": null,
+      "updated_at": "2026-09-23T10:45:23.814169+00:00",
+      "blueprints": [
+        {
+          "instance_id": "gke-a3high-kueue",
+          "blueprint_path": "examples/gke-a3-highgpu/gke-a3-highgpu.yaml",
+          "variable_name": "version",
+          "coupled_vars": [],
+          "signature_keywords": [
+            "kueue"
+          ]
+        },
+        {
+          "instance_id": "gke-a4x-kueue",
+          "blueprint_path": "examples/gke-a4x/gke-a4x.yaml",
+          "variable_name": "version",
+          "coupled_vars": [],
+          "signature_keywords": [
+            "kueue"
+          ]
+        },
+        {
+          "instance_id": "gke-a4xmax-kueue",
+          "blueprint_path": "examples/gke-a4x-max-bm/gke-a4x-max-bm.yaml",
+          "variable_name": "version",
+          "coupled_vars": [],
+          "signature_keywords": [
+            "kueue"
+          ]
+        }
+      ]
+    },
+    "cmake": {
+      "package_id": "cmake",
+      "name": "Kitware CMake Build System",
+      "current_version": "3.26.0",
+      "upstream_version": "4.4.3",
+      "source_url": "https://github.com/Kitware/CMake",
+      "upstream_type": "github_release",
+      "status": "UPDATE_FOUND",
+      "qualification_summary": "Update found (4.4.3): CMake 4.4.3 is a patch release addressing bug fixes and stability improvements across supported platforms. No breaking changes, deprecations, or dropped OS/kernel compatibility issues were reported.",
+      "snooze_until": null,
+      "updated_at": "2026-09-23T10:44:38.093647+00:00",
+      "blueprints": [
+        {
+          "instance_id": "ml-slurm-g4-vgpu-cmake",
+          "blueprint_path": "examples/ml-slurm-g4-vgpu.yaml",
+          "variable_name": "url",
+          "coupled_vars": [
+            {
+              "variable_name": "dest",
+              "pattern": "/tmp/{filename}"
+            },
+            {
+              "variable_name": "cmd",
+              "pattern": "/tmp/{filename} --skip-license"
+            }
+          ],
+          "signature_keywords": [
+            "cmake"
+          ]
+        }
+      ]
+    },
+    "miniforge": {
+      "package_id": "miniforge",
+      "name": "Miniforge3 Conda Installer",
+      "current_version": "24.7.1-2",
+      "upstream_version": "26.7.2-0",
+      "source_url": "https://github.com/conda-forge/miniforge",
+      "upstream_type": "github_release",
+      "status": "UPDATE_FOUND",
+      "qualification_summary": "Update found (26.7.2-0): Miniforge 26.7.2-0 updates internal components to conda 26.7.2 and mamba 2.9.0, and adds architecture support for linux-riscv64.",
+      "snooze_until": null,
+      "updated_at": "2026-09-23T10:45:44.748213+00:00",
+      "blueprints": [
+        {
+          "instance_id": "ml-slurm-miniforge",
+          "blueprint_path": "examples/ml-slurm.yaml",
+          "variable_name": "miniforge",
+          "coupled_vars": [],
+          "signature_keywords": [
+            "miniforge"
+          ]
+        }
+      ]
+    }
+  },
+  "candidate_updates": {
+    "cand-c58566d7": {
+      "candidate_id": "cand-c58566d7",
+      "package_id": "cmake",
+      "version": "4.4.3",
+      "download_url": "https://github.com/Kitware/CMake/releases/download/v4.4.3/cmake-4.4.3-linux-x86_64.tar.gz",
+      "checksum": null,
+      "pr_url": null,
+      "build_url": null,
+      "status": "UPDATE_FOUND",
+      "compatibility_verdict": "COMPATIBLE",
+      "changelog_summary": "CMake 4.4.3 is a patch release addressing bug fixes and stability improvements across supported platforms. No breaking changes, deprecations, or dropped OS/kernel compatibility issues were reported.",
+      "created_at": "2026-09-23T10:44:38.091078+00:00"
+    },
+    "cand-450435f5": {
+      "candidate_id": "cand-450435f5",
+      "package_id": "gve-dkms",
+      "version": "1.4.11",
+      "download_url": "https://github.com/GoogleCloudPlatform/compute-virtual-ethernet-linux/releases/download/v1.4.11/gve-dkms_1.4.11_all.deb",
+      "checksum": null,
+      "pr_url": null,
+      "build_url": null,
+      "status": "UPDATE_FOUND",
+      "compatibility_verdict": "COMPATIBLE",
+      "changelog_summary": "gve-dkms 1.4.11 delivers critical network stability fixes, resolving buffer corruption with HW-GRO header-split and preventing Rx queue stalls under memory pressure, while adopting standard generic power management.",
+      "created_at": "2026-09-23T10:44:52.067635+00:00"
+    },
+    "cand-de5e870d": {
+      "candidate_id": "cand-de5e870d",
+      "package_id": "kueue",
+      "version": "0.19.5",
+      "download_url": "https://github.com/kubernetes-sigs/kueue/releases/download/v0.19.5/kubectl-kueue-linux-amd64.tar.gz",
+      "checksum": null,
+      "pr_url": null,
+      "build_url": null,
+      "status": "UPDATE_FOUND",
+      "compatibility_verdict": "POTENTIALLY_BREAKING",
+      "changelog_summary": "Kueue 0.19.5 resolves key stability issues in Topology-Aware Scheduling (TAS), HA leader election lease renewals, and DRA workload requeuing. It also introduces a breaking Go interface change for custom ComposableJob implementations and stricter MPIJob/LeaderWorkerSet webhook validations.",
+      "created_at": "2026-09-23T10:45:23.811868+00:00"
+    },
+    "cand-962bc51a": {
+      "candidate_id": "cand-962bc51a",
+      "package_id": "mft",
+      "version": "4.37.0-154",
+      "download_url": "https://www.mellanox.com/downloads/MFT/mft-4.37.0-154-aarch64-deb.tgz",
+      "checksum": "7da37d0064f86c926581ac43f9dcf6fc00e86e7d7745e81c2f1bd4658f80c8ac",
+      "pr_url": null,
+      "build_url": null,
+      "status": "UPDATE_FOUND",
+      "compatibility_verdict": "COMPATIBLE",
+      "changelog_summary": "NVIDIA Mellanox Firmware Tools (MFT) 4.37.0-154 delivers maintenance updates, bug fixes, and expanded firmware management capabilities for ConnectX and BlueField adapters. The release maintains full compatibility with Rocky Linux 9, Debian 12, and 6.1/6.6 LTS Linux kernels without breaking CLI changes.",
+      "created_at": "2026-09-23T10:45:31.423679+00:00"
+    },
+    "cand-804e3d8e": {
+      "candidate_id": "cand-804e3d8e",
+      "package_id": "miniforge",
+      "version": "26.7.2-0",
+      "download_url": "https://github.com/conda-forge/miniforge/releases/download/26.7.2-0/Miniforge3-26.7.2-0-Linux-x86_64.sh",
+      "checksum": null,
+      "pr_url": null,
+      "build_url": null,
+      "status": "UPDATE_FOUND",
+      "compatibility_verdict": "COMPATIBLE",
+      "changelog_summary": "Miniforge 26.7.2-0 updates internal components to conda 26.7.2 and mamba 2.9.0, and adds architecture support for linux-riscv64.",
+      "created_at": "2026-09-23T10:45:44.745916+00:00"
+    },
+    "cand-4169139e": {
+      "candidate_id": "cand-4169139e",
+      "package_id": "nccl-plugin",
+      "version": "1.1.2",
+      "download_url": "https://raw.githubusercontent.com/GoogleCloudPlatform/container-engine-accelerators/master/gpudirect-rdma/nccl-rdma-installer-a4x.yaml",
+      "checksum": null,
+      "pr_url": null,
+      "build_url": null,
+      "status": "UPDATE_FOUND",
+      "compatibility_verdict": "COMPATIBLE",
+      "changelog_summary": "Updates nccl-plugin to v1.1.2, introducing the nccl-plugin-gib-arm64 container image targeted at ARM64 nodes with NVIDIA GB200 accelerators.",
+      "created_at": "2026-09-23T10:46:11.209719+00:00"
+    },
+    "cand-4c9c8413": {
+      "candidate_id": "cand-4c9c8413",
+      "package_id": "nccl-tcpx",
+      "version": "3.1.12",
+      "download_url": "https://raw.githubusercontent.com/GoogleCloudPlatform/container-engine-accelerators/master/gpudirect-tcpx/nccl-tcpx-installer.yaml",
+      "checksum": null,
+      "pr_url": null,
+      "build_url": null,
+      "status": "UPDATE_FOUND",
+      "compatibility_verdict": "COMPATIBLE",
+      "changelog_summary": "Updates the nccl-tcpx installer to use the v3.1.12 plugin container image. This release contains routine image updates without reported breaking changes or deprecated kernel and OS support.",
+      "created_at": "2026-09-23T10:46:25.663131+00:00"
+    },
+    "cand-e4c354e1": {
+      "candidate_id": "cand-e4c354e1",
+      "package_id": "nccl-tcpxo",
+      "version": "1.0.17",
+      "download_url": "https://raw.githubusercontent.com/GoogleCloudPlatform/container-engine-accelerators/master/gpudirect-tcpxo/nccl-tcpxo-installer.yaml",
+      "checksum": null,
+      "pr_url": null,
+      "build_url": null,
+      "status": "UPDATE_FOUND",
+      "compatibility_verdict": "COMPATIBLE",
+      "changelog_summary": "Updates the nccl-tcpxo-installer container image tag to version 1.0.17 within the Kubernetes DaemonSet manifest. No breaking changes, API deprecations, or dropped OS/kernel compatibility are indicated.",
+      "created_at": "2026-09-23T10:46:37.469236+00:00"
+    },
+    "cand-6ab1b832": {
+      "candidate_id": "cand-6ab1b832",
+      "package_id": "nvidia-cuda-arm64",
+      "version": "13.4.2",
+      "download_url": "https://developer.download.nvidia.com/compute/cuda/13.4.2/local_installers/cuda_13.4.2_linux_sbsa.run",
+      "checksum": null,
+      "pr_url": null,
+      "build_url": null,
+      "status": "UPDATE_FOUND",
+      "compatibility_verdict": "COMPATIBLE",
+      "changelog_summary": "CUDA 13.4.2 is a General Availability update providing the standalone runfile installer for arm64-sbsa systems. No breaking changes or dropped platform support were reported.",
+      "created_at": "2026-09-23T10:46:52.718404+00:00"
+    },
+    "cand-274ea5b0": {
+      "candidate_id": "cand-274ea5b0",
+      "package_id": "nvidia-cuda-x86",
+      "version": "13.4.2",
+      "download_url": "https://developer.download.nvidia.com/compute/cuda/13.4.2/local_installers/cuda_13.4.2_linux.run",
+      "checksum": null,
+      "pr_url": null,
+      "build_url": null,
+      "status": "UPDATE_FOUND",
+      "compatibility_verdict": "COMPATIBLE",
+      "changelog_summary": "Updates the nvidia-cuda-x86 installer to the latest GA release 13.4.2 using the official standalone runfile. No breaking syntax, kernel drops, or argument deprecations are indicated.",
+      "created_at": "2026-09-23T10:47:06.156370+00:00"
+    },
+    "cand-8c7fb5fa": {
+      "candidate_id": "cand-8c7fb5fa",
+      "package_id": "nvidia-dcgm",
+      "version": "1:4.7.0-1",
+      "download_url": "https://developer.download.nvidia.com/compute/cuda/repos/debian12/x86_64/datacenter-gpu-manager-4-core_4.7.0-1_amd64.deb",
+      "checksum": "5f42247b2b5e13f97a41623027ed1a0dd1a1101abd30437427bdbeedc534c351",
+      "pr_url": null,
+      "build_url": null,
+      "status": "UPDATE_FOUND",
+      "compatibility_verdict": "COMPATIBLE",
+      "changelog_summary": "nvidia-dcgm version 1:4.7.0-1 is the latest production-stable General Availability release. No breaking syntax, dropped kernel/OS architectures, or API changes are indicated.",
+      "created_at": "2026-09-23T10:47:26.660506+00:00"
+    },
+    "cand-b2ba0cdd": {
+      "candidate_id": "cand-b2ba0cdd",
+      "package_id": "nvidia-dra-driver",
+      "version": "25.12.0",
+      "download_url": "https://github.com/kubernetes-sigs/dra-driver-nvidia-gpu/releases/tag/v25.12.0",
+      "checksum": null,
+      "pr_url": null,
+      "build_url": null,
+      "status": "UPDATE_FOUND",
+      "compatibility_verdict": "POTENTIALLY_BREAKING",
+      "changelog_summary": "NVIDIA DRA Driver 25.12.0 brings the GPU allocation plugin to General Availability, featuring major ComputeDomain formation speedups, alpha Dynamic MIG support for H100+ GPUs, and fail-fast crash behavior for degraded MNNVL fabrics.",
+      "created_at": "2026-09-23T10:49:32.703215+00:00"
+    },
+    "cand-e2933eae": {
+      "candidate_id": "cand-e2933eae",
+      "package_id": "openmpi",
+      "version": "5.0.11",
+      "download_url": "https://github.com/open-mpi/ompi/releases/tag/v5.0.11",
+      "checksum": null,
+      "pr_url": null,
+      "build_url": null,
+      "status": "UPDATE_FOUND",
+      "compatibility_verdict": "COMPATIBLE",
+      "changelog_summary": "OpenMPI 5.0.11 is a routine maintenance patch release in the v5.0.x series focusing on stability and bug fixes. No breaking syntax, dropped platform support, or interface changes are indicated for Cluster Toolkit environments.",
+      "created_at": "2026-09-23T10:49:47.514320+00:00"
+    },
+    "cand-21c67afa": {
+      "candidate_id": "cand-21c67afa",
+      "package_id": "slurm-gcp",
+      "version": "6.13.2",
+      "download_url": "https://github.com/GoogleCloudPlatform/slurm-gcp/releases/tag/6.13.2",
+      "checksum": null,
+      "pr_url": null,
+      "build_url": null,
+      "status": "UPDATE_FOUND",
+      "compatibility_verdict": "COMPATIBLE",
+      "changelog_summary": "This patch release resolves an issue in Ansible playbook execution by correcting the DNF allowerasing parameter and the perftest tag for Rocky Linux and RHEL CIQ builds.",
+      "created_at": "2026-09-23T10:50:00.184763+00:00"
+    },
+    "cand-7ba6d0c0": {
+      "candidate_id": "cand-7ba6d0c0",
+      "package_id": "spack",
+      "version": "1.2.2",
+      "download_url": "https://github.com/spack/spack/releases/download/v1.2.2/spack-1.2.2.tar.gz",
+      "checksum": null,
+      "pr_url": null,
+      "build_url": null,
+      "status": "UPDATE_FOUND",
+      "compatibility_verdict": "COMPATIBLE",
+      "changelog_summary": "Spack 1.2.2 is a patch release delivering bug fixes and performance enhancements to the concretization cache, repository handling, and locking mechanisms. It introduces no breaking changes or platform incompatibilities for Cluster Toolkit environments.",
+      "created_at": "2026-09-23T10:50:12.374323+00:00"
+    }
+  },
+  "learned_rules": [],
+  "benchmark_cases": [
+    {
+      "case_id": "bench-rule-cuda-fail",
+      "category": "RULE_GATE",
+      "package_id": "nvidia-cuda-x86",
+      "test_version": "13.1.0",
+      "sample_changelog": null,
+      "expected_verdict": "BLOCKED",
+      "description": "Candidate matching known faulty compiler bug rule"
+    },
+    {
+      "case_id": "bench-rule-gve-fail",
+      "category": "RULE_GATE",
+      "package_id": "gve-dkms",
+      "test_version": "1.5.0",
+      "sample_changelog": null,
+      "expected_verdict": "BLOCKED",
+      "description": "Candidate matching kernel panic incompatibility constraint"
+    },
+    {
+      "case_id": "bench-rule-cuda-pass",
+      "category": "RULE_GATE",
+      "package_id": "nvidia-cuda-x86",
+      "test_version": "13.3.1_610.43.02",
+      "sample_changelog": null,
+      "expected_verdict": "PASSED",
+      "description": "Valid candidate passing all rules"
+    },
+    {
+      "case_id": "bench-rule-gve-pass",
+      "category": "RULE_GATE",
+      "package_id": "gve-dkms",
+      "test_version": "1.4.11",
+      "sample_changelog": null,
+      "expected_verdict": "PASSED",
+      "description": "Valid candidate passing all rules"
+    },
+    {
+      "case_id": "bench-triage-cuda-break",
+      "category": "CHANGELOG_TRIAGE",
+      "package_id": "nvidia-cuda-x86",
+      "test_version": "13.4.0",
+      "sample_changelog": "NVIDIA CUDA Toolkit 13.4 Release Notes:\n- Dropped support for Linux Kernel < 5.15 and Debian 11.\n- Deprecated nvcc command-line flag '--gpu-architecture=compute_35'.\n- Removed legacy libcuda.so.1 compatibility symlink.\n- Bug Fixes: Fixed NVLink memory synchronization stall on H100/H200.",
+      "expected_verdict": "INCOMPATIBLE",
+      "description": "Simulated release with dropped kernel/OS support & deprecated CLI flags"
+    },
+    {
+      "case_id": "bench-triage-gve-compat",
+      "category": "CHANGELOG_TRIAGE",
+      "package_id": "gve-dkms",
+      "test_version": "1.4.11",
+      "sample_changelog": "Google Virtual Ethernet Driver Release Notes:\n- Fix header buffer corruption when using header-split with HW-GRO.\n- Fix Rx queue stall on buffer allocation failures under memory pressure.\n- Migrate to standard generic power management.\n- Verified compatibility with Linux 6.1 LTS and 6.6 LTS on Debian 12 / Rocky 9.",
+      "expected_verdict": "COMPATIBLE",
+      "description": "Real upstream release with non-breaking bug fixes & kernel compatibility"
+    }
+  ],
+  "audit_runs": [
+    {
+      "trigger_type": "MANUAL",
+      "triggered_by": "cli_user",
+      "components_scanned": 17,
+      "prs_opened": 0,
+      "summary": {
+        "updates_found": 15,
+        "total_scanned": 17
+      },
+      "run_id": "run-20260923_105012-51d8",
+      "started_at": "2026-09-23T10:50:12.380046+00:00"
+    }
+  ]
+}

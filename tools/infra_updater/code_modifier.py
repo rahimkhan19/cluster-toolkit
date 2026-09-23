@@ -17,21 +17,26 @@
 Atomic Code Modifier for the Cluster Toolkit Infrastructure Updater.
 Performs surgical, comment-preserving AST-safe updates on target blueprints,
 synchronizing coupled variables atomically and validating YAML syntax.
-All coupling rules and line signature keywords are loaded dynamically from SQLite.
+All coupling rules and line signature keywords are loaded dynamically from DataStore.
 """
 
 import difflib
 import json
 import os
 import re
-import sqlite3
 import subprocess
+import sys
 from typing import Dict, List, Optional, Any, Tuple
 import yaml
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+if BASE_DIR not in sys.path:
+    sys.path.insert(0, BASE_DIR)
 REPO_ROOT = os.path.abspath(os.path.join(BASE_DIR, "../.."))
-DB_PATH = os.path.join(BASE_DIR, "updater_state.db")
+if REPO_ROOT not in sys.path:
+    sys.path.insert(0, REPO_ROOT)
+
+from tools.infra_updater.datastore import DataStore, get_datastore
 
 class OrchestratorAgent:
     """
@@ -41,8 +46,8 @@ class OrchestratorAgent:
     Transitions candidate updates to READY_FOR_REVIEW.
     """
 
-    def __init__(self, db_path: str = DB_PATH, repo_root: str = REPO_ROOT):
-        self.db_path = db_path
+    def __init__(self, store: Optional[DataStore] = None, repo_root: str = REPO_ROOT):
+        self.store = store or get_datastore()
         self.repo_root = repo_root
 
     def _get_yaml_context(self, lines: List[str], line_idx: int) -> str:
@@ -111,45 +116,31 @@ class OrchestratorAgent:
     def apply_update(self, package_id: str, candidate_id: Optional[str] = None) -> Dict[str, Any]:
         """
         Applies qualified candidate update to all blueprint instances associated with package_id.
-        All variable bindings, coupling patterns, and signature keywords are read dynamically from SQLite.
+        All variable bindings, coupling patterns, and signature keywords are read dynamically from DataStore.
         """
-        conn = sqlite3.connect(self.db_path)
-        cursor = conn.cursor()
-
         # 1. Fetch Candidate Update
         if candidate_id:
-            cursor.execute("""
-                SELECT candidate_id, version, download_url 
-                FROM candidate_updates WHERE candidate_id = ?
-            """, (candidate_id,))
+            cand = self.store.get_candidate(candidate_id)
         else:
-            cursor.execute("""
-                SELECT candidate_id, version, download_url 
-                FROM candidate_updates 
-                WHERE package_id = ? AND status IN ('UPDATE_FOUND', 'READY_FOR_REVIEW', 'QUALIFIED')
-                ORDER BY created_at DESC LIMIT 1
-            """, (package_id,))
-        
-        cand_row = cursor.fetchone()
-        if not cand_row:
-            conn.close()
+            candidates = self.store.list_candidates(package_id=package_id)
+            valid_cands = [c for c in candidates if c.get("status") in ('UPDATE_FOUND', 'READY_FOR_REVIEW', 'QUALIFIED')]
+            cand = valid_cands[-1] if valid_cands else None
+
+        if not cand:
             return {
                 "status": "ERROR",
-                "message": f"No candidate update found for package '{package_id}' in candidate_updates table."
+                "message": f"No candidate update found for package '{package_id}' in datastore."
             }
 
-        cand_id, cand_version, cand_url = cand_row
+        cand_id = cand["candidate_id"]
+        cand_version = cand["version"]
+        cand_url = cand.get("download_url", "")
         filename = os.path.basename(cand_url)
 
         # 2. Fetch Blueprint Instances with dynamically defined signature keywords
-        cursor.execute("""
-            SELECT instance_id, blueprint_path, variable_name, coupled_vars, signature_keywords
-            FROM blueprint_instances WHERE package_id = ?
-        """, (package_id,))
-        instances = cursor.fetchall()
+        instances = self.store.get_blueprints_for_package(package_id)
 
         if not instances:
-            conn.close()
             return {
                 "status": "ERROR",
                 "message": f"No blueprint instances registered for package '{package_id}'."
@@ -158,7 +149,13 @@ class OrchestratorAgent:
         modified_files = []
         all_diffs = {}
 
-        for inst_id, rel_path, var_name, coupled_vars_json, sig_keywords_json in instances:
+        for inst in instances:
+            inst_id = inst.get("instance_id")
+            rel_path = inst.get("blueprint_path")
+            var_name = inst.get("variable_name")
+            coupled_vars = inst.get("coupled_vars", [])
+            sig_keywords = inst.get("signature_keywords", [])
+
             abs_path = os.path.join(self.repo_root, rel_path)
             if not os.path.exists(abs_path):
                 print(f"[WARN] Blueprint file not found: {abs_path}")
@@ -172,11 +169,11 @@ class OrchestratorAgent:
             if "image" in var_name.lower() and "/" not in primary_val:
                 primary_val = f"nvidia/cuda:{primary_val}"
 
-            # Load signature keywords dynamically from the database row
-            try:
-                sig_keywords = json.loads(sig_keywords_json) if sig_keywords_json else []
-            except Exception:
-                sig_keywords = []
+            if isinstance(sig_keywords, str):
+                try:
+                    sig_keywords = json.loads(sig_keywords)
+                except Exception:
+                    sig_keywords = []
 
             # Primary variable replacement
             new_content, primary_changed, old_primary_val = self._replace_variable_in_text(
@@ -232,7 +229,14 @@ class OrchestratorAgent:
                     old_primary_val = "1:4.6.1-1"
 
             # Coupled variables synchronization
-            coupled_list = json.loads(coupled_vars_json)
+            if isinstance(coupled_vars, str):
+                try:
+                    coupled_list = json.loads(coupled_vars)
+                except Exception:
+                    coupled_list = []
+            else:
+                coupled_list = coupled_vars or []
+
             coupled_changes = []
 
             for coupled in coupled_list:
@@ -256,7 +260,6 @@ class OrchestratorAgent:
             try:
                 yaml.safe_load(new_content)
             except yaml.YAMLError as ye:
-                conn.close()
                 return {
                     "status": "ERROR",
                     "message": f"YAML syntax validation failed on {rel_path}: {ye}"
@@ -284,11 +287,17 @@ class OrchestratorAgent:
                 "coupled_changes": coupled_changes
             })
 
-        # 5. Transition Status in SQLite (Doc Section 2.3 & 3.1: status = 'READY_FOR_REVIEW')
-        cursor.execute("UPDATE candidate_updates SET status = 'READY_FOR_REVIEW' WHERE candidate_id = ?", (cand_id,))
-        cursor.execute("UPDATE packages SET current_version = ?, status = 'READY_FOR_REVIEW', updated_at = CURRENT_TIMESTAMP WHERE package_id = ?", (cand_version, package_id))
-        conn.commit()
-        conn.close()
+        # 5. Transition Status in DataStore (Doc Section 2.3 & 3.1: status = 'READY_FOR_REVIEW')
+        pkg = self.store.get_package(package_id)
+        prev_version = pkg.get("current_version") if pkg else None
+        self.store.update_candidate(cand_id, {
+            "status": "READY_FOR_REVIEW",
+            "previous_version": prev_version
+        })
+        self.store.update_package(package_id, {
+            "current_version": cand_version,
+            "status": "READY_FOR_REVIEW"
+        })
 
         return {
             "status": "SUCCESS",
@@ -302,17 +311,15 @@ class OrchestratorAgent:
         }
 
     def revert_update(self, package_id: Optional[str] = None) -> Dict[str, Any]:
-        """Reverts modified files in git worktree back to HEAD."""
-        conn = sqlite3.connect(self.db_path)
-        cursor = conn.cursor()
-
+        """Reverts modified files in git worktree back to HEAD and synchronizes DataStore."""
         if package_id:
-            cursor.execute("SELECT blueprint_path FROM blueprint_instances WHERE package_id = ?", (package_id,))
+            blueprints = self.store.get_blueprints_for_package(package_id)
+            packages = [self.store.get_package(package_id)] if self.store.get_package(package_id) else []
         else:
-            cursor.execute("SELECT blueprint_path FROM blueprint_instances")
+            blueprints = self.store.list_all_blueprints()
+            packages = self.store.list_packages()
 
-        paths = [row[0] for row in cursor.fetchall()]
-        conn.close()
+        paths = list({b["blueprint_path"] for b in blueprints if b.get("blueprint_path")})
 
         reverted = []
         for p in paths:
@@ -320,6 +327,23 @@ class OrchestratorAgent:
             if os.path.exists(abs_p):
                 subprocess.run(["git", "checkout", "--", p], cwd=self.repo_root, check=False)
                 reverted.append(p)
+
+        # Rollback DataStore candidate and package status if they were in READY_FOR_REVIEW
+        for pkg in packages:
+            pid = pkg.get("package_id")
+            if not pid:
+                continue
+            cands = self.store.list_candidates(package_id=pid)
+            prev_ver = None
+            for c in cands:
+                if c.get("status") in ("READY_FOR_REVIEW", "TESTING"):
+                    prev_ver = c.get("previous_version")
+                    self.store.update_candidate(c["candidate_id"], {"status": "UPDATE_FOUND"})
+            if pkg.get("status") == "READY_FOR_REVIEW":
+                pkg_updates = {"status": "UPDATE_FOUND"}
+                if prev_ver:
+                    pkg_updates["current_version"] = prev_ver
+                self.store.update_package(pid, pkg_updates)
 
         return {"status": "REVERTED", "reverted_files": reverted}
 

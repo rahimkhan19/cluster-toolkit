@@ -10,12 +10,18 @@ function switchTab(tabId, btnElement) {
   if (targetPanel) {
     targetPanel.classList.add('active');
   }
-  if (btnElement) {
-    btnElement.classList.add('active');
+  const btn = btnElement ? (btnElement.closest ? (btnElement.closest('.tab-btn') || btnElement) : btnElement) : null;
+  if (btn && btn.classList) {
+    btn.classList.add('active');
   }
 
   if (tabId === 'tab-diff') {
     fetchDiff();
+  } else if (latestPackages && latestPackages.length > 0) {
+    if (tabId === 'tab-packages') renderPackages(latestPackages, latestCandidates);
+    else if (tabId === 'tab-instances') renderInstances(latestInstances);
+    else if (tabId === 'tab-rules') renderRules(latestRules);
+    else if (tabId === 'tab-candidates') renderCandidates(latestCandidates, latestPackages);
   }
 }
 
@@ -28,23 +34,41 @@ function clearConsole() {
 
 let latestPackages = [];
 let latestInstances = [];
+let latestCandidates = [];
+let latestRules = [];
+let latestBenchmarks = [];
+let lastRenderedSignature = "";
 
 async function fetchState() {
   try {
     const res = await fetch('/api/state');
-    if (!res.ok) return;
+    if (!res.ok) {
+      console.warn('GET /api/state returned HTTP', res.status);
+      return;
+    }
     const data = await res.json();
     latestPackages = data.packages || [];
     latestInstances = data.instances || [];
+    latestCandidates = data.candidates || [];
+    latestRules = data.rules || [];
+    latestBenchmarks = data.benchmarks || [];
 
     // 1. Update Metrics
-    const pendingCount = data.stats.pending_updates !== undefined ? data.stats.pending_updates : (data.stats.qualified_candidates || 0);
-    const readyCount = data.stats.ready_updates !== undefined ? data.stats.ready_updates : (data.stats.applied_candidates || 0);
+    const stats = data.stats || {};
+    const pendingCount = stats.pending_updates !== undefined ? stats.pending_updates : (stats.qualified_candidates || 0);
+    const readyCount = stats.ready_updates !== undefined ? stats.ready_updates : (stats.applied_candidates || 0);
 
-    document.getElementById('metric-packages').textContent = data.stats.total_packages;
-    document.getElementById('metric-instances').textContent = data.stats.total_instances;
-    document.getElementById('metric-rules').textContent = data.stats.total_rules;
-    document.getElementById('metric-candidates').textContent = pendingCount;
+    const elPkg = document.getElementById('metric-packages');
+    if (elPkg) elPkg.textContent = stats.total_packages || latestPackages.length;
+
+    const elInst = document.getElementById('metric-instances');
+    if (elInst) elInst.textContent = stats.total_instances || latestInstances.length;
+
+    const elRules = document.getElementById('metric-rules');
+    if (elRules) elRules.textContent = stats.total_rules || latestRules.length;
+
+    const elCand = document.getElementById('metric-candidates');
+    if (elCand) elCand.textContent = pendingCount;
     
     const counterEl = document.getElementById('counter-candidates');
     if (counterEl) counterEl.textContent = pendingCount;
@@ -52,37 +76,54 @@ async function fetchState() {
     const diffDot = document.getElementById('diff-dot');
     if (diffDot) diffDot.style.display = data.has_modifications ? 'inline-block' : 'none';
 
-    if (readyCount > 0) {
-      document.getElementById('metric-candidates-sub').textContent = `${readyCount} ready for review`;
-    } else {
-      document.getElementById('metric-candidates-sub').textContent = 'Qualified & ready for review';
+    const subEl = document.getElementById('metric-candidates-sub');
+    if (subEl) {
+      if (readyCount > 0) {
+        subEl.textContent = `${readyCount} ready for review`;
+      } else {
+        subEl.textContent = 'Qualified & ready for review';
+      }
     }
 
     // 2. Update Status Pill
     const dot = document.getElementById('status-dot');
     const text = document.getElementById('status-text');
-    if (data.is_running) {
-      dot.className = 'status-dot running';
-      text.textContent = `Running: ${data.current_action}...`;
-    } else {
-      dot.className = 'status-dot';
-      text.textContent = data.last_status === 'FAILED' ? 'Last Run Failed' : 'System Idle';
+    if (dot && text) {
+      if (data.is_running) {
+        dot.className = 'status-dot running';
+        text.textContent = `Running: ${data.current_action}...`;
+      } else {
+        dot.className = 'status-dot';
+        text.textContent = data.last_status === 'FAILED' ? 'Last Run Failed' : 'System Idle';
+      }
     }
 
     // Disable action buttons if running
     document.querySelectorAll('.btn').forEach(btn => {
       if (btn.id !== 'btn-clear') {
-        btn.disabled = data.is_running;
+        btn.disabled = !!data.is_running;
       }
     });
 
-    // 3. Render Views
-    renderPackages(data.packages);
-    renderInstances(data.instances);
-    renderRules(data.rules);
-    renderCandidates(data.candidates, data.packages);
-    renderBenchmarks(data.benchmarks);
-    renderDynamicApplyButtons(data.candidates, data.packages);
+    // 3. Skip full DOM rebuild if state hasn't changed (prevents DOM trashing & scroll jump)
+    const currentSignature = JSON.stringify({
+      p: latestPackages,
+      i: latestInstances,
+      c: latestCandidates,
+      r: latestRules,
+      b: latestBenchmarks,
+      mod: data.has_modifications
+    });
+
+    if (currentSignature !== lastRenderedSignature) {
+      lastRenderedSignature = currentSignature;
+      try { renderPackages(latestPackages, latestCandidates); } catch (e) { console.error('Error in renderPackages:', e); }
+      try { renderInstances(latestInstances); } catch (e) { console.error('Error in renderInstances:', e); }
+      try { renderRules(latestRules); } catch (e) { console.error('Error in renderRules:', e); }
+      try { renderCandidates(latestCandidates, latestPackages); } catch (e) { console.error('Error in renderCandidates:', e); }
+      try { renderBenchmarks(latestBenchmarks); } catch (e) { console.error('Error in renderBenchmarks:', e); }
+      try { renderDynamicApplyButtons(latestCandidates, latestPackages); } catch (e) { console.error('Error in renderDynamicApplyButtons:', e); }
+    }
 
     if (data.is_running && !isPollingLogs) {
       startLogPolling();
@@ -221,32 +262,52 @@ function renderCandidates(candidates, packages) {
   }).join('');
 }
 
-function renderPackages(packages) {
+function renderPackages(packages, candidates) {
   const tbody = document.getElementById('packages-table-body');
-  tbody.innerHTML = packages.map(p => {
+  if (!tbody) return;
+  const list = packages || latestPackages || [];
+  if (list.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="9" style="color: var(--text-muted); text-align: center; padding: 24px;">No packages registered in datastore.</td></tr>';
+    return;
+  }
+  const candList = candidates || latestCandidates || [];
+  tbody.innerHTML = list.map(p => {
+    // Determine single effective status for the package
+    const activeCand = candList.find(c => c.package_id === p.package_id && ['UPDATE_FOUND', 'TESTING', 'READY_FOR_REVIEW'].includes(c.status));
+    let effectiveStatus = p.status || 'REGISTERED';
+    if (activeCand) {
+      effectiveStatus = activeCand.status;
+    }
+
     let badgeClass = 'badge-blue';
-    let statusLabel = p.status || 'REGISTERED';
-    if (p.status === 'REGISTERED') {
-      badgeClass = 'badge-blue';
-      statusLabel = 'REGISTERED';
-    } else if (p.status === 'UPDATE_FOUND') {
+    let statusLabel = effectiveStatus;
+    if (effectiveStatus === 'UPDATE_FOUND') {
       badgeClass = 'badge-blue';
       statusLabel = 'UPDATE_FOUND';
-    } else if (p.status === 'READY_FOR_REVIEW') {
+    } else if (effectiveStatus === 'READY_FOR_REVIEW') {
       badgeClass = 'badge-green';
       statusLabel = 'READY_FOR_REVIEW';
-    } else if (p.status === 'UP_TO_DATE') {
+    } else if (effectiveStatus === 'TESTING') {
+      badgeClass = 'badge-amber';
+      statusLabel = 'TESTING';
+    } else if (effectiveStatus === 'UP_TO_DATE') {
       badgeClass = 'badge-green';
       statusLabel = 'UP-TO-DATE';
-    } else if (p.status === 'BLOCKED' || p.status === 'BLOCKED_BY_RULE') {
+    } else if (effectiveStatus === 'BLOCKED' || effectiveStatus === 'BLOCKED_BY_RULE') {
       badgeClass = 'badge-red';
       statusLabel = 'BLOCKED';
-    } else if (p.status === 'SNOOZED') {
+    } else if (effectiveStatus === 'ERROR') {
+      badgeClass = 'badge-red';
+      statusLabel = 'ERROR';
+    } else if (effectiveStatus === 'SNOOZED') {
       badgeClass = 'badge-amber';
       statusLabel = 'SNOOZED';
-    } else if (p.status === 'OBSOLETE') {
+    } else if (effectiveStatus === 'OBSOLETE') {
       badgeClass = 'badge-amber';
       statusLabel = 'OBSOLETE';
+    } else {
+      badgeClass = 'badge-blue';
+      statusLabel = 'REGISTERED';
     }
 
     const upVerHtml = (p.upstream_version && p.upstream_version !== '-')
@@ -262,6 +323,22 @@ function renderPackages(packages) {
          </button>`
       : `<span style="color: var(--text-muted); font-size: 11px;">None</span>`;
 
+    const rawSummary = p.qualification_summary || 'Baseline registered.';
+    const isError = effectiveStatus === 'ERROR' || rawSummary.toLowerCase().includes('failed') || rawSummary.toLowerCase().includes('error:');
+    let displaySummary = rawSummary;
+    if (displaySummary.length > 95) {
+      displaySummary = displaySummary.substring(0, 92) + '...';
+    }
+
+    const summaryTdHtml = isError
+      ? `<td style="font-size: 12px; line-height: 1.4; max-width: 340px;" title="${escapeHtml(rawSummary)}">
+           <span class="badge badge-red" style="font-size: 9px; padding: 1px 5px; margin-right: 4px; vertical-align: middle;">ERROR</span>
+           <span style="color: var(--accent-red); vertical-align: middle;">${escapeHtml(displaySummary)}</span>
+         </td>`
+      : `<td style="font-size: 12px; color: var(--text-secondary); line-height: 1.4; max-width: 340px;" title="${escapeHtml(rawSummary)}">
+           ${escapeHtml(displaySummary)}
+         </td>`;
+
     return `
       <tr>
         <td><span class="code-pill">${escapeHtml(p.package_id)}</span></td>
@@ -271,7 +348,7 @@ function renderPackages(packages) {
         <td><span class="code-pill" style="color: var(--accent-amber)">${escapeHtml(p.upstream_type || 'github_release')}</span></td>
         <td><span class="badge ${badgeClass}">${escapeHtml(statusLabel)}</span></td>
         <td>${blueprintBtnHtml}</td>
-        <td style="font-size: 12px; color: var(--text-secondary); line-height: 1.4; max-width: 380px;">${escapeHtml(p.qualification_summary || 'Baseline registered.')}</td>
+        ${summaryTdHtml}
         <td><a href="${escapeHtml(p.source_url)}" target="_blank" style="color: var(--accent-blue); text-decoration: none; font-size: 12px; word-break: break-all;">${escapeHtml(p.source_url)}</a></td>
       </tr>
     `;
@@ -280,9 +357,21 @@ function renderPackages(packages) {
 
 function renderInstances(instances) {
   const tbody = document.getElementById('instances-table-body');
-  tbody.innerHTML = instances.map(inst => {
-    const coupledDesc = inst.coupled_vars.length > 0 
-      ? inst.coupled_vars.map(c => `<span class="code-pill" style="color: var(--accent-amber)">${c.variable_name} (${c.pattern})</span>`).join(', ')
+  if (!tbody) return;
+  const list = instances || latestInstances || [];
+  if (list.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="5" style="color: var(--text-muted); text-align: center; padding: 24px;">No blueprint instances registered in datastore.</td></tr>';
+    return;
+  }
+  tbody.innerHTML = list.map(inst => {
+    let coupled = [];
+    if (Array.isArray(inst.coupled_vars)) {
+      coupled = inst.coupled_vars;
+    } else if (typeof inst.coupled_vars === 'string') {
+      try { coupled = JSON.parse(inst.coupled_vars); } catch(e) { coupled = []; }
+    }
+    const coupledDesc = coupled.length > 0 
+      ? coupled.map(c => `<span class="code-pill" style="color: var(--accent-amber)">${escapeHtml(c.variable_name || '')} (${escapeHtml(c.pattern || '{filename}')})</span>`).join(', ')
       : '<span style="color: var(--text-muted)">Direct</span>';
 
     return `
@@ -299,7 +388,13 @@ function renderInstances(instances) {
 
 function renderRules(rules) {
   const tbody = document.getElementById('rules-table-body');
-  tbody.innerHTML = rules.map(r => `
+  if (!tbody) return;
+  const list = rules || latestRules || [];
+  if (list.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="6" style="color: var(--text-muted); text-align: center; padding: 24px;">No policy rules configured in datastore.</td></tr>';
+    return;
+  }
+  tbody.innerHTML = list.map(r => `
     <tr>
       <td><span class="code-pill">${escapeHtml(r.rule_id)}</span></td>
       <td><span class="code-pill">${escapeHtml(r.package_id)}</span></td>
@@ -314,8 +409,9 @@ function renderRules(rules) {
 function renderBenchmarks(benchmarks) {
   const tbody = document.getElementById('benchmarks-table-body');
   if (!tbody) return;
-  if (!benchmarks || benchmarks.length === 0) {
-    tbody.innerHTML = '<tr><td colspan="6" style="color: var(--text-muted); text-align: center;">No benchmark test cases loaded from database.</td></tr>';
+  const list = benchmarks || latestBenchmarks || [];
+  if (list.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="6" style="color: var(--text-muted); text-align: center; padding: 24px;">No benchmark test cases loaded from datastore.</td></tr>';
     return;
   }
 
@@ -353,6 +449,7 @@ function renderDynamicApplyButtons(candidates, packages) {
 }
 
 async function triggerAction(action, packageId = null) {
+  lastRenderedSignature = "";
   // If running full pipeline or reset, open console tab
   if (action === 'end_to_end' || action === 'reset') {
     const consoleBtn = Array.from(document.querySelectorAll('.tab-btn')).find(b => b.textContent.includes('Console'));
