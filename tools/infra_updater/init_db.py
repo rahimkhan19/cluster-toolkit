@@ -241,6 +241,56 @@ def init_database():
             "REGISTERED",
             None
         ),
+        (
+            "nvidia-dra-driver",
+            "NVIDIA GPU DRA Driver for Kubernetes",
+            "v25.8.0",
+            "https://github.com/kubernetes-sigs/dra-driver-nvidia-gpu",
+            "github_release",
+            r"v[0-9\.]+",
+            "REGISTERED",
+            None
+        ),
+        (
+            "nvidia-cuda-image",
+            "NVIDIA CUDA Test Container Image",
+            "13.0.0-base-ubuntu24.04",
+            "https://hub.docker.com/v2/repositories/nvidia/cuda/tags",
+            "docker_hub",
+            r"[0-9\.]+-(?:base|runtime)-ubuntu[0-9\.]+",
+            "REGISTERED",
+            None
+        ),
+        (
+            "kueue",
+            "Kubernetes SIG Kueue Queueing System",
+            "0.17.1",
+            "https://github.com/kubernetes-sigs/kueue",
+            "github_release",
+            r"v?[0-9\.]+",
+            "REGISTERED",
+            None
+        ),
+        (
+            "cmake",
+            "Kitware CMake Build System",
+            "3.26.0",
+            "https://github.com/Kitware/CMake",
+            "github_release",
+            r"v?[0-9\.]+",
+            "REGISTERED",
+            None
+        ),
+        (
+            "miniforge",
+            "Miniforge3 Conda Installer",
+            "24.7.1-2",
+            "https://github.com/conda-forge/miniforge",
+            "github_release",
+            r"[0-9\.\-]+",
+            "REGISTERED",
+            None
+        ),
     ]
 
     cursor.executemany("""
@@ -403,6 +453,38 @@ def init_database():
             json.dumps([]),
             json.dumps(["nccl", "rdma"])
         ),
+        (
+            "gke-a3ultra-gib",
+            "nccl-plugin",
+            "examples/gke-a3-ultragpu/gke-a3-ultragpu.yaml",
+            "version",
+            json.dumps([]),
+            json.dumps(["gib", "template_vars"])
+        ),
+        (
+            "gke-a4-gib",
+            "nccl-plugin",
+            "examples/gke-a4/gke-a4.yaml",
+            "version",
+            json.dumps([]),
+            json.dumps(["gib", "template_vars"])
+        ),
+        (
+            "gke-a4x-gib",
+            "nccl-plugin",
+            "examples/gke-a4x/gke-a4x.yaml",
+            "version",
+            json.dumps([]),
+            json.dumps(["gib", "template_vars"])
+        ),
+        (
+            "gke-a4xmax-gib",
+            "nccl-plugin",
+            "examples/gke-a4x-max-bm/gke-a4x-max-bm.yaml",
+            "version",
+            json.dumps([]),
+            json.dumps(["gib", "template_vars"])
+        ),
 
         # nvidia-dcgm
         (
@@ -490,6 +572,115 @@ def init_database():
             "openmpi_version",
             json.dumps([]),
             json.dumps(["openmpi", "mpi"])
+        ),
+
+        # nvidia-dra-driver
+        (
+            "gke-a4xmax-dra",
+            "nvidia-dra-driver",
+            "examples/gke-a4x-max-bm/gke-a4x-max-bm.yaml",
+            "version",
+            json.dumps([]),
+            json.dumps(["nvidia_dra_driver"])
+        ),
+
+        # nvidia-cuda-image
+        (
+            "gke-a3ultra-cuda-image",
+            "nvidia-cuda-image",
+            "examples/gke-a3-ultragpu/gke-a3-ultragpu.yaml",
+            "image",
+            json.dumps([]),
+            json.dumps(["nvidia-smi"])
+        ),
+        (
+            "gke-a4-cuda-image",
+            "nvidia-cuda-image",
+            "examples/gke-a4/gke-a4.yaml",
+            "image",
+            json.dumps([]),
+            json.dumps(["nvidia-smi"])
+        ),
+        (
+            "gke-a4x-cuda-image",
+            "nvidia-cuda-image",
+            "examples/gke-a4x/gke-a4x.yaml",
+            "image",
+            json.dumps([]),
+            json.dumps(["nvidia-smi"])
+        ),
+        (
+            "gke-a4xmax-cuda-image",
+            "nvidia-cuda-image",
+            "examples/gke-a4x-max-bm/gke-a4x-max-bm.yaml",
+            "image",
+            json.dumps([]),
+            json.dumps(["nvidia-smi"])
+        ),
+        (
+            "gke-g4-cuda-image",
+            "nvidia-cuda-image",
+            "examples/gke-g4/gke-g4.yaml",
+            "image",
+            json.dumps([]),
+            json.dumps(["nvidia-smi"])
+        ),
+        (
+            "gke-g4conf-cuda-image",
+            "nvidia-cuda-image",
+            "examples/gke-g4-confidential/gke-g4-confidential.yaml",
+            "image",
+            json.dumps([]),
+            json.dumps(["nvidia-smi"])
+        ),
+
+        # kueue
+        (
+            "gke-a3high-kueue",
+            "kueue",
+            "examples/gke-a3-highgpu/gke-a3-highgpu.yaml",
+            "version",
+            json.dumps([]),
+            json.dumps(["kueue"])
+        ),
+        (
+            "gke-a4x-kueue",
+            "kueue",
+            "examples/gke-a4x/gke-a4x.yaml",
+            "version",
+            json.dumps([]),
+            json.dumps(["kueue"])
+        ),
+        (
+            "gke-a4xmax-kueue",
+            "kueue",
+            "examples/gke-a4x-max-bm/gke-a4x-max-bm.yaml",
+            "version",
+            json.dumps([]),
+            json.dumps(["kueue"])
+        ),
+
+        # cmake
+        (
+            "ml-slurm-g4-vgpu-cmake",
+            "cmake",
+            "examples/ml-slurm-g4-vgpu.yaml",
+            "url",
+            json.dumps([
+                {"variable_name": "dest", "pattern": "/tmp/{filename}"},
+                {"variable_name": "cmd", "pattern": "/tmp/{filename} --skip-license"}
+            ]),
+            json.dumps(["cmake"])
+        ),
+
+        # miniforge
+        (
+            "ml-slurm-miniforge",
+            "miniforge",
+            "examples/ml-slurm.yaml",
+            "miniforge",
+            json.dumps([]),
+            json.dumps(["miniforge"])
         )
     ]
 

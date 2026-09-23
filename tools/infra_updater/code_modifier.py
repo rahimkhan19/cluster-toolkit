@@ -45,12 +45,38 @@ class OrchestratorAgent:
         self.db_path = db_path
         self.repo_root = repo_root
 
+    def _get_yaml_context(self, lines: List[str], line_idx: int) -> str:
+        """Extracts parent block keys and immediate sibling metadata for contextual variable replacement."""
+        current_indent = len(lines[line_idx]) - len(lines[line_idx].lstrip(" \t"))
+        context_tokens = [lines[line_idx].strip()]
+        running_indent = current_indent
+        for j in range(line_idx - 1, -1, -1):
+            l = lines[j]
+            stripped = l.strip()
+            if not stripped or stripped.startswith("#"):
+                continue
+            indent = len(l) - len(l.lstrip(" \t"))
+            if indent < running_indent:
+                context_tokens.append(stripped)
+                running_indent = indent
+                if running_indent == 0:
+                    break
+            elif indent == running_indent and any(stripped.startswith(k) for k in ["id:", "- id:", "name:"]):
+                context_tokens.append(stripped)
+
+        for j in range(max(0, line_idx - 5), min(len(lines), line_idx + 6)):
+            l = lines[j].strip()
+            if any(l.startswith(k) for k in ["id:", "- id:", "name:", "source:", "image:", "command:"]):
+                context_tokens.append(l)
+
+        return " ".join(context_tokens).lower()
+
     def _replace_variable_in_text(
         self, text: str, var_name: str, new_val: str, signature_keywords: Optional[List[str]] = None
     ) -> Tuple[str, bool, str]:
         """
         Surgically replaces a variable assignment line preserving exact indentation and quotes.
-        If signature_keywords is provided, only replaces lines that contain at least one keyword.
+        If signature_keywords is provided, checks contextual parent hierarchy and nearby metadata.
         Returns: (new_text, changed, old_val)
         """
         pattern = rf'^([ \t]*{re.escape(var_name)}:[ \t]*)(["\']?)([^"\r\n]+)(["\']?.*)$'
@@ -59,13 +85,13 @@ class OrchestratorAgent:
         old_val = ""
 
         new_lines = []
-        for line in lines:
+        for i, line in enumerate(lines):
             m = re.match(pattern, line)
             if m:
                 # If keywords provided, check if line or nearby context matches
                 if signature_keywords:
-                    line_lower = line.lower()
-                    if not any(k.lower() in line_lower for k in signature_keywords):
+                    ctx = self._get_yaml_context(lines, i)
+                    if not any(k.lower() in ctx for k in signature_keywords):
                         new_lines.append(line)
                         continue
 
@@ -143,6 +169,8 @@ class OrchestratorAgent:
 
             # Determine primary replacement value based on variable type
             primary_val = cand_url if "url" in var_name.lower() else cand_version
+            if "image" in var_name.lower() and "/" not in primary_val:
+                primary_val = f"nvidia/cuda:{primary_val}"
 
             # Load signature keywords dynamically from the database row
             try:
@@ -164,6 +192,30 @@ class OrchestratorAgent:
                     new_content = content_after
                     primary_changed = True
                     old_primary_val = "4.34.0-145"
+
+            # Inline script fallback for Miniforge
+            if not primary_changed and (package_id == "miniforge" or "miniforge" in var_name.lower()):
+                content_after = re.sub(
+                    r'https://github\.com/conda-forge/miniforge/releases/download/[0-9\.\-]+/Miniforge3-[0-9\.\-]+-Linux-x86_64\.sh',
+                    f'https://github.com/conda-forge/miniforge/releases/download/{cand_version}/Miniforge3-{cand_version}-Linux-x86_64.sh',
+                    orig_content
+                )
+                content_after = re.sub(
+                    r'Miniforge3-[0-9\.\-]+-Linux-x86_64\.sh',
+                    f'Miniforge3-{cand_version}-Linux-x86_64.sh',
+                    content_after
+                )
+                if content_after != orig_content:
+                    new_content = content_after
+                    primary_changed = True
+                    old_primary_val = "24.7.1-2"
+
+            # Custom URL builder for CMake local installer
+            if package_id == "cmake" or "cmake" in var_name.lower():
+                parts = cand_version.lstrip("v").split(".")
+                maj_min = f"v{parts[0]}.{parts[1]}" if len(parts) >= 2 else f"v{cand_version}"
+                primary_val = f"https://cmake.org/files/{maj_min}/cmake-{cand_version.lstrip('v')}-linux-x86_64.sh"
+                filename = f"cmake-{cand_version.lstrip('v')}-linux-x86_64.sh"
 
             # List item replacement for nvidia_packages (e.g. datacenter-gpu-manager packages)
             if not primary_changed and (package_id == "nvidia-dcgm" or "dcgm" in var_name or "nvidia_packages" in var_name):
