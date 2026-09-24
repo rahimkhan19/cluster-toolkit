@@ -255,7 +255,7 @@ deployment_groups:
         install: true
       nvidia_dra_driver:
         install: true
-        version: "v25.8.0"
+        version: "25.12.0"
         accelerator_type: $(vars.accelerator_type)
       gib:
         install: true  # NCCL gIB plugin via DaemonSet initContainer
