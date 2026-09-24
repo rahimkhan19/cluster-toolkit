@@ -22,12 +22,12 @@ Fully aligned with Section 2 of the Implementation Guide:
 - Entity: blueprint_instances (Blueprint Locations with coupled variables and signature keywords)
 - Entity: candidate_updates (Candidate Update Lifecycle: UPDATE_FOUND, TESTING, READY_FOR_REVIEW, MERGED, CANCELLED)
 - Entity: learned_rules (Persistent Rule Engine with multi-blueprint scope, action, source, and expiration)
-- Entity: benchmark_cases (Dynamic Test Data for upfront rule enforcement and semantic changelog triage)
 """
 
 import json
 import os
 import sys
+from typing import Optional, Dict, Any, List
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 if BASE_DIR not in sys.path:
@@ -589,78 +589,6 @@ def init_database(preserve_candidates: bool = False):
     # -------------------------------------------------------------------------
     rules_data = []
 
-    # -------------------------------------------------------------------------
-    # Seed Benchmark Cases (Dynamic Test Data)
-    # -------------------------------------------------------------------------
-    benchmarks_data = [
-        (
-            "bench-rule-cuda-fail",
-            "RULE_GATE",
-            "nvidia-cuda-x86",
-            "13.1.0",
-            None,
-            "BLOCKED",
-            "Candidate matching known faulty compiler bug rule"
-        ),
-        (
-            "bench-rule-gve-fail",
-            "RULE_GATE",
-            "gve-dkms",
-            "1.5.0",
-            None,
-            "BLOCKED",
-            "Candidate matching kernel panic incompatibility constraint"
-        ),
-        (
-            "bench-rule-cuda-pass",
-            "RULE_GATE",
-            "nvidia-cuda-x86",
-            "13.3.1_610.43.02",
-            None,
-            "PASSED",
-            "Valid candidate passing all rules"
-        ),
-        (
-            "bench-rule-gve-pass",
-            "RULE_GATE",
-            "gve-dkms",
-            "1.4.11",
-            None,
-            "PASSED",
-            "Valid candidate passing all rules"
-        ),
-        (
-            "bench-triage-cuda-break",
-            "CHANGELOG_TRIAGE",
-            "nvidia-cuda-x86",
-            "13.4.0",
-            (
-                "NVIDIA CUDA Toolkit 13.4 Release Notes:\n"
-                "- Dropped support for Linux Kernel < 5.15 and Debian 11.\n"
-                "- Deprecated nvcc command-line flag '--gpu-architecture=compute_35'.\n"
-                "- Removed legacy libcuda.so.1 compatibility symlink.\n"
-                "- Bug Fixes: Fixed NVLink memory synchronization stall on H100/H200."
-            ),
-            "INCOMPATIBLE",
-            "Simulated release with dropped kernel/OS support & deprecated CLI flags"
-        ),
-        (
-            "bench-triage-gve-compat",
-            "CHANGELOG_TRIAGE",
-            "gve-dkms",
-            "1.4.11",
-            (
-                "Google Virtual Ethernet Driver Release Notes:\n"
-                "- Fix header buffer corruption when using header-split with HW-GRO.\n"
-                "- Fix Rx queue stall on buffer allocation failures under memory pressure.\n"
-                "- Migrate to standard generic power management.\n"
-                "- Verified compatibility with Linux 6.1 LTS and 6.6 LTS on Debian 12 / Rocky 9."
-            ),
-            "COMPATIBLE",
-            "Real upstream release with non-breaking bug fixes & kernel compatibility"
-        ),
-    ]
-
     # Build seed_json for updater_state.json
     pkgs = {}
     for p in packages_data:
@@ -706,23 +634,10 @@ def init_database(preserve_candidates: bool = False):
             "created_at": "2026-09-23T06:00:00Z"
         })
 
-    benchmarks = []
-    for b in benchmarks_data:
-        benchmarks.append({
-            "case_id": b[0],
-            "category": b[1],
-            "package_id": b[2],
-            "test_version": b[3],
-            "sample_changelog": b[4],
-            "expected_verdict": b[5],
-            "description": b[6]
-        })
-
     seed_json = {
         "packages": pkgs,
         "candidate_updates": {},
         "learned_rules": rules,
-        "benchmark_cases": benchmarks,
         "audit_runs": []
     }
 
@@ -802,13 +717,12 @@ def preview_tables():
     if not candidates:
         print("Empty (No candidates currently queued).")
     else:
-        print(f"{'Candidate ID':<15} | {'Package ID':<18} | {'Target Version':<18} | {'Workflow Status':<18} | {'LLM Verdict':<14} | Summary")
+        print(f"{'Candidate ID':<15} | {'Package ID':<18} | {'Target Version':<18} | {'Workflow Status':<18} | Summary")
         print("-" * 135)
         for c in candidates:
-            s = c.get("changelog_summary", "") or "N/A"
-            summary = (s[:50] + "...") if len(s) > 50 else s
-            verdict = c.get("compatibility_verdict") or "UNKNOWN"
-            print(f"{c.get('candidate_id', ''):<15} | {c.get('package_id', ''):<18} | {c.get('version', ''):<18} | {c.get('status', ''):<18} | {verdict:<14} | {summary}")
+            s = c.get("summary") or c.get("changelog_summary", "") or "N/A"
+            summary = (s[:65] + "...") if len(s) > 65 else s
+            print(f"{c.get('candidate_id', ''):<15} | {c.get('package_id', ''):<18} | {c.get('version', ''):<18} | {c.get('status', ''):<18} | {summary}")
     print("=" * 135)
 
 if __name__ == "__main__":

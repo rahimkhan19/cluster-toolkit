@@ -17,13 +17,12 @@
 Master CLI Runner for the Cluster Toolkit Infrastructure Updater.
 Aligns with Implementation Guide: Automated Dependency Management.
 Demonstrates:
-  1. Source Qualification Agent (Section 4.2): Upstream release discovery, GA stability filtering, policy rule checks.
+  1. Source Qualification Agent (Section 4.2): Upstream release discovery, GA stability filtering, policy rule checks, artifact liveness.
   2. Orchestrator Agent (Section 4.3): Atomic blueprint updates, coupled variable synchronization, status transitions.
   3. Upstream policy rules loaded dynamically from DataStore (Section 2.2).
-  4. Changelog semantic compatibility triage (Section 4.2).
 
 All evaluation rules, blueprint instances, and package registries are loaded dynamically
-from the DataStore (packages, blueprints, learned_rules, benchmark_cases).
+from the DataStore (packages, blueprints, learned_rules).
 """
 
 import argparse
@@ -39,10 +38,14 @@ REPO_ROOT = os.path.abspath(os.path.join(BASE_DIR, "../.."))
 if REPO_ROOT not in sys.path:
     sys.path.insert(0, REPO_ROOT)
 
+from tools.infra_updater.config import get_config
+from tools.infra_updater.repo_manager import RepoManager
 from tools.infra_updater.datastore import get_datastore
 from init_db import init_database, preview_tables
 from source_agent import SourceQualificationAgent, UpfrontRuleChecker
 from code_modifier import OrchestratorAgent, AtomicCodeModifier
+
+CONFIG = get_config()
 
 # ANSI terminal colors
 GREEN = "\033[92m"
@@ -52,8 +55,13 @@ CYAN = "\033[96m"
 BOLD = "\033[1m"
 RESET = "\033[0m"
 
-def run_check_all(model: str = "gemini-3.8-flash"):
+def run_check_all(model: str = None):
+    if model is None:
+        model = CONFIG.llm.model
     print(f"\n{BOLD}{CYAN}=== STEP 1: Source Qualification Agent (Upstream Discovery & Qualification) ==={RESET}")
+    # Ensure target workspace develop branch is in sync with remote origin
+    repo_mgr = RepoManager(CONFIG)
+    repo_mgr.ensure_workspace(force_clean=True)
     print("Evaluating GA Stability, Policy Rules, and Compatibility...\n")
 
     agent = SourceQualificationAgent(model=model)
@@ -91,15 +99,6 @@ def run_check_all(model: str = "gemini-3.8-flash"):
         print(f"{pkg_id:<18} | {curr_ver:<14} | {up_ver:<16} | {target_ver:<14} | {policy_check:<23} | {status_str:<27} | {summary}")
 
     print("=" * 140)
-    print(f"\n{BOLD}Changelog Summaries & Compatibility Verdicts:{RESET}")
-    for r in results:
-        if r.get("status") == "UPDATE_FOUND":
-            print(f"  * {BOLD}{r['package_id']} ({r['candidate_version']}){RESET}:")
-            print(f"    - Verdict:  {GREEN}{r.get('llm_verdict', 'COMPATIBLE')}{RESET} (Track: {r.get('llm_release_track')})")
-            print(f"    - Summary:  {r.get('llm_summary')}")
-            print(f"    - PR Notes: {r.get('llm_pr_notes', '').strip()}")
-            print()
-
     print(f"[INFO] Qualified candidate updates stored in table '{BOLD}candidate_updates{RESET}'.")
     print(f"[TIP] Run '{BOLD}python3 tools/infra_updater/run_updater.py --apply <package_id>{RESET}' to apply changes to target blueprints.")
 
@@ -118,20 +117,22 @@ def run_check_all(model: str = "gemini-3.8-flash"):
         pass
 
 
-def run_apply(package_id: str):
-    print(f"\n{BOLD}{CYAN}=== STEP 2: Orchestrator Agent (Blueprint Update & Variable Synchronization) ==={RESET}")
-    print(f"Target Package: {BOLD}{package_id}{RESET}\n")
+def run_apply(package_id: str, create_pr: bool = True):
+    print(f"\n{BOLD}{CYAN}=== STEP 2: Orchestrator Agent (Blueprint Update & PR Creation) ==={RESET}")
+    print(f"Target Package:    {BOLD}{package_id}{RESET}")
+    print(f"Target Repository: {BOLD}{CONFIG.repository.url}{RESET} (branch: {BOLD}{CONFIG.repository.base_branch}{RESET})\n")
 
     store = get_datastore()
     candidates = store.list_candidates(package_id=package_id)
     cand = candidates[-1] if candidates else None
 
     if cand:
-        print(f"{CYAN}[Triage Summary]{RESET} Compatibility: {GREEN}{cand.get('compatibility_verdict', 'UNKNOWN')}{RESET}")
-        print(f"{CYAN}[Triage Summary]{RESET} Changelog:     {cand.get('changelog_summary', '')}\n")
+        print(f"{CYAN}[Candidate]{RESET} Target Version: {GREEN}{cand.get('version')}{RESET}")
+        if cand.get("summary"):
+            print(f"{CYAN}[Candidate]{RESET} Summary:        {cand.get('summary')}\n")
 
     agent = OrchestratorAgent(store=store)
-    res = agent.apply_update(package_id)
+    res = agent.apply_update(package_id, create_pr=create_pr)
 
     if res["status"] != "SUCCESS":
         print(f"{RED}[ERROR] {res.get('message')}{RESET}")
@@ -139,7 +140,14 @@ def run_apply(package_id: str):
 
     print(f"{GREEN}[SUCCESS] Target Version:   {res['target_version']}{RESET}")
     print(f"{GREEN}[SUCCESS] Download URL:     {res['download_url']}{RESET}")
-    print(f"{GREEN}[SUCCESS] Workflow Status:  READY_FOR_REVIEW{RESET}\n")
+    print(f"{GREEN}[SUCCESS] Workflow Status:  READY_FOR_REVIEW{RESET}")
+    if res.get("branch"):
+        print(f"{CYAN}[BRANCH]{RESET}        Update Branch:  {BOLD}{res['branch']}{RESET}")
+    if res.get("pushed"):
+        print(f"{GREEN}[GIT PUSH]{RESET}      Remote Branch:  {CONFIG.repository.url}")
+    if res.get("pr_url"):
+        print(f"{GREEN}{BOLD}[PULL REQUEST]{RESET}  GitHub PR:      {BOLD}{res['pr_url']}{RESET}")
+    print()
 
     print(f"{BOLD}Modified Blueprints & Synchronized Variables:{RESET}")
     for mod in res["modified_files"]:
@@ -164,123 +172,120 @@ def run_apply(package_id: str):
     print(f"{GREEN}[VERIFIED] YAML syntax valid on all modified files.{RESET}")
 
 
-def run_test_llm_triage(model: str = "gemini-3.8-flash"):
-    print(f"\n{BOLD}{CYAN}=== Semantic Changelog & Deprecation Analysis (Gemini LLM) ==={RESET}")
-    print("Demonstrating LLM reasoning over upstream changelogs loaded dynamically from table 'benchmark_cases'...\n")
-
-    agent = SourceQualificationAgent(model=model)
-    if not agent.use_llm:
-        print(f"{RED}[ERROR] Gemini LLM client is not available.{RESET}")
-        return
-
-    # Load test cases dynamically from DataStore benchmark_cases (Zero Hardcoding)
-    store = get_datastore()
-    all_benchmarks = store.list_benchmarks()
-    test_cases = [b for b in all_benchmarks if b.get("category") == "CHANGELOG_TRIAGE"]
-
-    if not test_cases:
-        print(f"{YELLOW}[WARN] No CHANGELOG_TRIAGE benchmark cases found in database.{RESET}")
-        return
-
-    for case in test_cases:
-        pkg_id = case.get("package_id")
-        ver = case.get("test_version")
-        changelog = case.get("sample_changelog", "")
-        desc = case.get("description", "")
-        expected_verdict = case.get("expected_verdict", "")
-        print(f"{BOLD}Scenario:{RESET} {desc} ({BOLD}{pkg_id} v{ver}{RESET}) [Expected: {expected_verdict}]")
-        analysis = agent.analyze_changelog_with_llm(pkg_id, ver, changelog or "")
-        
-        if analysis.is_breaking or analysis.compatibility_verdict == "INCOMPATIBLE":
-            verdict_color = RED
-        elif analysis.compatibility_verdict == "POTENTIALLY_BREAKING":
-            verdict_color = YELLOW
-        else:
-            verdict_color = GREEN
-
-        print(f"  * {BOLD}LLM Compatibility Verdict:{RESET} {verdict_color}{analysis.compatibility_verdict}{RESET}")
-        print(f"  * {BOLD}Breaking Changes Detected:{RESET} {analysis.is_breaking}")
-        if analysis.breaking_reasons:
-            print(f"  * {BOLD}Specific Breaking Items Identified by LLM:{RESET}")
-            for item in analysis.breaking_reasons:
-                print(f"    - {RED}{item}{RESET}")
-        print(f"  * {BOLD}Executive Summary:{RESET} {analysis.summary}")
-        print(f"  * {BOLD}Generated PR Notes:{RESET} {analysis.pr_changelog_snippet.strip()}")
-        print("-" * 90)
-
-
 def run_test_rule_blocking():
-    print(f"\n{BOLD}{CYAN}=== Learned Rule Policy Enforcement ==={RESET}")
-    print("Evaluating candidate versions against persistent learned rules (table 'benchmark_cases')...\n")
-
-    checker = UpfrontRuleChecker()
-
-    # Load test cases dynamically from DataStore benchmark_cases (Zero Hardcoding)
+    print(f"\n{BOLD}{CYAN}=== Active Learned Policy Rules ==={RESET}")
     store = get_datastore()
-    all_benchmarks = store.list_benchmarks()
-    test_cases = [b for b in all_benchmarks if b.get("category") == "RULE_GATE"]
-
-    if not test_cases:
-        print(f"{YELLOW}[WARN] No RULE_GATE benchmark cases found in database.{RESET}")
+    rules = store.list_rules()
+    if not rules:
+        print("No active policy rules registered in DataStore (table 'learned_rules').\n")
         return
 
-    print(f"{'Package ID':<18} | {'Candidate Ver':<18} | {'Decision':<14} | Details & Rationale")
+    print(f"{'Rule ID':<22} | {'Package ID':<18} | {'Type':<16} | {'Constraint':<20} | {'Action':<6} | Reason")
     print("=" * 110)
+    for r in rules:
+        print(f"{r.get('rule_id', ''):<22} | {r.get('package_id', ''):<18} | {r.get('rule_type', ''):<16} | {r.get('version_constraint', ''):<20} | {r.get('action', ''):<6} | {r.get('reason', '')}")
+    print("=" * 110 + "\n")
 
-    for case in test_cases:
-        pkg_id = case.get("package_id")
-        ver = case.get("test_version")
-        desc = case.get("description", "")
-        expected_verdict = case.get("expected_verdict", "")
-        is_blocked, rule = checker.check_version(pkg_id, ver)
 
-        if is_blocked:
-            decision = f"{RED}{BOLD}BLOCKED{RESET}"
-            details = f"Rule {rule['rule_id']} ({rule['version_constraint']}) -> {rule['reason']}"
+def run_sync_repo():
+    print(f"\n{BOLD}{CYAN}=== Synchronizing Target Repository ==={RESET}")
+    repo_mgr = RepoManager(CONFIG)
+    print(f"Target Repository: {BOLD}{CONFIG.repository.url}{RESET} (branch: {BOLD}{CONFIG.repository.base_branch}{RESET})")
+    print(f"Target Directory:  {BOLD}{repo_mgr.workspace_dir}{RESET}")
+    print("Fetching latest commits from remote and resetting workspace to clean base...")
+    repo_mgr.ensure_workspace(force_clean=True)
+    head_proc = subprocess.run(["git", "rev-parse", "--short", "HEAD"], cwd=repo_mgr.workspace_dir, stdout=subprocess.PIPE, text=True, check=False)
+    head_commit = head_proc.stdout.strip()
+    print(f"{GREEN}[SUCCESS] Target workspace synchronized to {CONFIG.repository.base_branch} @ {head_commit}.{RESET}")
+
+    # Synchronize open PR statuses with GitHub
+    store = get_datastore()
+    print("Checking open Pull Request statuses on GitHub...")
+    repo_mgr.sync_open_pr_statuses(store)
+    print(f"{GREEN}[SUCCESS] Pull request statuses synchronized.{RESET}\n")
+
+
+def run_sync_prs():
+    print(f"\n{BOLD}{CYAN}=== Synchronizing GitHub Pull Request Statuses ==={RESET}")
+    repo_mgr = RepoManager(CONFIG)
+    store = get_datastore()
+    res = repo_mgr.sync_open_pr_statuses(store)
+    if res.get("synced"):
+        changes = res.get("changes", [])
+        if changes:
+            print(f"{GREEN}[SUCCESS] Synced PR statuses with GitHub ({len(changes)} changes applied):{RESET}")
+            for ch in changes:
+                act = ch.get("action")
+                cid = ch.get("candidate_id")
+                pnum = ch.get("pr_number")
+                if act == "REVERTED_TO_UPDATE_FOUND":
+                    print(f"  * Candidate {cid} (PR #{pnum}): Closed manually -> moved back to {GREEN}UPDATE_FOUND{RESET} (update available)")
+                elif act == "MERGED":
+                    print(f"  * Candidate {cid} (PR #{pnum}): Merged -> updated to {CYAN}UP_TO_DATE{RESET}")
+                else:
+                    print(f"  * Candidate {cid}: {act} (PR #{pnum})")
         else:
-            decision = f"{GREEN}{BOLD}PASSED{RESET}"
-            details = f"Policy constraint passed. Candidate allowed."
-
-        print(f"{pkg_id:<18} | {ver:<18} | {decision:<23} | {details}")
-
-    print("=" * 110)
-    print(f"\n{GREEN}[VERIFIED] Upfront policy rule validation completed.{RESET}\n")
+            print(f"{GREEN}[UP-TO-DATE] All open PRs and candidate states are in sync with GitHub.{RESET}")
+    else:
+        print(f"{YELLOW}[WARN] Could not sync PR statuses: {res.get('error')}{RESET}")
+    print()
 
 
-def run_end_to_end(model: str = "gemini-3.8-flash"):
+def run_show_config():
+    print(f"\n{BOLD}{CYAN}======================================================================{RESET}")
+    print(f"{BOLD}{CYAN}   CLUSTER TOOLKIT INFRASTRUCTURE UPDATER - CONFIGURATION OVERVIEW    {RESET}")
+    print(f"{BOLD}{CYAN}======================================================================{RESET}\n")
+    repo_mgr = RepoManager(CONFIG)
+    token = CONFIG.get_github_token()
+    token_display = f"{GREEN}Present ({token[:4]}...{token[-4:]}){RESET}" if token else f"{YELLOW}None (unauthenticated/read-only){RESET}"
+
+    print(f"{BOLD}Target Repository:{RESET}")
+    print(f"  * URL:              {CONFIG.repository.url}")
+    print(f"  * Owner / Repo:     {CONFIG.repository.owner} / {CONFIG.repository.name}")
+    print(f"  * Branch:           {CONFIG.repository.branch}")
+    print(f"  * Workspace Path:   {repo_mgr.workspace_dir}")
+    print(f"  * GitHub Token:     {token_display}")
+    print(f"\n{BOLD}Git Author Configuration:{RESET}")
+    print(f"  * Name:             {CONFIG.git.author_name}")
+    print(f"  * Email:            {CONFIG.git.author_email}")
+    print(f"\n{BOLD}LLM Configuration:{RESET}")
+    print(f"  * Model:            {CONFIG.llm.model}")
+    print(f"\n{BOLD}Dashboard Server:{RESET}")
+    print(f"  * Port:             {CONFIG.server.port}")
+    print()
+
+
+def run_end_to_end(model: str = None):
+    if model is None:
+        model = CONFIG.llm.model
     print(f"\n{BOLD}{CYAN}======================================================================{RESET}")
     print(f"{BOLD}{CYAN}      CLUSTER TOOLKIT INFRASTRUCTURE UPDATER - FULL PIPELINE RUN      {RESET}")
     print(f"{BOLD}{CYAN}======================================================================{RESET}\n")
 
-    # Stage 0: Clean Baseline
-    print(f"{BOLD}[STAGE 0/4] Initializing Database & Verifying Registry...{RESET}")
+    # Stage 0: Synchronize Target Repository & Clean Baseline
+    print(f"{BOLD}[STAGE 0/3] Synchronizing Target Repository ({CONFIG.repository.url})...{RESET}")
+    run_sync_repo()
+    print(f"{BOLD}[STAGE 0/3] Initializing Database & Verifying Registry...{RESET}")
     init_database()
-    
-    # Stage 1: Learned Rule Policy Evaluation
-    print(f"\n{BOLD}[STAGE 1/4] Evaluating Learned Policy Rules...{RESET}")
-    run_test_rule_blocking()
 
-    # Stage 2: Semantic Changelog & Deprecation Triage
-    print(f"\n{BOLD}[STAGE 2/4] Executing Semantic Changelog & Compatibility Triage ({model})...{RESET}")
-    run_test_llm_triage(model=model)
-
-    # Stage 3: Source Qualification Across Canonical Packages
-    print(f"\n{BOLD}[STAGE 3/4] Running Source Qualification Agent Across Monitored Packages ({model})...{RESET}")
+    # Stage 1: Source Qualification Across Canonical Packages
+    print(f"\n{BOLD}[STAGE 1/3] Running Source Qualification Agent Across Monitored Packages ({model})...{RESET}")
     run_check_all(model=model)
 
-    # Stage 4: Orchestrator Agent Blueprint Modification & Variable Sync
+    # Stage 2: Orchestrator Agent Blueprint Modification, Branch Push, & GitHub PR Creation
     store = get_datastore()
     candidates = store.list_candidates()
     candidate_pkgs = [c.get("package_id") for c in candidates if c.get("status") == "UPDATE_FOUND"]
 
     if candidate_pkgs:
-        print(f"\n{BOLD}[STAGE 4/4] Orchestrator Agent applying updates across all {len(candidate_pkgs)} candidate package(s)...{RESET}")
+        print(f"\n{BOLD}[STAGE 2/3] Orchestrator Agent applying updates across {len(candidate_pkgs)} candidate package(s)...{RESET}")
         for target_pkg in candidate_pkgs:
-            run_apply(target_pkg)
+            run_apply(target_pkg, create_pr=True)
     else:
-        print(f"\n{BOLD}[STAGE 4/4] No candidate updates with status UPDATE_FOUND available to apply.{RESET}")
+        print(f"\n{BOLD}[STAGE 2/3] No candidate updates with status UPDATE_FOUND available to apply.{RESET}")
 
-    print(f"\n{BOLD}[FINAL STATE] DataStore State Summary:{RESET}")
+    # Stage 3: Final Telemetry & State Summary
+    print(f"\n{BOLD}[STAGE 3/3] DataStore Final State Summary:{RESET}")
     preview_tables()
 
     print(f"\n{BOLD}{GREEN}======================================================================{RESET}")
@@ -306,20 +311,24 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  python3 run_updater.py --check-all           # Run qualification (LLM candidate extraction + learned rules + LLM changelog)
-  python3 run_updater.py --test-llm-triage     # Demonstrate LLM changelog & breaking change analysis
-  python3 run_updater.py --apply <package_id>  # Apply update and show clean git diff
-  python3 run_updater.py --test-rule-blocking   # Evaluate upfront policy rule filter
-  python3 run_updater.py --show-tables          # Preview all datastore entities
-  python3 run_updater.py --reset                # Revert files and reset state store
+  python3 run_updater.py --sync-repo           # Fetch latest target repo develop branch
+  python3 run_updater.py --check-all           # Run qualification (upstream discovery + rules + liveness)
+  python3 run_updater.py --apply <package_id>  # Apply update, push branch & create GitHub PR
+  python3 run_updater.py --rules               # Display active learned policy rules
+  python3 run_updater.py --show-config         # Display active configuration & auth status
+  python3 run_updater.py --show-tables         # Preview all datastore entities
+  python3 run_updater.py --reset               # Revert files and reset state store
 """
     )
-    parser.add_argument("-m", "--model", default="gemini-3.8-flash", help="Gemini LLM model to use (default: gemini-3.8-flash)")
+    parser.add_argument("-m", "--model", default=CONFIG.llm.model, help=f"Gemini LLM model to use (default: {CONFIG.llm.model})")
     parser.add_argument("-e", "--end-to-end", action="store_true", help="Run full pipeline end-to-end (all stages)")
+    parser.add_argument("--sync-repo", action="store_true", help="Synchronize target repository workspace to base branch")
+    parser.add_argument("--sync-prs", action="store_true", help="Synchronize open PR statuses with GitHub (detect closed PRs)")
     parser.add_argument("-c", "--check-all", action="store_true", help="Run Source Qualification Agent across all packages")
-    parser.add_argument("-l", "--test-llm-triage", action="store_true", help="Demonstrate Gemini LLM semantic changelog & deprecation triage")
-    parser.add_argument("-a", "--apply", metavar="PACKAGE_ID", type=str, help="Apply qualified update for PACKAGE_ID")
-    parser.add_argument("-t", "--test-rule-blocking", action="store_true", help="Demonstrate upfront policy rule blocking")
+    parser.add_argument("-a", "--apply", metavar="PACKAGE_ID", type=str, help="Apply qualified update, push branch & create PR for PACKAGE_ID")
+    parser.add_argument("--no-pr", action="store_true", help="Skip GitHub PR creation during apply")
+    parser.add_argument("-t", "--rules", "--test-rule-blocking", dest="rules", action="store_true", help="Display active learned policy rules")
+    parser.add_argument("--show-config", action="store_true", help="Display active configuration values")
     parser.add_argument("-s", "--show-tables", action="store_true", help="Display previews of all datastore entities")
     parser.add_argument("-r", "--reset", action="store_true", help="Reset state store and revert git modifications")
 
@@ -329,6 +338,12 @@ Examples:
 
     args = parser.parse_args()
 
+    if args.show_config:
+        run_show_config()
+    if args.sync_repo:
+        run_sync_repo()
+    if args.sync_prs:
+        run_sync_prs()
     if args.end_to_end:
         run_end_to_end(model=args.model)
         return
@@ -336,14 +351,12 @@ Examples:
         run_reset()
     if args.show_tables:
         preview_tables()
-    if args.test_rule_blocking:
+    if args.rules:
         run_test_rule_blocking()
-    if args.test_llm_triage:
-        run_test_llm_triage(model=args.model)
     if args.check_all:
         run_check_all(model=args.model)
     if args.apply:
-        run_apply(args.apply)
+        run_apply(args.apply, create_pr=not args.no_pr)
 
 if __name__ == "__main__":
     main()

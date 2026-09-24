@@ -36,7 +36,6 @@ let latestPackages = [];
 let latestInstances = [];
 let latestCandidates = [];
 let latestRules = [];
-let latestBenchmarks = [];
 let lastRenderedSignature = "";
 
 async function fetchState() {
@@ -51,7 +50,6 @@ async function fetchState() {
     latestInstances = data.instances || [];
     latestCandidates = data.candidates || [];
     latestRules = data.rules || [];
-    latestBenchmarks = data.benchmarks || [];
 
     // 1. Update Metrics
     const stats = data.stats || {};
@@ -85,7 +83,14 @@ async function fetchState() {
       }
     }
 
-    // 2. Update Status Pill
+    // 2. Update Status Pill & Target Repo Badge
+    if (data.config) {
+      const badgeText = document.getElementById('repo-badge-text');
+      if (badgeText) {
+        badgeText.textContent = `${data.config.owner}/${data.config.repo_name} (${data.config.base_branch})`;
+      }
+    }
+
     const dot = document.getElementById('status-dot');
     const text = document.getElementById('status-text');
     if (dot && text) {
@@ -111,7 +116,6 @@ async function fetchState() {
       i: latestInstances,
       c: latestCandidates,
       r: latestRules,
-      b: latestBenchmarks,
       mod: data.has_modifications
     });
 
@@ -121,7 +125,6 @@ async function fetchState() {
       try { renderInstances(latestInstances); } catch (e) { console.error('Error in renderInstances:', e); }
       try { renderRules(latestRules); } catch (e) { console.error('Error in renderRules:', e); }
       try { renderCandidates(latestCandidates, latestPackages); } catch (e) { console.error('Error in renderCandidates:', e); }
-      try { renderBenchmarks(latestBenchmarks); } catch (e) { console.error('Error in renderBenchmarks:', e); }
       try { renderDynamicApplyButtons(latestCandidates, latestPackages); } catch (e) { console.error('Error in renderDynamicApplyButtons:', e); }
     }
 
@@ -189,10 +192,6 @@ function renderCandidates(candidates, packages) {
       ? '<span class="badge badge-green">READY_FOR_REVIEW</span>' 
       : '<span class="badge badge-blue">UPDATE_FOUND</span>';
 
-    const verdictBadge = c.compatibility_verdict === 'COMPATIBLE' 
-      ? '<span class="badge badge-green">COMPATIBLE</span>' 
-      : `<span class="badge badge-amber">${escapeHtml(c.compatibility_verdict)}</span>`;
-
     const pkg = pkgMap[c.package_id] || {};
     const currVer = pkg.current_version || '-';
 
@@ -215,6 +214,12 @@ function renderCandidates(candidates, packages) {
             ${blueprintPillHtml}
           </div>
           <div class="candidate-action-group">
+            ${c.pr_url ? `
+              <a href="${escapeHtml(c.pr_url)}" target="_blank" class="btn btn-secondary" style="color: #22c55e; border-color: rgba(34, 197, 94, 0.4); text-decoration: none; display: inline-flex; align-items: center; gap: 6px;" title="View Pull Request on GitHub">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="18" cy="18" r="3"/><circle cx="6" cy="6" r="3"/><path d="M13 6h3a2 2 0 0 1 2 2v7"/><line x1="6" y1="9" x2="6" y2="21"/></svg>
+                <span>View PR #${escapeHtml(String(c.pr_url).split('/').pop())}</span>
+              </a>
+            ` : ''}
             <button class="btn ${isReady ? 'btn-secondary' : 'btn-primary'}" onclick="triggerAction('apply', '${escapeHtml(c.package_id)}')" ${isReady ? 'disabled' : ''}>
               ${isReady ? 'Applied &bull; Ready for Review' : 'Review &amp; Apply Update'}
             </button>
@@ -233,17 +238,14 @@ function renderCandidates(candidates, packages) {
           </div>
           <div class="version-badges">
             ${statusBadge}
-            ${verdictBadge}
           </div>
         </div>
 
-        <div class="triage-section">
-          <div class="triage-header">
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 14 14"/></svg>
-            Gemini Compatibility Triage
+        ${(c.summary || c.changelog_summary) ? `
+          <div style="font-size: 13px; color: var(--text-secondary); line-height: 1.5; padding: 4px 0 8px 0;">
+            ${escapeHtml(c.summary || c.changelog_summary)}
           </div>
-          <div class="triage-summary">${escapeHtml(c.changelog_summary)}</div>
-        </div>
+        ` : ''}
 
         <div class="candidate-footer">
           <div>
@@ -406,30 +408,7 @@ function renderRules(rules) {
   `).join('');
 }
 
-function renderBenchmarks(benchmarks) {
-  const tbody = document.getElementById('benchmarks-table-body');
-  if (!tbody) return;
-  const list = benchmarks || latestBenchmarks || [];
-  if (list.length === 0) {
-    tbody.innerHTML = '<tr><td colspan="6" style="color: var(--text-muted); text-align: center; padding: 24px;">No benchmark test cases loaded from datastore.</td></tr>';
-    return;
-  }
 
-  tbody.innerHTML = benchmarks.map(b => {
-    const isPass = b.expected_verdict === 'PASSED' || b.expected_verdict === 'COMPATIBLE';
-    const badgeClass = isPass ? 'badge-green' : 'badge-amber';
-    return `
-      <tr>
-        <td><span class="code-pill">${escapeHtml(b.case_id)}</span></td>
-        <td><span class="badge badge-blue">${escapeHtml(b.category)}</span></td>
-        <td><span class="code-pill">${escapeHtml(b.package_id)}</span></td>
-        <td><span class="code-pill" style="color: var(--accent-green-light)">${escapeHtml(b.test_version)}</span></td>
-        <td><span class="badge ${badgeClass}">${escapeHtml(b.expected_verdict)}</span></td>
-        <td style="color: var(--text-secondary); font-size: 12.5px;">${escapeHtml(b.description)}</td>
-      </tr>
-    `;
-  }).join('');
-}
 
 function renderDynamicApplyButtons(candidates, packages) {
   const container = document.getElementById('dynamic-apply-buttons');

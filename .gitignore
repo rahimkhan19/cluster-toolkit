@@ -78,3 +78,9 @@ GEMINI.md
 .agents/
 
 test-kueue-cluster
+
+# Ignore infra updater independent target repository workspaces and cache
+tools/infra_updater/target_repo/
+tools/infra_updater/workspace/
+tools/infra_updater/.env
+.env

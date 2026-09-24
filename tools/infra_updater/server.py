@@ -35,13 +35,23 @@ if BASE_DIR not in sys.path:
 REPO_ROOT = os.path.abspath(os.path.join(BASE_DIR, "../.."))
 if REPO_ROOT not in sys.path:
     sys.path.insert(0, REPO_ROOT)
-UI_DIR = os.path.join(BASE_DIR, "ui")
 
-from tools.infra_updater.datastore import get_datastore
+try:
+    from tools.infra_updater.config import get_config
+    from tools.infra_updater.datastore import get_datastore
+    from tools.infra_updater.repo_manager import RepoManager
+except ModuleNotFoundError:
+    from config import get_config
+    from datastore import get_datastore
+    from repo_manager import RepoManager
+
+CONFIG = get_config()
+REPO_MANAGER = RepoManager(CONFIG)
+UI_DIR = os.path.join(BASE_DIR, "ui")
 
 # Global execution state buffer
 class LogStreamBuffer:
-    def __init__(self, max_lines=2000):
+    def __init__(self, max_lines=1000):
         self.lock = threading.Lock()
         self.lines = []
         self.max_lines = max_lines
@@ -66,16 +76,15 @@ class LogStreamBuffer:
 GLOBAL_BUFFER = LogStreamBuffer()
 
 _GIT_DIFF_CACHE = {"stat": "", "timestamp": 0.0}
-_GIT_DIFF_TTL_SEC = 5.0
 
 def get_cached_git_diff_stat(force: bool = False) -> str:
     now = time.time()
-    if force or (now - _GIT_DIFF_CACHE["timestamp"] > _GIT_DIFF_TTL_SEC):
-        diff_proc = subprocess.run(
-            ["git", "diff", "--stat", "examples/"],
-            cwd=REPO_ROOT, stdout=subprocess.PIPE, text=True, check=False
-        )
-        _GIT_DIFF_CACHE["stat"] = diff_proc.stdout.strip()
+    ttl = 5.0
+    if force or (now - _GIT_DIFF_CACHE["timestamp"] > ttl):
+        try:
+            _GIT_DIFF_CACHE["stat"] = REPO_MANAGER.get_diff_stat()
+        except Exception:
+            _GIT_DIFF_CACHE["stat"] = ""
         _GIT_DIFF_CACHE["timestamp"] = now
     return _GIT_DIFF_CACHE["stat"]
 
@@ -126,6 +135,9 @@ def execute_cli_action(cmd_args, action_name):
         GLOBAL_BUFFER.is_running = False
         GLOBAL_BUFFER.current_action = "IDLE"
 
+_LAST_PR_SYNC_TIME = 0.0
+PR_SYNC_COOLDOWN = float(CONFIG.server.pr_sync_interval_seconds)  # Seconds between background GitHub PR status checks (default 60s)
+
 
 class DashboardHandler(SimpleHTTPRequestHandler):
     def __init__(self, *args, **kwargs):
@@ -157,12 +169,22 @@ class DashboardHandler(SimpleHTTPRequestHandler):
     def handle_get_state(self):
         try:
             store = get_datastore()
+
+            # Automatically sync GitHub PR statuses if cooldown has elapsed
+            global _LAST_PR_SYNC_TIME
+            now = time.time()
+            if (now - _LAST_PR_SYNC_TIME) > PR_SYNC_COOLDOWN:
+                _LAST_PR_SYNC_TIME = now
+                try:
+                    REPO_MANAGER.sync_open_pr_statuses(store)
+                except Exception as ex:
+                    print(f"[Server] Background PR sync warning: {ex}", flush=True)
+
             packages = store.list_packages()
             instances = store.list_all_blueprints()
             rules = store.list_rules()
             candidates = store.list_candidates()
             audit_runs = store.list_audit_runs(limit=20)
-            benchmarks = store.list_benchmarks()
 
             # Git diff stats (cached with 5s TTL to prevent continuous subprocess execution)
             git_diff_stat = get_cached_git_diff_stat()
@@ -173,17 +195,24 @@ class DashboardHandler(SimpleHTTPRequestHandler):
                 "rules": rules,
                 "candidates": candidates,
                 "audit_runs": audit_runs,
-                "benchmarks": benchmarks,
                 "git_diff_stat": git_diff_stat,
                 "has_modifications": bool(git_diff_stat),
                 "is_running": GLOBAL_BUFFER.is_running,
                 "current_action": GLOBAL_BUFFER.current_action,
                 "last_status": GLOBAL_BUFFER.last_status,
+                "config": {
+                    "repo_url": CONFIG.repository.url,
+                    "owner": CONFIG.repository.owner,
+                    "repo_name": CONFIG.repository.name,
+                    "base_branch": CONFIG.repository.base_branch,
+                    "llm_model": CONFIG.llm.model,
+                    "token_present": bool(CONFIG.get_github_token()),
+                    "workspace_dir": REPO_MANAGER.workspace_dir
+                },
                 "stats": {
                     "total_packages": len(packages),
                     "total_instances": len(instances),
                     "total_rules": len(rules),
-                    "total_benchmarks": len(benchmarks),
                     "pending_updates": len([c for c in candidates if c.get("status") in ("UPDATE_FOUND", "QUALIFIED")]),
                     "ready_updates": len([c for c in candidates if c.get("status") == "READY_FOR_REVIEW"]),
                     "qualified_candidates": len([c for c in candidates if c.get("status") in ("UPDATE_FOUND", "QUALIFIED")]),
@@ -219,11 +248,8 @@ class DashboardHandler(SimpleHTTPRequestHandler):
         self.wfile.write(json.dumps(payload).encode("utf-8"))
 
     def handle_get_diff(self):
-        diff_proc = subprocess.run(
-            ["git", "diff", "examples/"],
-            cwd=REPO_ROOT, stdout=subprocess.PIPE, text=True, check=False
-        )
-        payload = {"diff": diff_proc.stdout}
+        diff_text = REPO_MANAGER.get_diff()
+        payload = {"diff": diff_text}
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
         self.send_header("Access-Control-Allow-Origin", "*")
@@ -248,15 +274,18 @@ class DashboardHandler(SimpleHTTPRequestHandler):
         cmd_args = []
         action_name = action
 
-        if action == "end_to_end":
+        if action == "sync_repo":
+            cmd_args = ["--sync-repo"]
+            action_name = "Sync Target Repository"
+        elif action == "sync_prs":
+            cmd_args = ["--sync-prs"]
+            action_name = "Sync GitHub Pull Requests"
+        elif action == "end_to_end":
             cmd_args = ["--end-to-end"]
             action_name = "Full Pipeline Run"
         elif action == "check_all":
             cmd_args = ["--check-all"]
             action_name = "Source Qualification Agent"
-        elif action == "test_llm_triage":
-            cmd_args = ["--test-llm-triage"]
-            action_name = "Changelog Compatibility Triage"
         elif action == "test_rule_blocking":
             cmd_args = ["--test-rule-blocking"]
             action_name = "Learned Rule Policy Evaluation"
@@ -266,6 +295,12 @@ class DashboardHandler(SimpleHTTPRequestHandler):
                 return
             cmd_args = ["--apply", pkg_id]
             action_name = f"Orchestrator Agent Update ({pkg_id})"
+        elif action == "create_pr":
+            if not pkg_id:
+                self.send_error(400, "package_id required for create_pr")
+                return
+            cmd_args = ["--create-pr", pkg_id]
+            action_name = f"Create GitHub PR ({pkg_id})"
         elif action == "reset":
             cmd_args = ["--reset"]
             action_name = "Reset Environment & State"
@@ -284,11 +319,22 @@ class DashboardHandler(SimpleHTTPRequestHandler):
         self.wfile.write(json.dumps({"status": "STARTED", "action": action_name}).encode("utf-8"))
 
 
-def run_server(port=8080):
-    server = ThreadingHTTPServer(("0.0.0.0", port), DashboardHandler)
+def run_server(port=None):
+    if port is None:
+        port = CONFIG.server.port
+    host = "0.0.0.0"
+
+    # Ensure target workspace develop branch is in sync with origin on startup
+    try:
+        REPO_MANAGER.ensure_workspace(force_clean=True)
+    except Exception as e:
+        print(f"[Server] [WARN] Initial workspace sync error: {e}", flush=True)
+
+    server = ThreadingHTTPServer((host, port), DashboardHandler)
     print(f"\n======================================================================")
     print(f"  CLUSTER TOOLKIT UPDATER - WEB DASHBOARD SERVER")
     print(f"======================================================================")
+    print(f"  Target Repo:    {CONFIG.repository.url} ({CONFIG.repository.branch})")
     print(f"  Local Access:   http://localhost:{port}")
     print(f"  Network Access: http://127.0.0.1:{port}")
     print(f"======================================================================\n")
@@ -300,6 +346,6 @@ def run_server(port=8080):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--port", type=int, default=8080, help="Port to bind server (default: 8080)")
+    parser.add_argument("--port", type=int, default=CONFIG.server.port, help=f"Port to bind server (default: {CONFIG.server.port})")
     args = parser.parse_args()
     run_server(args.port)

@@ -36,19 +36,23 @@ REPO_ROOT = os.path.abspath(os.path.join(BASE_DIR, "../.."))
 if REPO_ROOT not in sys.path:
     sys.path.insert(0, REPO_ROOT)
 
+from tools.infra_updater.config import get_config
 from tools.infra_updater.datastore import DataStore, get_datastore
+from tools.infra_updater.repo_manager import RepoManager
 
 class OrchestratorAgent:
     """
     Orchestrator Agent for Cluster Toolkit Automated Dependency Management (Doc Section 4.3).
     Performs surgical, comment-preserving AST-safe updates on target blueprints,
     synchronizing coupled variables atomically and validating YAML syntax.
-    Transitions candidate updates to READY_FOR_REVIEW.
+    Transitions candidate updates to READY_FOR_REVIEW and creates GitHub Pull Requests.
     """
 
-    def __init__(self, store: Optional[DataStore] = None, repo_root: str = REPO_ROOT):
+    def __init__(self, store: Optional[DataStore] = None, repo_root: Optional[str] = None):
+        self.config = get_config()
         self.store = store or get_datastore()
-        self.repo_root = repo_root
+        self.repo_manager = RepoManager(self.config)
+        self.repo_root = repo_root or self.repo_manager.workspace_dir
 
     def _get_yaml_context(self, lines: List[str], line_idx: int) -> str:
         """Extracts parent block keys and immediate sibling metadata for contextual variable replacement."""
@@ -113,10 +117,11 @@ class OrchestratorAgent:
 
         return ("".join(new_lines), changed, old_val)
 
-    def apply_update(self, package_id: str, candidate_id: Optional[str] = None) -> Dict[str, Any]:
+    def apply_update(self, package_id: str, candidate_id: Optional[str] = None, create_pr: bool = True) -> Dict[str, Any]:
         """
         Applies qualified candidate update to all blueprint instances associated with package_id.
-        All variable bindings, coupling patterns, and signature keywords are read dynamically from DataStore.
+        Fetches latest develop branch, checks out an update branch, modifies blueprints, commits,
+        pushes to remote, and creates a GitHub Pull Request.
         """
         # 1. Fetch Candidate Update
         if candidate_id:
@@ -137,7 +142,10 @@ class OrchestratorAgent:
         cand_url = cand.get("download_url", "")
         filename = os.path.basename(cand_url)
 
-        # 2. Fetch Blueprint Instances with dynamically defined signature keywords
+        # 2. Prepare atomic branch off latest develop in target workspace
+        branch_name = self.repo_manager.prepare_update_branch(package_id, cand_version)
+
+        # 3. Fetch Blueprint Instances with dynamically defined signature keywords
         instances = self.store.get_blueprints_for_package(package_id)
 
         if not instances:
@@ -287,12 +295,45 @@ class OrchestratorAgent:
                 "coupled_changes": coupled_changes
             })
 
-        # 5. Transition Status in DataStore (Doc Section 2.3 & 3.1: status = 'READY_FOR_REVIEW')
+        # 5. Commit changes to target workspace
+        rel_files = [m["file_path"] for m in modified_files]
+        commit_ok, commit_info = self.repo_manager.commit_changes(
+            package_id=package_id,
+            target_version=cand_version,
+            summary=cand.get("changelog_summary", ""),
+            modified_files=rel_files
+        )
+
+        # 6. Push branch to remote repository
+        pushed = self.repo_manager.push_branch(branch_name)
+
+        # 7. Create Pull Request on GitHub
+        pr_url = None
+        pr_number = None
         pkg = self.store.get_package(package_id)
-        prev_version = pkg.get("current_version") if pkg else None
+        current_blueprint_ver = pkg.get("current_version") if pkg else None
+
+        cand_for_pr = dict(cand)
+        if current_blueprint_ver and not cand_for_pr.get("current_version"):
+            cand_for_pr["current_version"] = current_blueprint_ver
+
+        if create_pr:
+            pr_res = self.repo_manager.create_pull_request(
+                package_id=package_id,
+                target_version=cand_version,
+                candidate_info=cand_for_pr,
+                modified_blueprints=modified_files
+            )
+            pr_url = pr_res.get("pr_url")
+            pr_number = pr_res.get("pr_number")
+
+        # 8. Transition Status in DataStore (Doc Section 2.3 & 3.1: status = 'READY_FOR_REVIEW')
         self.store.update_candidate(cand_id, {
             "status": "READY_FOR_REVIEW",
-            "previous_version": prev_version
+            "previous_version": current_blueprint_ver,
+            "current_version": current_blueprint_ver,
+            "pr_url": pr_url,
+            "branch": branch_name
         })
         self.store.update_package(package_id, {
             "current_version": cand_version,
@@ -306,27 +347,25 @@ class OrchestratorAgent:
             "target_version": cand_version,
             "download_url": cand_url,
             "workflow_status": "READY_FOR_REVIEW",
+            "branch": branch_name,
+            "pr_url": pr_url,
+            "pr_number": pr_number,
+            "pushed": pushed,
             "modified_files": modified_files,
             "diffs": all_diffs
         }
 
     def revert_update(self, package_id: Optional[str] = None) -> Dict[str, Any]:
-        """Reverts modified files in git worktree back to HEAD and synchronizes DataStore."""
+        """Reverts modified files in target workspace back to clean develop and synchronizes DataStore."""
+        try:
+            self.repo_manager.ensure_workspace(force_clean=True)
+        except Exception as e:
+            print(f"[WARN] Failed to clean target workspace: {e}")
+
         if package_id:
-            blueprints = self.store.get_blueprints_for_package(package_id)
             packages = [self.store.get_package(package_id)] if self.store.get_package(package_id) else []
         else:
-            blueprints = self.store.list_all_blueprints()
             packages = self.store.list_packages()
-
-        paths = list({b["blueprint_path"] for b in blueprints if b.get("blueprint_path")})
-
-        reverted = []
-        for p in paths:
-            abs_p = os.path.join(self.repo_root, p)
-            if os.path.exists(abs_p):
-                subprocess.run(["git", "checkout", "--", p], cwd=self.repo_root, check=False)
-                reverted.append(p)
 
         # Rollback DataStore candidate and package status if they were in READY_FOR_REVIEW
         for pkg in packages:
@@ -338,14 +377,14 @@ class OrchestratorAgent:
             for c in cands:
                 if c.get("status") in ("READY_FOR_REVIEW", "TESTING"):
                     prev_ver = c.get("previous_version")
-                    self.store.update_candidate(c["candidate_id"], {"status": "UPDATE_FOUND"})
+                    self.store.update_candidate(c["candidate_id"], {"status": "UPDATE_FOUND", "pr_url": None})
             if pkg.get("status") == "READY_FOR_REVIEW":
                 pkg_updates = {"status": "UPDATE_FOUND"}
                 if prev_ver:
                     pkg_updates["current_version"] = prev_ver
                 self.store.update_package(pid, pkg_updates)
 
-        return {"status": "REVERTED", "reverted_files": reverted}
+        return {"status": "REVERTED", "message": "Target workspace reset to clean develop branch."}
 
 
 # Backwards compatibility alias

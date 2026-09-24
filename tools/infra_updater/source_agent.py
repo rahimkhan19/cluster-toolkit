@@ -20,7 +20,6 @@ Aligned with Section 4.2 of the Implementation Guide:
   2. Discards non-production releases (RCs, betas, alphas, developer previews).
   3. Executes upfront learned rule enforcement with multi-blueprint scoping.
   4. Performs artifact liveness verification.
-  5. Performs Gemini LLM semantic changelog & deprecation triage.
 """
 
 import datetime
@@ -47,6 +46,7 @@ REPO_ROOT = os.path.dirname(os.path.dirname(BASE_DIR))
 if REPO_ROOT not in sys.path:
     sys.path.insert(0, REPO_ROOT)
 
+from tools.infra_updater.config import get_config
 from tools.infra_updater.datastore import DataStore, get_datastore
 from tools.infra_updater.prompts import (
     load_prompt,
@@ -55,10 +55,13 @@ from tools.infra_updater.prompts import (
     get_github_release_prompt,
     get_apt_repo_prompt,
     get_compute_image_prompt,
-    get_changelog_triage_prompt,
+    get_docker_hub_prompt,
+    get_release_summary_prompt,
 )
 
-# Enable Google GenAI SDK (importing from hackathon conda environment if not in current sys.path)
+CONFIG = get_config()
+
+# Enable Google GenAI SDK (importing from fallback site-packages if not in current sys.path)
 hackathon_site = "/usr/local/google/home/rahimkh/miniconda3/envs/hackathon/lib/python3.10/site-packages"
 if os.path.exists(hackathon_site) and hackathon_site not in sys.path:
     sys.path.append(hackathon_site)
@@ -73,13 +76,6 @@ except ImportError:
 # ==============================================================================
 # Pydantic Structured Contracts for LLM Function Calling / Structured Output
 # ==============================================================================
-
-class ChangelogSemanticAnalysis(BaseModel):
-    is_breaking: bool = Field(description="True if this release contains breaking changes, dropped OS/kernel support, or renamed arguments")
-    compatibility_verdict: str = Field(description="Verdict: 'COMPATIBLE', 'POTENTIALLY_BREAKING', or 'INCOMPATIBLE'")
-    breaking_reasons: List[str] = Field(description="List of specific breaking changes or deprecation notices detected in changelog")
-    summary: str = Field(description="Concise 1-2 sentence executive summary of bug fixes, features, and driver changes")
-    pr_changelog_snippet: str = Field(description="Markdown formatted bullet points suitable for direct insertion into PR description")
 
 class CandidateReleaseExtraction(BaseModel):
     version: str = Field(description="Normalized semantic version of the release, e.g., '13.4.2' or '1.4.11'")
@@ -127,13 +123,15 @@ def generate_content_with_retry(
     model: str,
     contents: Any,
     config: Any,
-    max_retries: int = 3,
-    initial_delay: float = 2.0
+    max_retries: Optional[int] = None,
+    initial_delay: Optional[float] = None
 ) -> Any:
     """Invokes client.models.generate_content with exponential backoff on 429, 503, or preemption."""
-    delay = initial_delay
+    retries = max_retries if max_retries is not None else 3
+    delay = initial_delay if initial_delay is not None else 2.0
+    multiplier = 2.0
     last_ex = None
-    for attempt in range(max_retries):
+    for attempt in range(retries):
         try:
             return client.models.generate_content(
                 model=model,
@@ -153,24 +151,29 @@ def generate_content_with_retry(
                 or "preempted" in err_str
                 or "deadline" in err_str
             )
-            if is_retriable and attempt < max_retries - 1:
-                print(f"[WARN] Gemini LLM transient error (attempt {attempt + 1}/{max_retries}), retrying in {delay:.1f}s: {clean_error_message(ex)}")
+            if is_retriable and attempt < retries - 1:
+                print(f"[WARN] Gemini LLM transient error (attempt {attempt + 1}/{retries}), retrying in {delay:.1f}s: {clean_error_message(ex)}")
                 time.sleep(delay)
-                delay *= 2
+                delay *= multiplier
             else:
                 break
     raise last_ex
 
 
 def check_http_liveness(url: str) -> bool:
-    """Confirms artifact URL returns HTTP 200."""
+    """Confirms artifact URL returns HTTP 200 or is a valid registry URI."""
+    if not url:
+        return False
+    if url.startswith("docker://") or url.startswith("docker.io/"):
+        return True
     headers = {"User-Agent": "ClusterToolkitInfraUpdater/1.0"}
+    timeout = 8.0
     try:
-        resp = requests.head(url, timeout=8, headers=headers, allow_redirects=True)
+        resp = requests.head(url, timeout=timeout, headers=headers, allow_redirects=True)
         if resp.status_code == 200:
             return True
         if resp.status_code in (403, 405, 429):
-            resp_get = requests.get(url, timeout=8, headers=headers, stream=True, allow_redirects=True)
+            resp_get = requests.get(url, timeout=timeout, headers=headers, stream=True, allow_redirects=True)
             return resp_get.status_code == 200
         return False
     except Exception:
@@ -844,6 +847,162 @@ class MftProvider(ArchiveScraperProvider):
             return None
 
 
+class DockerHubProvider:
+    """Discovers upstream container image tags via Docker Hub API with Gemini LLM qualification."""
+
+    def __init__(self, llm_client=None, model: str = "gemini-3.8-flash"):
+        self.llm_client = llm_client
+        self.model = model
+
+    @staticmethod
+    def parse_repo_and_namespace(source_url: str) -> Tuple[str, str]:
+        """Extracts namespace and repository from Docker Hub source URL or image name."""
+        clean = (source_url or "").strip().rstrip("/")
+        m = re.search(r"(?:repositories|r)/([^/]+)/([^/\?]+)", clean)
+        if m:
+            return m.group(1), m.group(2)
+        if "/" in clean and not clean.startswith("http"):
+            parts = clean.split("/", 1)
+            return parts[0], parts[1]
+        return "library", clean.split("/")[-1]
+
+    def _extract_with_llm(self, package_id: str, repo_str: str, current_version: str, candidate_tags: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+        if not self.llm_client or not GENAI_AVAILABLE:
+            return None
+
+        prompt = get_docker_hub_prompt(
+            package_id=package_id,
+            repository=repo_str,
+            current_version=current_version,
+            candidate_tags_json=json.dumps(candidate_tags[:25], indent=2)
+        )
+        try:
+            resp = generate_content_with_retry(
+                client=self.llm_client,
+                model=self.model,
+                contents=prompt,
+                config=types.GenerateContentConfig(
+                    response_mime_type="application/json",
+                    response_schema=CandidateReleaseExtraction,
+                    temperature=0.0
+                )
+            )
+            data = json.loads(resp.text)
+            extracted = CandidateReleaseExtraction(**data)
+            if not extracted.is_production_ga or not extracted.version:
+                return None
+
+            target_tag = extracted.version.strip()
+            namespace, repo = self.parse_repo_and_namespace(repo_str)
+            download_url = f"https://hub.docker.com/v2/repositories/{namespace}/{repo}/tags/{target_tag}"
+
+            return {
+                "version": target_tag,
+                "download_url": download_url,
+                "filename": extracted.filename or f"{repo_str}:{target_tag}",
+                "channel": extracted.release_channel or "production-stable",
+                "release_notes": extracted.reasoning or f"Docker Hub container image tag '{target_tag}' for {repo_str}.",
+                "tag_name": target_tag,
+                "prerelease": False,
+                "draft": False
+            }
+        except Exception as e:
+            clean_msg = clean_error_message(e)
+            print(f"[WARN] DockerHubProvider LLM extraction error for {package_id}: {clean_msg}")
+            return None
+
+    def get_latest_candidate(self, package_id: str, source_url: str, current_version: str) -> Optional[Dict[str, Any]]:
+        namespace, repo = self.parse_repo_and_namespace(source_url)
+        repo_str = f"{namespace}/{repo}"
+
+        # Detect tag variant/flavor (e.g. "base-ubuntu24.04" in "13.0.0-base-ubuntu24.04")
+        flavor = None
+        m_flavor = re.match(r"^v?[0-9]+(?:\.[0-9]+)*(?:-(.+))?$", current_version)
+        if m_flavor and m_flavor.group(1):
+            flavor = m_flavor.group(1)
+
+        # Query Docker Hub tags API
+        query_params = "page_size=50"
+        if flavor:
+            query_params += f"&name={urllib.parse.quote(flavor)}"
+
+        api_url = f"https://hub.docker.com/v2/repositories/{namespace}/{repo}/tags?{query_params}"
+        headers = {"User-Agent": "ClusterToolkitInfraUpdater/1.0"}
+
+        try:
+            resp = requests.get(api_url, timeout=10, headers=headers)
+            data = resp.json() if resp.status_code == 200 else {}
+            results = data.get("results", [])
+        except Exception as e:
+            print(f"[WARN] DockerHubProvider query error: {e}")
+            results = []
+
+        if not results and flavor:
+            try:
+                fallback_url = f"https://hub.docker.com/v2/repositories/{namespace}/{repo}/tags?page_size=100"
+                resp = requests.get(fallback_url, timeout=10, headers=headers)
+                data = resp.json() if resp.status_code == 200 else {}
+                results = data.get("results", [])
+            except Exception:
+                results = []
+
+        if not results:
+            return None
+
+        # Filter candidate tags matching the flavor (if any)
+        candidate_tags = []
+        for t in results:
+            name = t.get("name", "")
+            if flavor and not name.endswith(f"-{flavor}") and name != flavor:
+                continue
+            lower = name.lower()
+            if any(x in lower for x in ["-rc", "-beta", "-alpha", "-preview", "-test", "-dev", "dirty"]):
+                continue
+            candidate_tags.append({
+                "name": name,
+                "last_updated": t.get("last_updated"),
+                "digest": t.get("digest"),
+                "architectures": [img.get("architecture") for img in t.get("images", []) if img.get("architecture")]
+            })
+
+        if not candidate_tags:
+            return None
+
+        # 1. Try LLM extraction if LLM client available
+        if self.llm_client and GENAI_AVAILABLE:
+            cand = self._extract_with_llm(package_id, repo_str, current_version, candidate_tags)
+            if cand:
+                return cand
+
+        # 2. Deterministic SemVer sort fallback
+        parsed_cands = []
+        for t in candidate_tags:
+            name = t["name"]
+            tm = re.match(r"^v?([0-9]+(?:\.[0-9]+)*)(?:-(.+))?$", name)
+            if not tm:
+                continue
+            v_tuple = tuple(int(x) for x in tm.group(1).split("."))
+            parsed_cands.append((v_tuple, name, t))
+
+        if not parsed_cands:
+            return None
+
+        parsed_cands.sort(key=lambda x: x[0], reverse=True)
+        best_tuple, best_name, best_meta = parsed_cands[0]
+
+        tag_url = f"https://hub.docker.com/v2/repositories/{namespace}/{repo}/tags/{best_name}"
+        return {
+            "version": best_name,
+            "download_url": tag_url,
+            "filename": f"{repo_str}:{best_name}",
+            "channel": "production-stable",
+            "release_notes": f"Docker Hub container image tag '{best_name}' for {repo_str} (updated {best_meta.get('last_updated')}).",
+            "tag_name": best_name,
+            "prerelease": False,
+            "draft": False
+        }
+
+
 # ==============================================================================
 # Source Qualification Agent (Section 4.2)
 # ==============================================================================
@@ -852,18 +1011,20 @@ class MftProvider(ArchiveScraperProvider):
 class SourceQualificationAgent:
     """Coordinates upstream query, LLM GA stability check, upfront rules, and candidate creation."""
 
-    def __init__(self, store: Optional[DataStore] = None, model: str = "gemini-3.8-flash", location: str = "global", use_llm: bool = True):
+    def __init__(self, store: Optional[DataStore] = None, model: Optional[str] = None, location: str = "global", use_llm: bool = True):
+        cfg = get_config()
         self.store = store or get_datastore()
-        self.model = model
+        self.model = model or cfg.llm.model
         self.location = os.environ.get("GOOGLE_CLOUD_REGION", location)
         self.use_llm = use_llm and GENAI_AVAILABLE
         self.rule_checker = UpfrontRuleChecker(self.store)
-        self.archive_provider = ArchiveScraperProvider()
-        self.github_provider = GitHubReleaseProvider()
-        self.manifest_provider = ManifestRegexProvider()
-        self.image_provider = ComputeImageProvider()
-        self.apt_provider = AptRepoProvider()
-        self.mft_provider = MftProvider()
+        self.archive_provider = ArchiveScraperProvider(model=self.model)
+        self.github_provider = GitHubReleaseProvider(model=self.model)
+        self.manifest_provider = ManifestRegexProvider(model=self.model)
+        self.image_provider = ComputeImageProvider(model=self.model)
+        self.apt_provider = AptRepoProvider(model=self.model)
+        self.mft_provider = MftProvider(model=self.model)
+        self.docker_provider = DockerHubProvider(model=self.model)
 
         self.client = None
         if self.use_llm:
@@ -886,37 +1047,12 @@ class SourceQualificationAgent:
                 self.image_provider.model = self.model
                 self.mft_provider.llm_client = self.client
                 self.mft_provider.model = self.model
+                self.docker_provider.llm_client = self.client
+                self.docker_provider.model = self.model
             except Exception as ex:
                 print(f"[WARN] Failed to initialize Gemini LLM Client: {ex}.")
                 self.client = None
                 self.use_llm = False
-
-    def analyze_changelog_with_llm(self, package_id: str, version: str, release_notes: str) -> ChangelogSemanticAnalysis:
-        """Invokes Gemini LLM to read upstream release notes and evaluate OS/kernel compatibility."""
-        if not self.use_llm or not self.client:
-            raise RuntimeError(f"Gemini LLM client is required for changelog analysis on {package_id}")
-
-        prompt = get_changelog_triage_prompt(
-            package_id=package_id,
-            version=version,
-            release_notes=release_notes
-        )
-        try:
-            resp = generate_content_with_retry(
-                client=self.client,
-                model=self.model,
-                contents=prompt,
-                config=types.GenerateContentConfig(
-                    response_mime_type="application/json",
-                    response_schema=ChangelogSemanticAnalysis,
-                    temperature=0.0
-                )
-            )
-            data = json.loads(resp.text)
-            return ChangelogSemanticAnalysis(**data)
-        except Exception as e:
-            clean_msg = clean_error_message(e)
-            raise RuntimeError(f"LLM changelog analysis failed for {package_id} {version}: {clean_msg}")
 
     def _update_package_db(self, package_id: str, upstream_version: str, summary: str, policy_status: Optional[str] = None):
         """Persists package state in the state store without overwriting policy status."""
@@ -931,6 +1067,40 @@ class SourceQualificationAgent:
     def check_http_liveness(self, url: str) -> bool:
         """Confirms artifact URL returns HTTP 200 via canonical helper."""
         return check_http_liveness(url)
+
+    def summarize_release_notes(self, package_id: str, version: str, release_notes: str) -> str:
+        """Uses Gemini LLM to summarize upstream release notes into 1-2 concise sentences."""
+        if not release_notes or not str(release_notes).strip():
+            return f"Qualified upstream GA release {version}."
+
+        clean_notes = str(release_notes).strip()
+        # If release notes are minimal or already a simple qualification string, keep as-is
+        if len(clean_notes) < 40:
+            return clean_notes
+
+        if not self.use_llm or not self.client:
+            return clean_notes[:200]
+
+        try:
+            prompt = get_release_summary_prompt(
+                package_id=package_id,
+                version=version,
+                release_notes=clean_notes[:4000]
+            )
+            resp = generate_content_with_retry(
+                client=self.client,
+                model=self.model,
+                contents=prompt,
+                config=types.GenerateContentConfig(
+                    temperature=0.2,
+                    max_output_tokens=1000
+                )
+            )
+            text = resp.text.strip().replace("\n", " ")
+            return text if text else f"Qualified upstream GA release {version}."
+        except Exception as ex:
+            print(f"[WARN] Failed to summarize release notes for {package_id}: {clean_error_message(ex)}")
+            return clean_notes[:200]
 
     def qualify_package(self, package_id: str) -> Dict[str, Any]:
         pkg = self.store.get_package(package_id)
@@ -1008,6 +1178,12 @@ class SourceQualificationAgent:
                 candidate = self.apt_provider.get_latest_candidate(
                     package_id=package_id,
                     source_url=source_url
+                )
+            elif upstream_type in ("docker_hub", "container_image", "container_registry"):
+                candidate = self.docker_provider.get_latest_candidate(
+                    package_id=package_id,
+                    source_url=source_url,
+                    current_version=current_ver
                 )
             elif upstream_type in ("mft_api", "archive_scraper") or package_id == "mft":
                 if package_id == "mft" or upstream_type == "mft_api":
@@ -1111,29 +1287,26 @@ class SourceQualificationAgent:
                     "summary": summary
                 }
 
-            # 5. LLM Semantic Changelog & Deprecation Analysis
-            llm_changelog = self.analyze_changelog_with_llm(
-                package_id, upstream_version, candidate.get("release_notes", "")
-            )
-
-            # 6. Record Candidate Update (Section 2.3 & 3.1: status = 'UPDATE_FOUND')
+            # 5. Record Candidate Update directly upon passing GA checks, policy rules, and artifact liveness
             candidate_id = f"cand-{str(uuid.uuid4())[:8]}"
+            rel_notes = candidate.get("release_notes") or candidate.get("reasoning") or ""
+            cand_summary = self.summarize_release_notes(package_id, upstream_version, rel_notes)
             self.store.delete_candidates(package_id, exclude_status="MERGED")
             self.store.save_candidate({
                 "candidate_id": candidate_id,
                 "package_id": package_id,
                 "version": upstream_version,
+                "current_version": current_ver,
                 "download_url": download_url,
                 "checksum": candidate.get("checksum_sha256") or candidate.get("checksum"),
                 "pr_url": None,
                 "build_url": None,
                 "status": "UPDATE_FOUND",
-                "compatibility_verdict": llm_changelog.compatibility_verdict,
-                "changelog_summary": llm_changelog.summary,
+                "summary": cand_summary,
                 "created_at": datetime.datetime.now(datetime.timezone.utc).isoformat()
             })
 
-            summary = f"Update found ({upstream_version}): {llm_changelog.summary}"
+            summary = f"Update found ({upstream_version}): {cand_summary}"
             self._update_package_db(package_id, upstream_version, summary, policy_status="UPDATE_FOUND")
 
             return {
@@ -1147,12 +1320,7 @@ class SourceQualificationAgent:
                 "filename": candidate.get("filename", ""),
                 "status": "UPDATE_FOUND",
                 "summary": summary,
-                "llm_release_track": candidate.get("channel", "production-stable"),
-                "llm_verdict": llm_changelog.compatibility_verdict,
-                "llm_is_breaking": llm_changelog.is_breaking,
-                "llm_breaking_reasons": llm_changelog.breaking_reasons,
-                "llm_summary": llm_changelog.summary,
-                "llm_pr_notes": llm_changelog.pr_changelog_snippet
+                "release_channel": candidate.get("channel", "production-stable")
             }
         except Exception as ex:
             clean_err = clean_error_message(ex)

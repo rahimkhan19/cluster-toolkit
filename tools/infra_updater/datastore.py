@@ -21,7 +21,6 @@ atomic CRUD operations for:
 - packages (Canonical registry, long-term policy status, and embedded blueprint instances)
 - candidate_updates (Lifecycle of candidate versions: UPDATE_FOUND, TESTING, READY_FOR_REVIEW, etc.)
 - learned_rules (Upfront learned rule engine constraints)
-- benchmark_cases (Dynamic verification cases)
 - audit_runs (Operational execution telemetry)
 
 Serves as the unified abstraction layer that seamlessly adapts to Google Cloud
@@ -36,15 +35,18 @@ import tempfile
 import threading
 from typing import Any, Dict, List, Optional
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-DEFAULT_JSON_PATH = os.path.join(BASE_DIR, "updater_state.json")
+from tools.infra_updater.config import get_config
 
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+def get_default_json_path() -> str:
+    return os.path.join(BASE_DIR, "updater_state.json")
 
 class DataStore:
     """Thread-safe, atomic JSON data store for dependency registry and lifecycle state."""
 
     def __init__(self, json_path: Optional[str] = None):
-        self.json_path = json_path or os.environ.get("UPDATER_STATE_JSON", DEFAULT_JSON_PATH)
+        self.json_path = json_path or os.environ.get("UPDATER_STATE_JSON", get_default_json_path())
         self._lock = threading.Lock()
         self._ensure_initialized()
 
@@ -59,7 +61,6 @@ class DataStore:
                 "packages": {},
                 "candidate_updates": {},
                 "learned_rules": [],
-                "benchmark_cases": [],
                 "audit_runs": []
             }
         try:
@@ -71,7 +72,6 @@ class DataStore:
                 "packages": {},
                 "candidate_updates": {},
                 "learned_rules": [],
-                "benchmark_cases": [],
                 "audit_runs": []
             }
 
@@ -274,16 +274,6 @@ class DataStore:
             return False
 
     # --------------------------------------------------------------------------
-    # Benchmark Cases
-    # --------------------------------------------------------------------------
-
-    def list_benchmarks(self) -> List[Dict[str, Any]]:
-        """Returns all dynamic benchmark test cases."""
-        with self._lock:
-            data = self._read_data()
-            return copy.deepcopy(data.get("benchmark_cases", []))
-
-    # --------------------------------------------------------------------------
     # Audit Runs
     # --------------------------------------------------------------------------
 
@@ -324,7 +314,6 @@ class DataStore:
             packages_map = data.get("packages", {})
             candidates_map = data.get("candidate_updates", {})
             rules = data.get("learned_rules", [])
-            benchmarks = data.get("benchmark_cases", [])
             audit_runs = data.get("audit_runs", [])
 
             # Index active candidate updates by package_id
@@ -361,7 +350,7 @@ class DataStore:
                     "candidate_status": cand.get("status") if cand else None,
                     "pr_url": cand.get("pr_url") if cand else None,
                     "build_url": cand.get("build_url") if cand else None,
-                    "verdict": cand.get("compatibility_verdict") if cand else None,
+                    "candidate_summary": cand.get("summary") if cand else None,
                     "blueprints_count": len(bps)
                 }
                 enriched_packages.append(enriched_pkg)
@@ -370,7 +359,6 @@ class DataStore:
                 "packages": enriched_packages,
                 "blueprints": all_blueprints,
                 "rules": rules,
-                "benchmarks": benchmarks,
                 "audit_runs": audit_runs
             }
 

@@ -89,21 +89,21 @@ def get_compute_image_prompt(family: str, project: str, package_id: str, image_m
     )
 
 
-def get_ga_stability_prompt(package_id: str, tag_name: str, draft: Any, prerelease: Any, release_notes_preview: str) -> str:
-    template = load_prompt("ga_stability")
+def get_docker_hub_prompt(package_id: str, repository: str, current_version: str, candidate_tags_json: str) -> str:
+    template = load_prompt("docker_hub")
     return template.format(
         package_id=package_id,
-        tag_name=tag_name,
-        draft=draft,
-        prerelease=prerelease,
-        release_notes_preview=release_notes_preview
+        repository=repository,
+        current_version=current_version,
+        candidate_tags_json=candidate_tags_json
     )
 
 
-def get_changelog_triage_prompt(package_id: str, version: str, release_notes: str) -> str:
-    template = load_prompt("changelog_triage")
+def get_release_summary_prompt(package_id: str, version: str, release_notes: str) -> str:
+    template = load_prompt("release_summary")
     return template.format(
         package_id=package_id,
         version=version,
         release_notes=release_notes
     )
+

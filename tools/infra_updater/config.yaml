@@ -1,0 +1,24 @@
+# ==============================================================================
+# Cluster Toolkit Automated Infrastructure Updater Configuration
+# ==============================================================================
+
+# Target Repository & Branch
+repository:
+  url: "https://github.com/rahimkhan19/cluster-toolkit.git"
+  branch: "develop"
+
+# Git Commit Author
+git:
+  author_name: "Cluster Toolkit Infra Updater Bot"
+  author_email: "infra-updater-bot@google.com"
+
+# Gemini LLM Model
+llm:
+  model: "gemini-3.8-flash"
+
+# Web Dashboard Server Port & Settings
+server:
+  port: 8080
+  pr_sync_interval_seconds: 60
+
+
