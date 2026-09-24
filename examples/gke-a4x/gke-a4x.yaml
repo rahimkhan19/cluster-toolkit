@@ -296,7 +296,7 @@ deployment_groups:
     source: modules/compute/gke-job-template
     use: [a4x-pool]
     settings:
-      image: nvidia/cuda:12.8.0-runtime-ubuntu24.04
+      image: nvidia/cuda:13.4.1-base-ubuntu24.04
       command:
       - nvidia-smi
       node_count: $(vars.static_node_count)
