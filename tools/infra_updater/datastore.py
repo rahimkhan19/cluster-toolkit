@@ -14,35 +14,392 @@
 # limitations under the License.
 
 """
-JSON DataStore for Cluster Toolkit Automated Dependency Management.
+Unified DataStore Abstraction for Cluster Toolkit Automated Dependency Management.
 
-Manages the local state JSON file (updater_state.json), providing thread-safe,
-atomic CRUD operations for:
+Supports pluggable database backends:
+1. Cloud Firestore (Firebase in Native Mode on GCP) via ADC or service account credentials.
+2. Local thread-safe JSON datastore (updater_state.json) for offline/local development.
+
+Both backends implement BaseDataStore, providing seamless, zero-breaking-change CRUD for:
 - packages (Canonical registry, long-term policy status, and embedded blueprint instances)
-- candidate_updates (Lifecycle of candidate versions: UPDATE_FOUND, TESTING, READY_FOR_REVIEW, etc.)
+- candidate_updates (Lifecycle of candidate versions: UPDATE_FOUND, READY_FOR_REVIEW, etc.)
 - learned_rules (Upfront learned rule engine constraints)
 - audit_runs (Operational execution telemetry)
-
-Serves as the unified abstraction layer that seamlessly adapts to Google Cloud
-Firestore / Firebase in Phase 2.
 """
 
+import abc
 import copy
 import datetime
 import json
 import os
 import tempfile
 import threading
+import uuid
 from typing import Any, Dict, List, Optional
 
 from tools.infra_updater.config import get_config
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
+
 def get_default_json_path() -> str:
     return os.path.join(BASE_DIR, "updater_state.json")
 
-class DataStore:
+
+# ==============================================================================
+# Abstract Base DataStore Contract
+# ==============================================================================
+
+class BaseDataStore(abc.ABC):
+    """Abstract interface defining all dependency management persistence operations."""
+
+    # Packages
+    @abc.abstractmethod
+    def get_package(self, package_id: str) -> Optional[Dict[str, Any]]:
+        pass
+
+    @abc.abstractmethod
+    def list_packages(self) -> List[Dict[str, Any]]:
+        pass
+
+    @abc.abstractmethod
+    def update_package(self, package_id: str, updates: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        pass
+
+    # Blueprints
+    def get_blueprints_for_package(self, package_id: str) -> List[Dict[str, Any]]:
+        pkg = self.get_package(package_id)
+        if not pkg:
+            return []
+        return copy.deepcopy(pkg.get("blueprints", []))
+
+    def list_all_blueprints(self) -> List[Dict[str, Any]]:
+        pkgs = self.list_packages()
+        all_bps = []
+        for pkg in pkgs:
+            pid = pkg.get("package_id")
+            pname = pkg.get("name", pid)
+            pver = pkg.get("current_version", "")
+            for bp in pkg.get("blueprints", []):
+                bp_copy = copy.deepcopy(bp)
+                bp_copy["package_id"] = pid
+                bp_copy["package_name"] = pname
+                bp_copy["current_version"] = pver
+                all_bps.append(bp_copy)
+        return all_bps
+
+    # Candidates
+    @abc.abstractmethod
+    def get_candidate(self, candidate_id: str) -> Optional[Dict[str, Any]]:
+        pass
+
+    @abc.abstractmethod
+    def list_candidates(
+        self, package_id: Optional[str] = None, status: Optional[str] = None
+    ) -> List[Dict[str, Any]]:
+        pass
+
+    def get_active_candidate(self, package_id: str) -> Optional[Dict[str, Any]]:
+        cands = self.list_candidates(package_id=package_id)
+        for c in cands:
+            if c.get("status") not in ("MERGED", "CANCELLED", "SUPERSEDED"):
+                return c
+        return None
+
+    @abc.abstractmethod
+    def save_candidate(self, candidate: Dict[str, Any]) -> str:
+        pass
+
+    @abc.abstractmethod
+    def update_candidate(self, candidate_id: str, updates: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        pass
+
+    @abc.abstractmethod
+    def delete_candidates(self, package_id: Optional[str] = None, exclude_status: Optional[str] = "MERGED") -> int:
+        pass
+
+    # Learned Rules
+    @abc.abstractmethod
+    def list_rules(self, package_id: Optional[str] = None) -> List[Dict[str, Any]]:
+        pass
+
+    @abc.abstractmethod
+    def add_rule(self, rule_data: Dict[str, Any]) -> str:
+        pass
+
+    @abc.abstractmethod
+    def delete_rule(self, rule_id: str) -> bool:
+        pass
+
+    # Audit Runs
+    @abc.abstractmethod
+    def record_audit_run(self, run_data: Dict[str, Any]) -> str:
+        pass
+
+    @abc.abstractmethod
+    def list_audit_runs(self, limit: int = 10) -> List[Dict[str, Any]]:
+        pass
+
+    # State Consolidation & Seeding
+    def get_full_state(self) -> Dict[str, Any]:
+        """Consolidates packages, active candidates, blueprints, rules, and telemetry for the API / UI."""
+        packages_list = self.list_packages()
+        candidates_list = self.list_candidates()
+        rules = self.list_rules()
+        audit_runs = self.list_audit_runs(limit=20)
+
+        # Index active candidate updates by package_id
+        active_cands_by_pkg = {}
+        for cand in candidates_list:
+            pid = cand.get("package_id")
+            if cand.get("status") not in ("MERGED", "CANCELLED", "SUPERSEDED"):
+                active_cands_by_pkg[pid] = cand
+
+        enriched_packages = []
+        all_blueprints = []
+
+        for pkg in packages_list:
+            pid = pkg.get("package_id")
+            cand = active_cands_by_pkg.get(pid)
+            bps = pkg.get("blueprints", [])
+            for bp in bps:
+                bp_copy = copy.deepcopy(bp)
+                bp_copy["package_id"] = pid
+                bp_copy["package_name"] = pkg.get("name", pid)
+                bp_copy["current_version"] = pkg.get("current_version", "")
+                all_blueprints.append(bp_copy)
+
+            enriched_pkg = {
+                "package_id": pid,
+                "name": pkg.get("name", ""),
+                "current_version": pkg.get("current_version", ""),
+                "upstream_version": pkg.get("upstream_version") or "-",
+                "source_url": pkg.get("source_url", ""),
+                "upstream_type": pkg.get("upstream_type", "generic"),
+                "status": pkg.get("status", "REGISTERED"),
+                "qualification_summary": pkg.get("qualification_summary") or "Monitored baseline.",
+                "snooze_until": pkg.get("snooze_until"),
+                "updated_at": pkg.get("updated_at", ""),
+                "candidate_id": cand.get("candidate_id") if cand else None,
+                "candidate_version": cand.get("version") if cand else None,
+                "candidate_status": cand.get("status") if cand else None,
+                "pr_url": cand.get("pr_url") if cand else None,
+                "build_url": cand.get("build_url") if cand else None,
+                "candidate_summary": cand.get("summary") if cand else None,
+                "blueprints_count": len(bps)
+            }
+            enriched_packages.append(enriched_pkg)
+
+        return {
+            "packages": enriched_packages,
+            "blueprints": all_blueprints,
+            "rules": rules,
+            "audit_runs": audit_runs
+        }
+
+    @abc.abstractmethod
+    def init_from_seed(self, force: bool = False):
+        pass
+
+
+# ==============================================================================
+# Cloud Firestore (Firebase) DataStore Implementation
+# ==============================================================================
+
+class FirestoreDataStore(BaseDataStore):
+    """
+    Cloud Firestore (Firebase) DataStore implementation.
+    Operates on Google Cloud Firestore in Native Mode using Application Default Credentials (ADC).
+    """
+
+    def __init__(self, project_id: Optional[str] = None, database_id: Optional[str] = None):
+        cfg = get_config()
+        self.project_id = project_id or cfg.database.project_id or "hpc-toolkit-dev"
+        self.database_id = database_id or cfg.database.database_id or "automated-dependency-management-db"
+        self._client = None
+        self._ensure_initialized()
+
+    @property
+    def db(self):
+        if self._client is None:
+            from google.cloud import firestore
+            self._client = firestore.Client(project=self.project_id, database=self.database_id)
+        return self._client
+
+    def _ensure_initialized(self):
+        """Auto-seeds packages if the Firestore collection is empty."""
+        try:
+            coll = self.db.collection("packages")
+            first_doc = next(coll.limit(1).stream(), None)
+            if first_doc is None:
+                print(f"[FirestoreDataStore] Initializing empty Firestore database '{self.database_id}' from seed data...")
+                self.init_from_seed()
+        except Exception as ex:
+            print(f"[FirestoreDataStore] [WARN] Initialization check failed: {ex}")
+
+    # Packages
+    def get_package(self, package_id: str) -> Optional[Dict[str, Any]]:
+        doc = self.db.collection("packages").document(package_id).get()
+        return doc.to_dict() if doc.exists else None
+
+    def list_packages(self) -> List[Dict[str, Any]]:
+        docs = self.db.collection("packages").stream()
+        pkgs = [d.to_dict() for d in docs]
+        pkgs.sort(key=lambda x: x.get("package_id", ""))
+        return pkgs
+
+    def update_package(self, package_id: str, updates: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        doc_ref = self.db.collection("packages").document(package_id)
+        doc = doc_ref.get()
+        if not doc.exists:
+            return None
+        data = doc.to_dict()
+        updates_with_ts = {
+            **updates,
+            "updated_at": datetime.datetime.now(datetime.timezone.utc).isoformat()
+        }
+        doc_ref.set(updates_with_ts, merge=True)
+        data.update(updates_with_ts)
+        return data
+
+    # Candidates
+    def get_candidate(self, candidate_id: str) -> Optional[Dict[str, Any]]:
+        doc = self.db.collection("candidate_updates").document(candidate_id).get()
+        return doc.to_dict() if doc.exists else None
+
+    def list_candidates(
+        self, package_id: Optional[str] = None, status: Optional[str] = None
+    ) -> List[Dict[str, Any]]:
+        docs = self.db.collection("candidate_updates").stream()
+        cands = [d.to_dict() for d in docs]
+        if package_id:
+            cands = [c for c in cands if c.get("package_id") == package_id]
+        if status:
+            cands = [c for c in cands if c.get("status") == status]
+        cands.sort(key=lambda x: x.get("created_at", ""), reverse=True)
+        return cands
+
+    def save_candidate(self, candidate: Dict[str, Any]) -> str:
+        cand_id = candidate.get("candidate_id") or f"cand-{str(uuid.uuid4())[:8]}"
+        cand_copy = dict(candidate)
+        cand_copy["candidate_id"] = cand_id
+        if not cand_copy.get("created_at"):
+            cand_copy["created_at"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        self.db.collection("candidate_updates").document(cand_id).set(cand_copy)
+        return cand_id
+
+    def update_candidate(self, candidate_id: str, updates: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        doc_ref = self.db.collection("candidate_updates").document(candidate_id)
+        doc = doc_ref.get()
+        if not doc.exists:
+            return None
+        data = doc.to_dict()
+        doc_ref.set(updates, merge=True)
+        data.update(updates)
+        return data
+
+    def delete_candidates(self, package_id: Optional[str] = None, exclude_status: Optional[str] = "MERGED") -> int:
+        coll = self.db.collection("candidate_updates")
+        deleted = 0
+        batch = self.db.batch()
+        for doc in coll.stream():
+            data = doc.to_dict()
+            if package_id is None or data.get("package_id") == package_id:
+                if exclude_status and data.get("status") == exclude_status:
+                    continue
+                batch.delete(doc.reference)
+                deleted += 1
+                if deleted % 400 == 0:
+                    batch.commit()
+                    batch = self.db.batch()
+        if deleted % 400 != 0:
+            batch.commit()
+        return deleted
+
+    # Learned Rules
+    def list_rules(self, package_id: Optional[str] = None) -> List[Dict[str, Any]]:
+        docs = self.db.collection("learned_rules").stream()
+        rules = [d.to_dict() for d in docs]
+        if package_id:
+            rules = [r for r in rules if r.get("package_id") == package_id or r.get("package_id") == "*"]
+        rules.sort(key=lambda x: x.get("created_at", ""))
+        return rules
+
+    def add_rule(self, rule_data: Dict[str, Any]) -> str:
+        rule_id = rule_data.get("rule_id") or f"rule-{str(uuid.uuid4())[:8]}"
+        rule_copy = dict(rule_data)
+        rule_copy["rule_id"] = rule_id
+        if not rule_copy.get("created_at"):
+            rule_copy["created_at"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        self.db.collection("learned_rules").document(rule_id).set(rule_copy)
+        return rule_id
+
+    def delete_rule(self, rule_id: str) -> bool:
+        doc_ref = self.db.collection("learned_rules").document(rule_id)
+        if doc_ref.get().exists:
+            doc_ref.delete()
+            return True
+        return False
+
+    # Audit Runs
+    def record_audit_run(self, run_data: Dict[str, Any]) -> str:
+        run_id = run_data.get("run_id") or f"run-{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}-{str(uuid.uuid4())[:4]}"
+        run_copy = dict(run_data)
+        run_copy["run_id"] = run_id
+        if not run_copy.get("started_at"):
+            run_copy["started_at"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        self.db.collection("audit_runs").document(run_id).set(run_copy)
+        return run_id
+
+    def list_audit_runs(self, limit: int = 10) -> List[Dict[str, Any]]:
+        docs = self.db.collection("audit_runs").stream()
+        runs = [d.to_dict() for d in docs]
+        runs.sort(key=lambda x: x.get("started_at", ""), reverse=True)
+        return runs[:limit]
+
+    # Seeding & Migration
+    def init_from_seed(self, force: bool = False):
+        """Seeds canonical packages and rules into Firestore."""
+        from tools.infra_updater.init_db import get_seed_data
+        seed_data = get_seed_data()
+
+        # If forcing full reseed (e.g. baseline reset), clear active candidate updates
+        if force:
+            deleted_cands = self.delete_candidates(package_id=None, exclude_status="MERGED")
+            if deleted_cands > 0:
+                print(f"[FirestoreDataStore] Cleared {deleted_cands} candidate update(s) during baseline reset.")
+
+        batch = self.db.batch()
+        count = 0
+
+        for pid, pkg in seed_data.get("packages", {}).items():
+            ref = self.db.collection("packages").document(pid)
+            batch.set(ref, pkg, merge=not force)
+            count += 1
+            if count % 400 == 0:
+                batch.commit()
+                batch = self.db.batch()
+
+        for rule in seed_data.get("learned_rules", []):
+            rid = rule.get("rule_id")
+            if rid:
+                ref = self.db.collection("learned_rules").document(rid)
+                batch.set(ref, rule, merge=not force)
+                count += 1
+                if count % 400 == 0:
+                    batch.commit()
+                    batch = self.db.batch()
+
+        if count % 400 != 0:
+            batch.commit()
+        print(f"[SUCCESS] Seeded {count} documents into Firestore database '{self.database_id}'.")
+
+
+# ==============================================================================
+# Local JSON DataStore Implementation (Thread-Safe File)
+# ==============================================================================
+
+class JsonDataStore(BaseDataStore):
     """Thread-safe, atomic JSON data store for dependency registry and lifecycle state."""
 
     def __init__(self, json_path: Optional[str] = None):
@@ -89,19 +446,14 @@ class DataStore:
                 os.remove(temp_path)
             raise
 
-    # --------------------------------------------------------------------------
-    # Packages (Canonical Registry)
-    # --------------------------------------------------------------------------
-
+    # Packages
     def get_package(self, package_id: str) -> Optional[Dict[str, Any]]:
-        """Retrieves a single package definition by its package_id."""
         with self._lock:
             data = self._read_data()
             pkg = data.get("packages", {}).get(package_id)
             return copy.deepcopy(pkg) if pkg else None
 
     def list_packages(self) -> List[Dict[str, Any]]:
-        """Returns all registered packages ordered by package_id."""
         with self._lock:
             data = self._read_data()
             pkgs = list(data.get("packages", {}).values())
@@ -109,7 +461,6 @@ class DataStore:
             return copy.deepcopy(pkgs)
 
     def update_package(self, package_id: str, updates: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-        """Updates specific fields on a package record."""
         with self._lock:
             data = self._read_data()
             packages = data.setdefault("packages", {})
@@ -122,47 +473,16 @@ class DataStore:
             self._write_data(data)
             return copy.deepcopy(pkg)
 
-    # --------------------------------------------------------------------------
-    # Blueprints
-    # --------------------------------------------------------------------------
-
-    def get_blueprints_for_package(self, package_id: str) -> List[Dict[str, Any]]:
-        """Returns all blueprint instances mapped to a package."""
-        pkg = self.get_package(package_id)
-        if not pkg:
-            return []
-        return copy.deepcopy(pkg.get("blueprints", []))
-
-    def list_all_blueprints(self) -> List[Dict[str, Any]]:
-        """Returns a flat list of all blueprint instances across all packages."""
-        with self._lock:
-            data = self._read_data()
-            all_bps = []
-            for pkg_id, pkg in data.get("packages", {}).items():
-                for bp in pkg.get("blueprints", []):
-                    item = copy.deepcopy(bp)
-                    item["package_id"] = pkg_id
-                    all_bps.append(item)
-            all_bps.sort(key=lambda x: x.get("instance_id", ""))
-            return all_bps
-
-    # --------------------------------------------------------------------------
-    # Candidate Updates Lifecycle
-    # --------------------------------------------------------------------------
-
+    # Candidates
     def get_candidate(self, candidate_id: str) -> Optional[Dict[str, Any]]:
-        """Returns a single candidate update by candidate_id."""
         with self._lock:
             data = self._read_data()
             cand = data.get("candidate_updates", {}).get(candidate_id)
             return copy.deepcopy(cand) if cand else None
 
     def list_candidates(
-        self,
-        package_id: Optional[str] = None,
-        status: Optional[str] = None
+        self, package_id: Optional[str] = None, status: Optional[str] = None
     ) -> List[Dict[str, Any]]:
-        """Returns candidate updates, optionally filtered by package_id and/or workflow status."""
         with self._lock:
             data = self._read_data()
             cands = list(data.get("candidate_updates", {}).values())
@@ -173,22 +493,9 @@ class DataStore:
             cands.sort(key=lambda x: x.get("created_at", ""), reverse=True)
             return copy.deepcopy(cands)
 
-    def get_active_candidate(self, package_id: str) -> Optional[Dict[str, Any]]:
-        """Returns the current active candidate (non-MERGED, non-CANCELLED) for a package."""
-        cands = self.list_candidates(package_id=package_id)
-        for c in cands:
-            if c.get("status") not in ("MERGED", "CANCELLED", "SUPERSEDED"):
-                return c
-        return None
-
     def save_candidate(self, candidate: Dict[str, Any]) -> str:
-        """Inserts or updates a candidate update record."""
-        cand_id = candidate.get("candidate_id")
-        if not cand_id:
-            import uuid
-            cand_id = f"cand-{str(uuid.uuid4())[:8]}"
-            candidate["candidate_id"] = cand_id
-
+        cand_id = candidate.get("candidate_id") or f"cand-{str(uuid.uuid4())[:8]}"
+        candidate["candidate_id"] = cand_id
         if "created_at" not in candidate:
             candidate["created_at"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
 
@@ -200,7 +507,6 @@ class DataStore:
             return cand_id
 
     def update_candidate(self, candidate_id: str, updates: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-        """Updates fields on an existing candidate update record."""
         with self._lock:
             data = self._read_data()
             cands = data.setdefault("candidate_updates", {})
@@ -212,14 +518,13 @@ class DataStore:
             self._write_data(data)
             return copy.deepcopy(cand)
 
-    def delete_candidates(self, package_id: str, exclude_status: Optional[str] = "MERGED") -> int:
-        """Deletes candidate updates for a package (except those matching exclude_status)."""
+    def delete_candidates(self, package_id: Optional[str] = None, exclude_status: Optional[str] = "MERGED") -> int:
         with self._lock:
             data = self._read_data()
             cands = data.setdefault("candidate_updates", {})
             to_delete = [
                 cid for cid, c in cands.items()
-                if c.get("package_id") == package_id and (exclude_status is None or c.get("status") != exclude_status)
+                if (package_id is None or c.get("package_id") == package_id) and (exclude_status is None or c.get("status") != exclude_status)
             ]
             for cid in to_delete:
                 del cands[cid]
@@ -227,12 +532,8 @@ class DataStore:
                 self._write_data(data)
             return len(to_delete)
 
-    # --------------------------------------------------------------------------
     # Learned Rules
-    # --------------------------------------------------------------------------
-
     def list_rules(self, package_id: Optional[str] = None) -> List[Dict[str, Any]]:
-        """Returns learned rules, optionally filtered by package_id."""
         with self._lock:
             data = self._read_data()
             rules = data.get("learned_rules", [])
@@ -241,49 +542,33 @@ class DataStore:
             return copy.deepcopy(rules)
 
     def add_rule(self, rule_data: Dict[str, Any]) -> str:
-        """Appends a new rule to learned_rules."""
-        rule_id = rule_data.get("rule_id")
-        if not rule_id:
-            import uuid
-            rule_id = f"rule-{str(uuid.uuid4())[:8]}"
-            rule_data["rule_id"] = rule_id
+        rule_id = rule_data.get("rule_id") or f"rule-{str(uuid.uuid4())[:8]}"
+        rule_data["rule_id"] = rule_id
         if "created_at" not in rule_data:
             rule_data["created_at"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
 
         with self._lock:
             data = self._read_data()
             rules = data.setdefault("learned_rules", [])
-            # Replace existing rule with same ID if present
-            rules = [r for r in rules if r.get("rule_id") != rule_id]
             rules.append(copy.deepcopy(rule_data))
-            data["learned_rules"] = rules
             self._write_data(data)
             return rule_id
 
     def delete_rule(self, rule_id: str) -> bool:
-        """Deletes a rule by rule_id."""
         with self._lock:
             data = self._read_data()
-            rules = data.setdefault("learned_rules", [])
-            orig_len = len(rules)
-            rules = [r for r in rules if r.get("rule_id") != rule_id]
-            data["learned_rules"] = rules
-            if len(rules) != orig_len:
+            rules = data.get("learned_rules", [])
+            new_rules = [r for r in rules if r.get("rule_id") != rule_id]
+            if len(new_rules) < len(rules):
+                data["learned_rules"] = new_rules
                 self._write_data(data)
                 return True
             return False
 
-    # --------------------------------------------------------------------------
     # Audit Runs
-    # --------------------------------------------------------------------------
-
     def record_audit_run(self, run_data: Dict[str, Any]) -> str:
-        """Records an execution telemetry audit run."""
-        run_id = run_data.get("run_id")
-        if not run_id:
-            import uuid
-            run_id = f"run-{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}-{str(uuid.uuid4())[:4]}"
-            run_data["run_id"] = run_id
+        run_id = run_data.get("run_id") or f"run-{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}-{str(uuid.uuid4())[:4]}"
+        run_data["run_id"] = run_id
         if "started_at" not in run_data:
             run_data["started_at"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
 
@@ -291,83 +576,17 @@ class DataStore:
             data = self._read_data()
             runs = data.setdefault("audit_runs", [])
             runs.insert(0, copy.deepcopy(run_data))
-            # Keep max 50 recent runs
-            data["audit_runs"] = runs[:50]
             self._write_data(data)
             return run_id
 
     def list_audit_runs(self, limit: int = 10) -> List[Dict[str, Any]]:
-        """Returns recent audit runs up to limit."""
         with self._lock:
             data = self._read_data()
             runs = data.get("audit_runs", [])
             return copy.deepcopy(runs[:limit])
 
-    # --------------------------------------------------------------------------
-    # Dashboard Consolidated View
-    # --------------------------------------------------------------------------
-
-    def get_full_state(self) -> Dict[str, Any]:
-        """Consolidates packages, active candidates, blueprints, rules, and telemetry for the API / UI."""
-        with self._lock:
-            data = self._read_data()
-            packages_map = data.get("packages", {})
-            candidates_map = data.get("candidate_updates", {})
-            rules = data.get("learned_rules", [])
-            audit_runs = data.get("audit_runs", [])
-
-            # Index active candidate updates by package_id
-            active_cands_by_pkg = {}
-            for cand in candidates_map.values():
-                pid = cand.get("package_id")
-                if cand.get("status") not in ("MERGED", "CANCELLED", "SUPERSEDED"):
-                    active_cands_by_pkg[pid] = cand
-
-            enriched_packages = []
-            all_blueprints = []
-
-            for pid, pkg in sorted(packages_map.items()):
-                cand = active_cands_by_pkg.get(pid)
-                bps = pkg.get("blueprints", [])
-                for bp in bps:
-                    bp_copy = copy.deepcopy(bp)
-                    bp_copy["package_id"] = pid
-                    all_blueprints.append(bp_copy)
-
-                enriched_pkg = {
-                    "package_id": pid,
-                    "name": pkg.get("name", ""),
-                    "current_version": pkg.get("current_version", ""),
-                    "upstream_version": pkg.get("upstream_version") or "-",
-                    "source_url": pkg.get("source_url", ""),
-                    "upstream_type": pkg.get("upstream_type", "generic"),
-                    "status": pkg.get("status", "REGISTERED"),
-                    "qualification_summary": pkg.get("qualification_summary") or "Monitored baseline.",
-                    "snooze_until": pkg.get("snooze_until"),
-                    "updated_at": pkg.get("updated_at", ""),
-                    "candidate_id": cand.get("candidate_id") if cand else None,
-                    "candidate_version": cand.get("version") if cand else None,
-                    "candidate_status": cand.get("status") if cand else None,
-                    "pr_url": cand.get("pr_url") if cand else None,
-                    "build_url": cand.get("build_url") if cand else None,
-                    "candidate_summary": cand.get("summary") if cand else None,
-                    "blueprints_count": len(bps)
-                }
-                enriched_packages.append(enriched_pkg)
-
-            return {
-                "packages": enriched_packages,
-                "blueprints": all_blueprints,
-                "rules": rules,
-                "audit_runs": audit_runs
-            }
-
-    # --------------------------------------------------------------------------
-    # Seeding / Migration
-    # --------------------------------------------------------------------------
-
+    # Seeding
     def init_from_seed(self, force: bool = False):
-        """Initializes updater_state.json with canonical Cluster Toolkit package definitions and blueprint maps."""
         if os.path.exists(self.json_path) and not force:
             return
 
@@ -377,12 +596,38 @@ class DataStore:
         print(f"[SUCCESS] Initialized JSON state store at {self.json_path}")
 
 
-_GLOBAL_STORE: Optional[DataStore] = None
+# Alias DataStore to JsonDataStore for backward compatibility with type annotations
+DataStore = JsonDataStore
 
 
-def get_datastore(json_path: Optional[str] = None) -> DataStore:
-    """Returns the process-wide singleton DataStore."""
+# ==============================================================================
+# Factory & Singleton Management
+# ==============================================================================
+
+_GLOBAL_STORE: Optional[BaseDataStore] = None
+
+
+def get_datastore(force_provider: Optional[str] = None) -> BaseDataStore:
+    """
+    Returns the process-wide DataStore singleton.
+    Dynamically resolves between Cloud Firestore and local JSON based on config.
+    """
     global _GLOBAL_STORE
-    if _GLOBAL_STORE is None or (json_path and _GLOBAL_STORE.json_path != json_path):
-        _GLOBAL_STORE = DataStore(json_path)
+    cfg = get_config()
+    provider = force_provider or cfg.database.provider.lower()
+
+    if _GLOBAL_STORE is None:
+        if provider in ("firestore", "firebase"):
+            _GLOBAL_STORE = FirestoreDataStore(
+                project_id=cfg.database.project_id,
+                database_id=cfg.database.database_id
+            )
+        else:
+            _GLOBAL_STORE = JsonDataStore()
     return _GLOBAL_STORE
+
+
+def reset_datastore_singleton():
+    """Resets the singleton instance (useful during tests or provider switches)."""
+    global _GLOBAL_STORE
+    _GLOBAL_STORE = None

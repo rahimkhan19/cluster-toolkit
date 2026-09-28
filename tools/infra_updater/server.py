@@ -201,6 +201,9 @@ class DashboardHandler(SimpleHTTPRequestHandler):
                 "current_action": GLOBAL_BUFFER.current_action,
                 "last_status": GLOBAL_BUFFER.last_status,
                 "config": {
+                    "database_provider": CONFIG.database.provider,
+                    "database_id": CONFIG.database.database_id,
+                    "project_id": CONFIG.database.project_id,
                     "repo_url": CONFIG.repository.url,
                     "owner": CONFIG.repository.owner,
                     "repo_name": CONFIG.repository.name,

@@ -2,6 +2,12 @@
 # Cluster Toolkit Automated Infrastructure Updater Configuration
 # ==============================================================================
 
+# Database Backend (Cloud Firestore in Native Mode or local JSON)
+database:
+  provider: "firestore"
+  project_id: "hpc-toolkit-dev"
+  database_id: "automated-dependency-management-db"
+
 # Target Repository & Branch
 repository:
   url: "https://github.com/rahimkhan19/cluster-toolkit.git"

@@ -38,7 +38,7 @@ if REPO_ROOT not in sys.path:
 
 JSON_PATH = os.path.join(BASE_DIR, "updater_state.json")
 
-def init_database(preserve_candidates: bool = False):
+def build_canonical_seed_dict() -> dict:
     # -------------------------------------------------------------------------
     # Seed Canonical Infrastructure Packages (Section 2.1)
     # -------------------------------------------------------------------------
@@ -634,12 +634,22 @@ def init_database(preserve_candidates: bool = False):
             "created_at": "2026-09-23T06:00:00Z"
         })
 
-    seed_json = {
+    return {
         "packages": pkgs,
         "candidate_updates": {},
         "learned_rules": rules,
         "audit_runs": []
     }
+
+
+def get_seed_data() -> dict:
+    """Returns canonical pure baseline seed data."""
+    return build_canonical_seed_dict()
+
+
+def init_database(preserve_candidates: bool = False):
+    """Initializes and seeds both the JSON file and active DataStore provider."""
+    seed_json = build_canonical_seed_dict()
 
     # Only preserve active candidates or qualified upstream versions if explicitly requested
     if preserve_candidates and os.path.exists(JSON_PATH):
@@ -661,13 +671,13 @@ def init_database(preserve_candidates: bool = False):
         json.dump(seed_json, f, indent=2, ensure_ascii=False)
     print(f"[SUCCESS] JSON state store initialized and seeded at {JSON_PATH}.")
 
-
-def get_seed_data() -> dict:
-    """Returns canonical seed data from JSON_PATH (initializing it if necessary)."""
-    if not os.path.exists(JSON_PATH):
-        init_database()
-    with open(JSON_PATH, "r", encoding="utf-8") as f:
-        return json.load(f)
+    # Synchronize configured datastore (Firestore or JSON)
+    try:
+        from tools.infra_updater.datastore import get_datastore
+        store = get_datastore()
+        store.init_from_seed(force=not preserve_candidates)
+    except Exception as ex:
+        print(f"[WARN] Failed to synchronize datastore provider: {ex}")
 
 
 def preview_tables():
@@ -725,6 +735,62 @@ def preview_tables():
             print(f"{c.get('candidate_id', ''):<15} | {c.get('package_id', ''):<18} | {c.get('version', ''):<18} | {c.get('status', ''):<18} | {summary}")
     print("=" * 135)
 
+
+def migrate_to_firestore(json_path: str = JSON_PATH):
+    """Migrates all entities from the local JSON file to Cloud Firestore."""
+    from tools.infra_updater.config import get_config
+    from google.cloud import firestore
+
+    cfg = get_config()
+    project_id = cfg.database.project_id or "hpc-toolkit-dev"
+    database_id = cfg.database.database_id or "automated-dependency-management-db"
+
+    print(f"[MIGRATION] Migrating {json_path} -> Firestore ({project_id}/{database_id})...")
+    db = firestore.Client(project=project_id, database=database_id)
+
+    if not os.path.exists(json_path):
+        print(f"[ERROR] Source JSON file {json_path} does not exist.")
+        return
+
+    with open(json_path, "r", encoding="utf-8") as f:
+        data = json.load(f)
+
+    batch = db.batch()
+    count = 0
+
+    for pid, pkg in data.get("packages", {}).items():
+        ref = db.collection("packages").document(pid)
+        batch.set(ref, pkg)
+        count += 1
+
+    for cid, cand in data.get("candidate_updates", {}).items():
+        ref = db.collection("candidate_updates").document(cid)
+        batch.set(ref, cand)
+        count += 1
+
+    for rule in data.get("learned_rules", []):
+        rid = rule.get("rule_id")
+        if rid:
+            ref = db.collection("learned_rules").document(rid)
+            batch.set(ref, rule)
+            count += 1
+
+    for run in data.get("audit_runs", []):
+        run_id = run.get("run_id")
+        if run_id:
+            ref = db.collection("audit_runs").document(run_id)
+            batch.set(ref, run)
+            count += 1
+
+    batch.commit()
+    print(f"[SUCCESS] Migrated {count} documents to Cloud Firestore database '{database_id}'.")
+
+
 if __name__ == "__main__":
-    init_database()
+    import sys
+    if "--migrate-to-firestore" in sys.argv or "--migrate-to-firebase" in sys.argv:
+        migrate_to_firestore()
+    else:
+        init_database()
     preview_tables()
+

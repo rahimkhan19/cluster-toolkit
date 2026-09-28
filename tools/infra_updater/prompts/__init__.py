@@ -60,11 +60,12 @@ def get_manifest_regex_prompt(package_id: str, manifest_url: str, manifest_conte
     )
 
 
-def get_github_release_prompt(source_url: str, package_id: str, candidates_summary_json: str) -> str:
+def get_github_release_prompt(source_url: str, package_id: str, candidates_summary_json: str, current_version: str = "-") -> str:
     template = load_prompt("github_release")
     return template.format(
         source_url=source_url,
         package_id=package_id,
+        current_version=current_version,
         candidates_summary_json=candidates_summary_json
     )
 

@@ -430,7 +430,9 @@ class GitHubReleaseProvider:
         m = re.search(r"github\.com/([^/]+/[^/\s]+)", url)
         return m.group(1).rstrip("/") if m else None
 
-    def _extract_with_llm(self, package_id: str, source_url: str, releases: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    def _extract_with_llm(
+        self, package_id: str, source_url: str, releases: List[Dict[str, Any]], current_version: Optional[str] = None
+    ) -> Optional[Dict[str, Any]]:
         if not self.llm_client or not GENAI_AVAILABLE:
             return None
 
@@ -450,7 +452,8 @@ class GitHubReleaseProvider:
         prompt = get_github_release_prompt(
             source_url=source_url,
             package_id=package_id,
-            candidates_summary_json=json.dumps(candidates_summary, indent=2)
+            candidates_summary_json=json.dumps(candidates_summary, indent=2),
+            current_version=current_version or "-"
         )
         try:
             resp = generate_content_with_retry(
@@ -469,6 +472,37 @@ class GitHubReleaseProvider:
                 return None
 
             clean_ver = extracted.version.lstrip("v")
+            curr_semver = parse_semver(current_version) if current_version else None
+            ext_semver = parse_semver(clean_ver)
+
+            # If extracted version is strictly lower than deployed version (e.g. repo changed from CalVer 25.x to SemVer 0.x),
+            # maintain continuity within the active major track if releases exist in that track.
+            if curr_semver and ext_semver and ext_semver < curr_semver:
+                curr_major = str(curr_semver.major)
+                track_releases = []
+                for r in releases:
+                    if r.get("prerelease") or r.get("draft"):
+                        continue
+                    t_tag = r.get("tag_name", "").lstrip("v")
+                    t_semver = parse_semver(t_tag)
+                    if t_semver and str(t_semver.major) == curr_major:
+                        track_releases.append((t_semver, r))
+                if track_releases:
+                    track_releases.sort(key=lambda x: x[0], reverse=True)
+                    best_semver, best_rel = track_releases[0]
+                    clean_ver = str(best_semver)
+                    release_notes = best_rel.get("body", "") or f"Upstream GA release {clean_ver} (track {curr_major}.x)."
+                    return {
+                        "version": clean_ver,
+                        "download_url": best_rel.get("html_url", source_url),
+                        "filename": f"{package_id}-{clean_ver}.tar.gz",
+                        "channel": "production-stable",
+                        "release_notes": release_notes,
+                        "tag_name": best_rel.get("tag_name", f"v{clean_ver}"),
+                        "prerelease": False,
+                        "draft": False
+                    }
+
             matching_rel = next((r for r in releases if extracted.version in r.get("tag_name", "") or clean_ver in r.get("tag_name", "")), None)
             release_notes = matching_rel.get("body", "") if matching_rel else (extracted.reasoning or f"Upstream GA release {clean_ver}.")
 
@@ -487,7 +521,9 @@ class GitHubReleaseProvider:
             print(f"[WARN] GitHubReleaseProvider LLM extraction error for {package_id}: {clean_msg}")
             raise RuntimeError(f"LLM extraction failed for {package_id} from GitHub {source_url}: {clean_msg}")
 
-    def get_latest_candidate(self, package_id: str, source_url: str) -> Optional[Dict[str, Any]]:
+    def get_latest_candidate(
+        self, package_id: str, source_url: str, current_version: Optional[str] = None
+    ) -> Optional[Dict[str, Any]]:
         repo = self.extract_repo_from_url(source_url)
         if not repo:
             raise ValueError(f"Could not extract GitHub repository from {source_url}")
@@ -517,7 +553,7 @@ class GitHubReleaseProvider:
         if not releases or not isinstance(releases, list):
             raise RuntimeError(f"No releases or tags returned by GitHub API for {repo}")
 
-        llm_cand = self._extract_with_llm(package_id, source_url, releases)
+        llm_cand = self._extract_with_llm(package_id, source_url, releases, current_version=current_version)
         if not llm_cand:
             raise RuntimeError(f"LLM could not discover or qualify upstream GA release for {package_id} from {source_url}")
         return llm_cand
@@ -1152,7 +1188,8 @@ class SourceQualificationAgent:
             elif upstream_type == "github_release":
                 candidate = self.github_provider.get_latest_candidate(
                     package_id=package_id,
-                    source_url=source_url
+                    source_url=source_url,
+                    current_version=current_ver
                 )
             elif upstream_type == "gcp_compute_image":
                 candidate = self.image_provider.get_candidate(

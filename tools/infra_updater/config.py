@@ -143,6 +143,13 @@ class LLMConfig:
         self.model: str = raw.get("model", "gemini-3.8-flash")
 
 
+class DatabaseConfig:
+    def __init__(self, raw: Dict[str, Any]):
+        self.provider: str = os.environ.get("UPDATER_DB_PROVIDER") or raw.get("provider", "firestore")
+        self.project_id: str = os.environ.get("GOOGLE_CLOUD_PROJECT") or os.environ.get("FIREBASE_PROJECT_ID") or raw.get("project_id", "hpc-toolkit-dev")
+        self.database_id: str = os.environ.get("FIRESTORE_DATABASE_ID") or raw.get("database_id", "automated-dependency-management-db")
+
+
 class ServerConfig:
     def __init__(self, raw: Dict[str, Any]):
         self.port: int = int(raw.get("port", 8080))
@@ -156,6 +163,7 @@ class UpdaterConfig:
         self._raw_data = self._load_file()
         self._apply_env_overrides()
 
+        self.database = DatabaseConfig(self._raw_data.get("database", {}))
         self.repository = RepositoryConfig(self._raw_data.get("repository", {}))
         self.git = GitConfig(self._raw_data.get("git", {}))
         self.llm = LLMConfig(self._raw_data.get("llm", {}))
@@ -170,6 +178,14 @@ class UpdaterConfig:
         return {}
 
     def _apply_env_overrides(self):
+        db = self._raw_data.setdefault("database", {})
+        if os.environ.get("UPDATER_DB_PROVIDER"):
+            db["provider"] = os.environ["UPDATER_DB_PROVIDER"]
+        if os.environ.get("GOOGLE_CLOUD_PROJECT") or os.environ.get("FIREBASE_PROJECT_ID"):
+            db["project_id"] = os.environ.get("GOOGLE_CLOUD_PROJECT") or os.environ.get("FIREBASE_PROJECT_ID")
+        if os.environ.get("FIRESTORE_DATABASE_ID"):
+            db["database_id"] = os.environ["FIRESTORE_DATABASE_ID"]
+
         repo = self._raw_data.setdefault("repository", {})
         if os.environ.get("UPDATER_TARGET_REPO"):
             repo["url"] = os.environ["UPDATER_TARGET_REPO"]
