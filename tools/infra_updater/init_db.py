@@ -168,15 +168,6 @@ def build_canonical_seed_dict() -> dict:
             None
         ),
         (
-            "kueue",
-            "Kubernetes SIG Kueue Queueing System",
-            "0.17.1",
-            "https://github.com/kubernetes-sigs/kueue",
-            "github_release",
-            "REGISTERED",
-            None
-        ),
-        (
             "cmake",
             "Kitware CMake Build System",
             "3.26.0",
@@ -530,32 +521,6 @@ def build_canonical_seed_dict() -> dict:
             "image",
             json.dumps([]),
             json.dumps(["nvidia-smi"])
-        ),
-
-        # kueue
-        (
-            "gke-a3high-kueue",
-            "kueue",
-            "examples/gke-a3-highgpu/gke-a3-highgpu.yaml",
-            "version",
-            json.dumps([]),
-            json.dumps(["kueue"])
-        ),
-        (
-            "gke-a4x-kueue",
-            "kueue",
-            "examples/gke-a4x/gke-a4x.yaml",
-            "version",
-            json.dumps([]),
-            json.dumps(["kueue"])
-        ),
-        (
-            "gke-a4xmax-kueue",
-            "kueue",
-            "examples/gke-a4x-max-bm/gke-a4x-max-bm.yaml",
-            "version",
-            json.dumps([]),
-            json.dumps(["kueue"])
         ),
 
         # cmake

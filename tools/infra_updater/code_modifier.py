@@ -142,7 +142,8 @@ class OrchestratorAgent:
                 else:
                     new_line = f"{prefix}{target_val}\n"
                 new_lines.append(new_line)
-                changed = True
+                if new_line != line:
+                    changed = True
             else:
                 new_lines.append(line)
 
@@ -208,6 +209,13 @@ class OrchestratorAgent:
             if "image" in var_name.lower() and "/" not in primary_val:
                 primary_val = f"nvidia/cuda:{primary_val}"
 
+            # Custom URL builder for CMake local installer
+            if package_id == "cmake" or "cmake" in var_name.lower():
+                parts = cand_version.lstrip("v").split(".")
+                maj_min = f"v{parts[0]}.{parts[1]}" if len(parts) >= 2 else f"v{cand_version}"
+                primary_val = f"https://cmake.org/files/{maj_min}/cmake-{cand_version.lstrip('v')}-linux-x86_64.sh"
+                filename = f"cmake-{cand_version.lstrip('v')}-linux-x86_64.sh"
+
             if isinstance(sig_keywords, str):
                 try:
                     sig_keywords = json.loads(sig_keywords)
@@ -248,13 +256,6 @@ class OrchestratorAgent:
                     old_primary_val = "24.7.1-2"
                     actual_primary_val = cand_version
 
-            # Custom URL builder for CMake local installer
-            if package_id == "cmake" or "cmake" in var_name.lower():
-                parts = cand_version.lstrip("v").split(".")
-                maj_min = f"v{parts[0]}.{parts[1]}" if len(parts) >= 2 else f"v{cand_version}"
-                primary_val = f"https://cmake.org/files/{maj_min}/cmake-{cand_version.lstrip('v')}-linux-x86_64.sh"
-                filename = f"cmake-{cand_version.lstrip('v')}-linux-x86_64.sh"
-
             # List item replacement for nvidia_packages (e.g. datacenter-gpu-manager packages)
             if not primary_changed and (package_id == "nvidia-dcgm" or "dcgm" in var_name or "nvidia_packages" in var_name):
                 epoch_prefix = "1:" if not cand_version.startswith("1:") else ""
@@ -269,6 +270,39 @@ class OrchestratorAgent:
                     primary_changed = True
                     old_primary_val = "1:4.6.1-1"
                     actual_primary_val = target_ver
+
+            # Inline script fallback for OpenMPI
+            if not primary_changed and (package_id == "openmpi" or "openmpi" in var_name.lower()):
+                clean_ver = cand_version.lstrip("v")
+                parts = clean_ver.split(".")
+                maj_min = f"v{parts[0]}.{parts[1]}" if len(parts) >= 2 else f"v{clean_ver}"
+                content_after = re.sub(
+                    r'https://download\.open-mpi\.org/release/open-mpi/v[0-9\.]+/openmpi-[0-9\.]+\.tar\.bz2',
+                    f'https://download.open-mpi.org/release/open-mpi/{maj_min}/openmpi-{clean_ver}.tar.bz2',
+                    orig_content
+                )
+                content_after = re.sub(
+                    r'(openmpi-)[0-9\.]+(\.tar\.bz2)',
+                    rf'\g<1>{clean_ver}\g<2>',
+                    content_after
+                )
+                content_after = re.sub(
+                    r'(cd openmpi-)[0-9\.]+',
+                    rf'\g<1>{clean_ver}',
+                    content_after
+                )
+                content_after = re.sub(
+                    r'(\s+openmpi-)[0-9\.]+(\s*)$',
+                    rf'\g<1>{clean_ver}\g<2>',
+                    content_after,
+                    flags=re.MULTILINE
+                )
+                if content_after != orig_content:
+                    new_content = content_after
+                    primary_changed = True
+                    m_old = re.search(r'openmpi-([0-9\.]+)\.tar\.bz2', orig_content)
+                    old_primary_val = m_old.group(1) if m_old else "5.0.8"
+                    actual_primary_val = clean_ver
 
             # Coupled variables synchronization
             if isinstance(coupled_vars, str):
@@ -286,7 +320,7 @@ class OrchestratorAgent:
                 pattern = coupled.get("pattern", "{filename}")
                 c_val = pattern.format(filename=filename, version=cand_version)
                 new_content, c_changed, old_c_val, actual_c_val = self._replace_variable_in_text(
-                    new_content, c_var_name, c_val
+                    new_content, c_var_name, c_val, signature_keywords=sig_keywords
                 )
                 if c_changed:
                     coupled_changes.append({
@@ -296,6 +330,9 @@ class OrchestratorAgent:
                     })
 
             if not primary_changed and not coupled_changes:
+                continue
+
+            if new_content == orig_content:
                 continue
 
             # 3. YAML Syntax & Integrity Validation
@@ -329,6 +366,13 @@ class OrchestratorAgent:
                 "coupled_changes": coupled_changes
             })
 
+
+        if not modified_files:
+            return {
+                "status": "ERROR",
+                "message": f"No blueprint files were modified for package '{package_id}'."
+            }
+
         # 5. Commit changes to target workspace
         rel_files = [m["file_path"] for m in modified_files]
         commit_ok, commit_info = self.repo_manager.commit_changes(
@@ -337,9 +381,19 @@ class OrchestratorAgent:
             summary=cand.get("changelog_summary", ""),
             modified_files=rel_files
         )
+        if not commit_ok:
+            return {
+                "status": "ERROR",
+                "message": f"Git commit failed for package '{package_id}': {commit_info}"
+            }
 
         # 6. Push branch to remote repository
         pushed = self.repo_manager.push_branch(branch_name)
+        if not pushed:
+            return {
+                "status": "ERROR",
+                "message": f"Git push failed for branch '{branch_name}' on package '{package_id}'."
+            }
 
         # 7. Create Pull Request on GitHub
         pr_url = None
@@ -360,6 +414,11 @@ class OrchestratorAgent:
             )
             pr_url = pr_res.get("pr_url")
             pr_number = pr_res.get("pr_number")
+            if not pr_url:
+                return {
+                    "status": "ERROR",
+                    "message": f"Pull request creation failed for package '{package_id}': {pr_res.get('message')}"
+                }
 
         # 8. Transition Status in DataStore (Doc Section 2.3 & 3.1: status = 'READY_FOR_REVIEW')
         self.store.update_candidate(cand_id, {
@@ -369,8 +428,8 @@ class OrchestratorAgent:
             "pr_url": pr_url,
             "branch": branch_name
         })
+        # IMPORTANT: current_version should NOT change to cand_version until PR is merged!
         self.store.update_package(package_id, {
-            "current_version": cand_version,
             "status": "READY_FOR_REVIEW"
         })
 

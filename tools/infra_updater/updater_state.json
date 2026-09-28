@@ -584,47 +584,6 @@
         }
       ]
     },
-    "kueue": {
-      "package_id": "kueue",
-      "name": "Kubernetes SIG Kueue Queueing System",
-      "current_version": "0.17.1",
-      "upstream_version": "-",
-      "source_url": "https://github.com/kubernetes-sigs/kueue",
-      "upstream_type": "github_release",
-      "status": "REGISTERED",
-      "qualification_summary": "Monitored baseline.",
-      "snooze_until": null,
-      "updated_at": "2026-09-23T06:00:00Z",
-      "blueprints": [
-        {
-          "instance_id": "gke-a3high-kueue",
-          "blueprint_path": "examples/gke-a3-highgpu/gke-a3-highgpu.yaml",
-          "variable_name": "version",
-          "coupled_vars": [],
-          "signature_keywords": [
-            "kueue"
-          ]
-        },
-        {
-          "instance_id": "gke-a4x-kueue",
-          "blueprint_path": "examples/gke-a4x/gke-a4x.yaml",
-          "variable_name": "version",
-          "coupled_vars": [],
-          "signature_keywords": [
-            "kueue"
-          ]
-        },
-        {
-          "instance_id": "gke-a4xmax-kueue",
-          "blueprint_path": "examples/gke-a4x-max-bm/gke-a4x-max-bm.yaml",
-          "variable_name": "version",
-          "coupled_vars": [],
-          "signature_keywords": [
-            "kueue"
-          ]
-        }
-      ]
-    },
     "cmake": {
       "package_id": "cmake",
       "name": "Kitware CMake Build System",

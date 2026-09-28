@@ -95,6 +95,7 @@ class RepoManager:
                 raise RuntimeError(f"Failed to clone target repo {self.repo_url}: {res.stderr.strip()}")
         else:
             print(f"[RepoManager] Syncing workspace with latest origin/{self.base_branch}...", flush=True)
+            self._run_git(["remote", "set-url", "origin", self.repo_url], check=False)
             self._run_git(["fetch", "origin", self.base_branch])
             if force_clean:
                 self._run_git(["checkout", "-f", self.base_branch])
@@ -228,15 +229,6 @@ class RepoManager:
         body_lines = [
             f"## Automated Infrastructure Update: `{package_id}`",
             "",
-            "### Release Overview",
-            f"- **Component ID:** `{package_id}`",
-            f"- **Current Blueprint Version:** `{curr_ver}`",
-            f"- **Target Qualified Version:** `{target_version}`",
-            f"- **Artifact URL:** {dl_url}",
-            "",
-            "### Summary",
-            f"{summary}",
-            ""
         ]
 
         if modified_blueprints:
@@ -245,6 +237,14 @@ class RepoManager:
             body_lines.append("| :--- | :--- | :--- | :--- |")
             for m in modified_blueprints:
                 body_lines.append(f"| `{m.get('file_path')}` | `{m.get('primary_variable')}` | `{m.get('old_value')}` | `{m.get('new_value')}` |")
+            body_lines.append("")
+
+        body_lines.append("### Summary")
+        body_lines.append(f"{summary}")
+        body_lines.append("")
+
+        if dl_url and dl_url != "-":
+            body_lines.append(f"- **Artifact URL:** {dl_url}")
             body_lines.append("")
 
         headers = {
@@ -450,7 +450,7 @@ class RepoManager:
                         })
                         store.update_package(pkg_id, {
                             "status": "UP_TO_DATE",
-                            "current_version": cand.get("target_version")
+                            "current_version": cand.get("target_version") or cand.get("version")
                         })
                         changes.append({"candidate_id": cand_id, "action": "MERGED", "pr_number": pr_num})
                 else:

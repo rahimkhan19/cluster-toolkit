@@ -514,10 +514,26 @@ class GitHubReleaseProvider:
             target_ver = f"v{clean_ver}" if has_v else clean_ver
             release_notes = matching_rel.get("body", "") if matching_rel else (extracted.reasoning or f"Upstream GA release {target_ver}.")
 
+            dl_url = extracted.download_url
+            dl_filename = extracted.filename or f"{package_id}-{target_ver}.tar.gz"
+
+            if package_id == "cmake":
+                parts = clean_ver.split(".")
+                maj_min = f"v{parts[0]}.{parts[1]}" if len(parts) >= 2 else f"v{clean_ver}"
+                sh_asset = None
+                if matching_rel:
+                    sh_asset = next((a for a in matching_rel.get("assets", []) if a.get("name", "").endswith("-linux-x86_64.sh")), None)
+                if sh_asset:
+                    dl_url = sh_asset.get("browser_download_url") or sh_asset.get("url")
+                    dl_filename = sh_asset.get("name")
+                else:
+                    dl_url = f"https://cmake.org/files/{maj_min}/cmake-{clean_ver}-linux-x86_64.sh"
+                    dl_filename = f"cmake-{clean_ver}-linux-x86_64.sh"
+
             return {
                 "version": target_ver,
-                "download_url": extracted.download_url,
-                "filename": extracted.filename or f"{package_id}-{target_ver}.tar.gz",
+                "download_url": dl_url,
+                "filename": dl_filename,
                 "channel": extracted.release_channel or "production-stable",
                 "release_notes": release_notes,
                 "tag_name": matching_rel.get("tag_name") if matching_rel else target_ver,
