@@ -32,9 +32,7 @@ from typing import Optional, Dict, Any, List
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 if BASE_DIR not in sys.path:
     sys.path.insert(0, BASE_DIR)
-REPO_ROOT = os.path.dirname(os.path.dirname(BASE_DIR))
-if REPO_ROOT not in sys.path:
-    sys.path.insert(0, REPO_ROOT)
+
 
 JSON_PATH = os.path.join(BASE_DIR, "updater_state.json")
 
@@ -673,7 +671,7 @@ def init_database(preserve_candidates: bool = False):
 
     # Synchronize configured datastore (Firestore or JSON)
     try:
-        from tools.infra_updater.datastore import get_datastore
+        from datastore import get_datastore
         store = get_datastore()
         store.init_from_seed(force=not preserve_candidates)
     except Exception as ex:
@@ -681,7 +679,7 @@ def init_database(preserve_candidates: bool = False):
 
 
 def preview_tables():
-    from tools.infra_updater.datastore import get_datastore
+    from datastore import get_datastore
     store = get_datastore()
     packages = store.list_packages()
 
@@ -738,7 +736,7 @@ def preview_tables():
 
 def migrate_to_firestore(json_path: str = JSON_PATH):
     """Migrates all entities from the local JSON file to Cloud Firestore."""
-    from tools.infra_updater.config import get_config
+    from config import get_config
     from google.cloud import firestore
 
     cfg = get_config()

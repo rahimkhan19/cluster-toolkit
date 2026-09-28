@@ -37,7 +37,7 @@ import threading
 import uuid
 from typing import Any, Dict, List, Optional
 
-from tools.infra_updater.config import get_config
+from config import get_config
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -360,7 +360,7 @@ class FirestoreDataStore(BaseDataStore):
     # Seeding & Migration
     def init_from_seed(self, force: bool = False):
         """Seeds canonical packages and rules into Firestore."""
-        from tools.infra_updater.init_db import get_seed_data
+        from init_db import get_seed_data
         seed_data = get_seed_data()
 
         # If forcing full reseed (e.g. baseline reset), clear active candidate updates
@@ -590,7 +590,7 @@ class JsonDataStore(BaseDataStore):
         if os.path.exists(self.json_path) and not force:
             return
 
-        from tools.infra_updater.init_db import get_seed_data
+        from init_db import get_seed_data
         seed_data = get_seed_data()
         self._write_data(seed_data)
         print(f"[SUCCESS] Initialized JSON state store at {self.json_path}")

@@ -1,0 +1,12 @@
+.gcloudignore
+.git
+.gitignore
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.env
+target_repo/
+updater_state.json
+*.tmp
+.DS_Store

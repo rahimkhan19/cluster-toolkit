@@ -117,6 +117,18 @@ def _find_system_github_token() -> Optional[str]:
     except Exception:
         pass
 
+    try:
+        from google.cloud import secretmanager
+        project_id = os.environ.get("GOOGLE_CLOUD_PROJECT") or "hpc-toolkit-dev"
+        client = secretmanager.SecretManagerServiceClient()
+        name = f"projects/{project_id}/secrets/infra-updater-github-token/versions/latest"
+        response = client.access_secret_version(name=name)
+        sec_tok = response.payload.data.decode("UTF-8").strip()
+        if sec_tok:
+            return sec_tok
+    except Exception:
+        pass
+
     return None
 
 
@@ -152,7 +164,8 @@ class DatabaseConfig:
 
 class ServerConfig:
     def __init__(self, raw: Dict[str, Any]):
-        self.port: int = int(raw.get("port", 8080))
+        port_val = os.environ.get("PORT") or os.environ.get("UPDATER_SERVER_PORT") or raw.get("port", 8080)
+        self.port: int = int(port_val)
         self.host: str = raw.get("host", "0.0.0.0")
         self.pr_sync_interval_seconds: int = int(raw.get("pr_sync_interval_seconds", 60))
 
@@ -208,7 +221,12 @@ class UpdaterConfig:
             llm["model"] = os.environ["GEMINI_MODEL"]
 
         server = self._raw_data.setdefault("server", {})
-        if os.environ.get("UPDATER_SERVER_PORT"):
+        if os.environ.get("PORT"):
+            try:
+                server["port"] = int(os.environ["PORT"])
+            except ValueError:
+                pass
+        elif os.environ.get("UPDATER_SERVER_PORT"):
             try:
                 server["port"] = int(os.environ["UPDATER_SERVER_PORT"])
             except ValueError:
@@ -216,6 +234,10 @@ class UpdaterConfig:
 
     def get_workspace_path(self) -> str:
         """Returns the absolute path to the target repository workspace directory."""
+        if os.environ.get("UPDATER_WORKSPACE_DIR"):
+            return os.path.abspath(os.environ["UPDATER_WORKSPACE_DIR"])
+        if os.environ.get("K_SERVICE"):
+            return "/tmp/target_repo"
         return os.path.abspath(os.path.join(BASE_DIR, "target_repo"))
 
     def get_github_token(self) -> Optional[str]:

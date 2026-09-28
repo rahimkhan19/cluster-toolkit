@@ -34,13 +34,9 @@ import time
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 if BASE_DIR not in sys.path:
     sys.path.insert(0, BASE_DIR)
-REPO_ROOT = os.path.abspath(os.path.join(BASE_DIR, "../.."))
-if REPO_ROOT not in sys.path:
-    sys.path.insert(0, REPO_ROOT)
-
-from tools.infra_updater.config import get_config
-from tools.infra_updater.repo_manager import RepoManager
-from tools.infra_updater.datastore import get_datastore
+from config import get_config
+from repo_manager import RepoManager
+from datastore import get_datastore
 from init_db import init_database, preview_tables
 from source_agent import SourceQualificationAgent, UpfrontRuleChecker
 from code_modifier import OrchestratorAgent, AtomicCodeModifier

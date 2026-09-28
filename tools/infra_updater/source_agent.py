@@ -42,13 +42,9 @@ from pydantic import BaseModel, Field
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 if BASE_DIR not in sys.path:
     sys.path.insert(0, BASE_DIR)
-REPO_ROOT = os.path.dirname(os.path.dirname(BASE_DIR))
-if REPO_ROOT not in sys.path:
-    sys.path.insert(0, REPO_ROOT)
-
-from tools.infra_updater.config import get_config
-from tools.infra_updater.datastore import DataStore, get_datastore
-from tools.infra_updater.prompts import (
+from config import get_config
+from datastore import DataStore, get_datastore
+from prompts import (
     load_prompt,
     get_archive_scraper_prompt,
     get_manifest_regex_prompt,
@@ -403,7 +399,7 @@ class ManifestRegexProvider:
             print(f"[WARN] ManifestRegexProvider LLM extraction error for {package_id}: {clean_msg}")
             raise RuntimeError(f"LLM extraction failed for manifest {manifest_url} on {package_id}: {clean_msg}")
 
-    def get_candidate(self, package_id: str, manifest_url: str) -> Optional[Dict[str, Any]]:
+    def get_candidate(self, package_id: str, manifest_url: str, current_version: Optional[str] = None) -> Optional[Dict[str, Any]]:
         if not self.llm_client or not GENAI_AVAILABLE:
             raise RuntimeError(f"Gemini LLM client is required for ManifestProvider on {package_id}")
 
@@ -415,6 +411,14 @@ class ManifestRegexProvider:
         llm_cand = self._extract_with_llm(package_id, manifest_url, content)
         if not llm_cand:
             raise RuntimeError(f"LLM could not discover or qualify upstream GA release for {package_id} from manifest {manifest_url}")
+
+        if current_version:
+            v = llm_cand.get("version", "")
+            if current_version.startswith("v") and not v.startswith("v"):
+                llm_cand["version"] = f"v{v}"
+            elif not current_version.startswith("v") and v.startswith("v"):
+                llm_cand["version"] = v.lstrip("v")
+
         return llm_cand
 
 
@@ -491,28 +495,32 @@ class GitHubReleaseProvider:
                     track_releases.sort(key=lambda x: x[0], reverse=True)
                     best_semver, best_rel = track_releases[0]
                     clean_ver = str(best_semver)
-                    release_notes = best_rel.get("body", "") or f"Upstream GA release {clean_ver} (track {curr_major}.x)."
+                    has_v = (current_version and current_version.startswith("v")) or best_rel.get("tag_name", "").startswith("v")
+                    target_ver = f"v{clean_ver}" if has_v else clean_ver
+                    release_notes = best_rel.get("body", "") or f"Upstream GA release {target_ver} (track {curr_major}.x)."
                     return {
-                        "version": clean_ver,
+                        "version": target_ver,
                         "download_url": best_rel.get("html_url", source_url),
-                        "filename": f"{package_id}-{clean_ver}.tar.gz",
+                        "filename": f"{package_id}-{target_ver}.tar.gz",
                         "channel": "production-stable",
                         "release_notes": release_notes,
-                        "tag_name": best_rel.get("tag_name", f"v{clean_ver}"),
+                        "tag_name": best_rel.get("tag_name", target_ver),
                         "prerelease": False,
                         "draft": False
                     }
 
             matching_rel = next((r for r in releases if extracted.version in r.get("tag_name", "") or clean_ver in r.get("tag_name", "")), None)
-            release_notes = matching_rel.get("body", "") if matching_rel else (extracted.reasoning or f"Upstream GA release {clean_ver}.")
+            has_v = (current_version and current_version.startswith("v")) or (matching_rel and matching_rel.get("tag_name", "").startswith("v")) or extracted.version.startswith("v")
+            target_ver = f"v{clean_ver}" if has_v else clean_ver
+            release_notes = matching_rel.get("body", "") if matching_rel else (extracted.reasoning or f"Upstream GA release {target_ver}.")
 
             return {
-                "version": clean_ver,
+                "version": target_ver,
                 "download_url": extracted.download_url,
-                "filename": extracted.filename or f"{package_id}-{clean_ver}.tar.gz",
+                "filename": extracted.filename or f"{package_id}-{target_ver}.tar.gz",
                 "channel": extracted.release_channel or "production-stable",
                 "release_notes": release_notes,
-                "tag_name": extracted.version,
+                "tag_name": matching_rel.get("tag_name") if matching_rel else target_ver,
                 "prerelease": False,
                 "draft": False
             }
@@ -1183,7 +1191,8 @@ class SourceQualificationAgent:
             elif upstream_type == "raw_manifest":
                 candidate = self.manifest_provider.get_candidate(
                     package_id=package_id,
-                    manifest_url=source_url
+                    manifest_url=source_url,
+                    current_version=current_ver
                 )
             elif upstream_type == "github_release":
                 candidate = self.github_provider.get_latest_candidate(
@@ -1245,6 +1254,12 @@ class SourceQualificationAgent:
                 }
 
             upstream_version = candidate["version"]
+            # Preserve 'v' prefix if deployed blueprint version or tag uses 'v' prefix (e.g. v1.1.0 -> v1.1.1)
+            if current_ver and current_ver.startswith("v") and not upstream_version.startswith("v"):
+                upstream_version = f"v{upstream_version}"
+            elif current_ver and not current_ver.startswith("v") and upstream_version.startswith("v"):
+                upstream_version = upstream_version.lstrip("v")
+            candidate["version"] = upstream_version
             download_url = candidate["download_url"]
 
             # Check if upstream candidate is strictly newer than current version

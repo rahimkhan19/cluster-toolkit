@@ -34,7 +34,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import urllib.request
 import urllib.error
 
-from tools.infra_updater.config import get_config, UpdaterConfig
+from config import get_config, UpdaterConfig
 
 class RepoManager:
     """Manages cloning, syncing, branching, committing, pushing, and PR creation for target repos."""
@@ -207,7 +207,7 @@ class RepoManager:
         curr_ver = candidate_info.get("current_version") or candidate_info.get("previous_version")
         if not curr_ver or curr_ver == "-":
             try:
-                from tools.infra_updater.datastore import get_datastore
+                from datastore import get_datastore
                 pkg = get_datastore().get_package(package_id)
                 if pkg and pkg.get("current_version"):
                     curr_ver = pkg.get("current_version")
@@ -375,7 +375,7 @@ class RepoManager:
         If a PR was merged into the base branch, status transitions to 'MERGED' / 'UP_TO_DATE'.
         """
         if store is None:
-            from tools.infra_updater.datastore import get_datastore
+            from datastore import get_datastore
             store = get_datastore()
 
         token = self.config.get_github_token()

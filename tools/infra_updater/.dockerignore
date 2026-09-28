@@ -1,0 +1,10 @@
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.env
+target_repo/
+updater_state.json
+.git
+*.tmp
+.DS_Store

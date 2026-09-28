@@ -32,13 +32,9 @@ import yaml
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 if BASE_DIR not in sys.path:
     sys.path.insert(0, BASE_DIR)
-REPO_ROOT = os.path.abspath(os.path.join(BASE_DIR, "../.."))
-if REPO_ROOT not in sys.path:
-    sys.path.insert(0, REPO_ROOT)
-
-from tools.infra_updater.config import get_config
-from tools.infra_updater.datastore import DataStore, get_datastore
-from tools.infra_updater.repo_manager import RepoManager
+from config import get_config
+from datastore import DataStore, get_datastore
+from repo_manager import RepoManager
 
 class OrchestratorAgent:
     """
@@ -82,16 +78,17 @@ class OrchestratorAgent:
 
     def _replace_variable_in_text(
         self, text: str, var_name: str, new_val: str, signature_keywords: Optional[List[str]] = None
-    ) -> Tuple[str, bool, str]:
+    ) -> Tuple[str, bool, str, str]:
         """
         Surgically replaces a variable assignment line preserving exact indentation and quotes.
         If signature_keywords is provided, checks contextual parent hierarchy and nearby metadata.
-        Returns: (new_text, changed, old_val)
+        Returns: (new_text, changed, old_val, applied_val)
         """
         pattern = rf'^([ \t]*{re.escape(var_name)}:[ \t]*)(["\']?)([^"\r\n]+)(["\']?.*)$'
         lines = text.splitlines(keepends=True)
         changed = False
         old_val = ""
+        applied_val = new_val
 
         new_lines = []
         for i, line in enumerate(lines):
@@ -106,16 +103,50 @@ class OrchestratorAgent:
 
                 prefix, quote1, val, suffix_rest = m.groups()
                 old_val = val.strip()
-                if quote1:
-                    new_line = f"{prefix}{quote1}{new_val}{quote1}\n"
+
+                target_val = new_val
+
+                # If old_val is a URL and target_val is a version string, surgically update the version in the URL
+                if (old_val.startswith("http://") or old_val.startswith("https://")) and not (target_val.startswith("http://") or target_val.startswith("https://")):
+                    m_url = re.search(r'/(v?[0-9]+(?:\.[0-9]+)+(?:-[a-zA-Z0-9\._]+)?)/', old_val)
+                    if m_url:
+                        old_url_ver = m_url.group(1)
+                        formatted_ver = target_val
+                        if re.match(r'^[vV][0-9]', old_url_ver) and re.match(r'^[0-9]', formatted_ver):
+                            formatted_ver = f"v{formatted_ver}"
+                        elif re.match(r'^[0-9]', old_url_ver) and re.match(r'^[vV][0-9]', formatted_ver):
+                            formatted_ver = formatted_ver.lstrip("v")
+                        target_val = old_val.replace(f"/{old_url_ver}/", f"/{formatted_ver}/")
+                # If old_val is an image reference with tag, preserve tag prefix style
+                elif ":" in old_val and not (target_val.startswith("http://") or target_val.startswith("https://")) and not ("/" in target_val and ":" in target_val):
+                    m_img = re.search(r':(v?[0-9]+(?:\.[0-9]+)+(?:-[a-zA-Z0-9\._]+)?)$', old_val)
+                    if m_img:
+                        old_tag = m_img.group(1)
+                        formatted_ver = target_val
+                        if re.match(r'^[vV][0-9]', old_tag) and re.match(r'^[0-9]', formatted_ver):
+                            formatted_ver = f"v{formatted_ver}"
+                        elif re.match(r'^[0-9]', old_tag) and re.match(r'^[vV][0-9]', formatted_ver):
+                            formatted_ver = formatted_ver.lstrip("v")
+                        target_val = old_val[:m_img.start(1)] + formatted_ver
                 else:
-                    new_line = f"{prefix}{new_val}\n"
+                    # Preserve 'v' prefix if the original value in the file had a 'v' prefix (e.g. v1.1.0 -> v1.1.1)
+                    # or strip 'v' prefix if the original value did NOT have it (e.g. 1.1.0 -> 1.1.1)
+                    if re.match(r'^[vV][0-9]', old_val) and re.match(r'^[0-9]', target_val):
+                        target_val = f"v{target_val}"
+                    elif re.match(r'^[0-9]', old_val) and re.match(r'^[vV][0-9]', target_val):
+                        target_val = target_val.lstrip("v")
+
+                applied_val = target_val
+                if quote1:
+                    new_line = f"{prefix}{quote1}{target_val}{quote1}\n"
+                else:
+                    new_line = f"{prefix}{target_val}\n"
                 new_lines.append(new_line)
                 changed = True
             else:
                 new_lines.append(line)
 
-        return ("".join(new_lines), changed, old_val)
+        return ("".join(new_lines), changed, old_val, applied_val)
 
     def apply_update(self, package_id: str, candidate_id: Optional[str] = None, create_pr: bool = True) -> Dict[str, Any]:
         """
@@ -184,7 +215,7 @@ class OrchestratorAgent:
                     sig_keywords = []
 
             # Primary variable replacement
-            new_content, primary_changed, old_primary_val = self._replace_variable_in_text(
+            new_content, primary_changed, old_primary_val, actual_primary_val = self._replace_variable_in_text(
                 orig_content, var_name, primary_val, signature_keywords=sig_keywords
             )
 
@@ -197,6 +228,7 @@ class OrchestratorAgent:
                     new_content = content_after
                     primary_changed = True
                     old_primary_val = "4.34.0-145"
+                    actual_primary_val = cand_base
 
             # Inline script fallback for Miniforge
             if not primary_changed and (package_id == "miniforge" or "miniforge" in var_name.lower()):
@@ -214,6 +246,7 @@ class OrchestratorAgent:
                     new_content = content_after
                     primary_changed = True
                     old_primary_val = "24.7.1-2"
+                    actual_primary_val = cand_version
 
             # Custom URL builder for CMake local installer
             if package_id == "cmake" or "cmake" in var_name.lower():
@@ -235,6 +268,7 @@ class OrchestratorAgent:
                     new_content = content_after
                     primary_changed = True
                     old_primary_val = "1:4.6.1-1"
+                    actual_primary_val = target_ver
 
             # Coupled variables synchronization
             if isinstance(coupled_vars, str):
@@ -251,14 +285,14 @@ class OrchestratorAgent:
                 c_var_name = coupled.get("variable_name")
                 pattern = coupled.get("pattern", "{filename}")
                 c_val = pattern.format(filename=filename, version=cand_version)
-                new_content, c_changed, old_c_val = self._replace_variable_in_text(
+                new_content, c_changed, old_c_val, actual_c_val = self._replace_variable_in_text(
                     new_content, c_var_name, c_val
                 )
                 if c_changed:
                     coupled_changes.append({
                         "variable": c_var_name,
                         "old_value": old_c_val,
-                        "new_value": c_val
+                        "new_value": actual_c_val
                     })
 
             if not primary_changed and not coupled_changes:
@@ -291,7 +325,7 @@ class OrchestratorAgent:
                 "file_path": rel_path,
                 "primary_variable": var_name,
                 "old_value": old_primary_val,
-                "new_value": primary_val,
+                "new_value": actual_primary_val if primary_changed else primary_val,
                 "coupled_changes": coupled_changes
             })
 

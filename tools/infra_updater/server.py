@@ -32,18 +32,9 @@ import time
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 if BASE_DIR not in sys.path:
     sys.path.insert(0, BASE_DIR)
-REPO_ROOT = os.path.abspath(os.path.join(BASE_DIR, "../.."))
-if REPO_ROOT not in sys.path:
-    sys.path.insert(0, REPO_ROOT)
-
-try:
-    from tools.infra_updater.config import get_config
-    from tools.infra_updater.datastore import get_datastore
-    from tools.infra_updater.repo_manager import RepoManager
-except ModuleNotFoundError:
-    from config import get_config
-    from datastore import get_datastore
-    from repo_manager import RepoManager
+from config import get_config
+from datastore import get_datastore
+from repo_manager import RepoManager
 
 CONFIG = get_config()
 REPO_MANAGER = RepoManager(CONFIG)
@@ -98,12 +89,13 @@ def execute_cli_action(cmd_args, action_name):
 
     env = os.environ.copy()
     env["PYTHONUNBUFFERED"] = "1"
+    env["PYTHONPATH"] = f"{BASE_DIR}:" + env.get("PYTHONPATH", "")
     python_exec = sys.executable
 
     try:
         proc = subprocess.Popen(
             [python_exec, "-u", os.path.join(BASE_DIR, "run_updater.py")] + cmd_args,
-            cwd=REPO_ROOT,
+            cwd=BASE_DIR,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
