@@ -173,6 +173,7 @@ deployment_groups:
           version: $(vars.nccl_tcpx_version)
       kueue:
         install: true
+        version: "0.19.6"
         config_path: $(vars.kueue_configuration_path)
         config_template_vars:
           num_gpus: $(a3_highgpu_pool.static_gpu_count)
