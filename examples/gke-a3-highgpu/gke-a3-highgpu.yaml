@@ -57,7 +57,7 @@ vars:
 
   accelerator_type: nvidia-h100-80gb
   version_prefix: "1.35."
-  nccl_tcpx_version: v3.1.9
+  nccl_tcpx_version: v3.1.12
 
 deployment_groups:
 - group: primary
