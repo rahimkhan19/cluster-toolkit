@@ -193,14 +193,14 @@ deployment_groups:
           mkdir -p /opt/src
           cd /opt/src
 
-          wget https://download.open-mpi.org/release/open-mpi/v5.0/openmpi-5.0.8.tar.bz2
-          tar -xvf openmpi-5.0.8.tar.bz2
-          cd openmpi-5.0.8
+          wget https://download.open-mpi.org/release/open-mpi/v5.0/openmpi-5.0.11.tar.bz2
+          tar -xvf openmpi-5.0.11.tar.bz2
+          cd openmpi-5.0.11
           ./configure --with-cuda=/usr/local/cuda-13/targets/sbsa-linux
           make -j
           make install
           cd ../
-          rm -rf openmpi-5.0.8.tar.bz2 openmpi-5.0.8
+          rm -rf openmpi-5.0.11.tar.bz2 openmpi-5.0.11
 
       # Install NCCL-GIB network plugin as per nccl-gib specification for a4x
       - type: ansible-local
