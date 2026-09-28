@@ -338,13 +338,13 @@ deployment_groups:
 
           mkdir -p /opt/src
           cd /opt/src
-          wget https://www.mellanox.com/downloads/MFT/mft-4.34.0-145-aarch64-deb.tgz
-          tar -xvf mft-4.34.0-145-aarch64-deb.tgz
-          cd mft-4.34.0-145-aarch64-deb
+          wget https://www.mellanox.com/downloads/MFT/mft-4.37.0-154-aarch64-deb.tgz
+          tar -xvf mft-4.37.0-154-aarch64-deb.tgz
+          cd mft-4.37.0-154-aarch64-deb
           ./install.sh
           cd ..
           # remove
-          rm -rf mft-4.34.0-145-aarch64-deb
+          rm -rf mft-4.37.0-154-aarch64-deb
 
           BASE_URL=https://linux.mellanox.com/public/repo/doca
           DOCA_SUFFIX=latest/ubuntu24.04/arm64-sbsa/
