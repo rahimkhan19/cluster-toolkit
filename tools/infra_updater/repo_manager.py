@@ -450,8 +450,15 @@ class RepoManager:
                         })
                         store.update_package(pkg_id, {
                             "status": "UP_TO_DATE",
-                            "current_version": cand.get("target_version") or cand.get("version")
+                            "current_version": cand.get("target_version") or cand.get("version"),
+                            "snooze_until": None,
+                            "snoozed_version": None,
+                            "blocked_version": None
                         })
+                        # Remove superseded SNOOZED and BLOCKED candidates for this package
+                        for other_c in store.list_candidates(package_id=pkg_id):
+                            if other_c.get("status") in ("SNOOZED", "BLOCKED"):
+                                store.delete_candidate(other_c["candidate_id"])
                         changes.append({"candidate_id": cand_id, "action": "MERGED", "pr_number": pr_num})
                 else:
                     # Closed manually without merging! Move back to update available!

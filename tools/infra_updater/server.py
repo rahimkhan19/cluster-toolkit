@@ -19,6 +19,7 @@ Serves modern, minimal dashboard and provides REST API for end-to-end triggers.
 """
 
 import argparse
+import datetime
 from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
 import io
 import json
@@ -209,6 +210,8 @@ class DashboardHandler(SimpleHTTPRequestHandler):
                     "total_instances": len(instances),
                     "total_rules": len(rules),
                     "pending_updates": len([c for c in candidates if c.get("status") in ("UPDATE_FOUND", "QUALIFIED")]),
+                    "snoozed_packages": len(set([p.get("package_id") for p in packages if p.get("status") == "SNOOZED" or p.get("snoozed_version")] + [c.get("package_id") for c in candidates if c.get("status") == "SNOOZED"])),
+                    "blocked_packages": len(set([p.get("package_id") for p in packages if p.get("status") in ("BLOCKED", "BLOCKED_BY_RULE") or p.get("blocked_version")] + [c.get("package_id") for c in candidates if c.get("status") == "BLOCKED"])),
                     "ready_updates": len([c for c in candidates if c.get("status") == "READY_FOR_REVIEW"]),
                     "qualified_candidates": len([c for c in candidates if c.get("status") in ("UPDATE_FOUND", "QUALIFIED")]),
                     "applied_candidates": len([c for c in candidates if c.get("status") in ("READY_FOR_REVIEW", "APPLIED")])
@@ -268,6 +271,137 @@ class DashboardHandler(SimpleHTTPRequestHandler):
 
         cmd_args = []
         action_name = action
+
+        if action == "snooze":
+            if not pkg_id:
+                self.send_error(400, "package_id required for snooze")
+                return
+            days = int(data.get("days", 30))
+            store = get_datastore()
+            pkg = store.get_package(pkg_id)
+            if not pkg:
+                self.send_error(404, f"Package {pkg_id} not found")
+                return
+            version = data.get("version")
+            if not version:
+                cand = store.get_active_candidate(pkg_id)
+                version = cand.get("version") if cand else pkg.get("upstream_version", pkg.get("current_version"))
+
+            snooze_until = (datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(days=days)).isoformat()
+            summary = f"Snoozed version {version} for {days} days (until {snooze_until[:10]})."
+            store.update_package(pkg_id, {
+                "status": "SNOOZED",
+                "snooze_until": snooze_until,
+                "snoozed_version": version,
+                "qualification_summary": summary
+            })
+            cand = None
+            for c in store.list_candidates(package_id=pkg_id):
+                if c.get("version") == version:
+                    cand = c
+                    break
+            if not cand:
+                cand = store.get_active_candidate(pkg_id)
+            if cand:
+                store.update_candidate(cand["candidate_id"], {"status": "SNOOZED", "summary": summary, "version": version})
+            else:
+                store.save_candidate({
+                    "package_id": pkg_id,
+                    "version": version,
+                    "current_version": pkg.get("current_version"),
+                    "download_url": pkg.get("source_url"),
+                    "status": "SNOOZED",
+                    "summary": summary
+                })
+
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            self.wfile.write(json.dumps({"status": "SUCCESS", "message": summary, "package_id": pkg_id}).encode("utf-8"))
+            return
+
+        elif action == "block":
+            if not pkg_id:
+                self.send_error(400, "package_id required for block")
+                return
+            store = get_datastore()
+            pkg = store.get_package(pkg_id)
+            if not pkg:
+                self.send_error(404, f"Package {pkg_id} not found")
+                return
+            version = data.get("version")
+            if not version:
+                cand = store.get_active_candidate(pkg_id)
+                version = cand.get("version") if cand else pkg.get("upstream_version", pkg.get("current_version"))
+
+            summary = f"Blocked version {version} (manual unblock required from dashboard)."
+            store.update_package(pkg_id, {
+                "status": "BLOCKED",
+                "blocked_version": version,
+                "qualification_summary": summary
+            })
+            cand = None
+            for c in store.list_candidates(package_id=pkg_id):
+                if c.get("version") == version:
+                    cand = c
+                    break
+            if not cand:
+                cand = store.get_active_candidate(pkg_id)
+            if cand:
+                store.update_candidate(cand["candidate_id"], {"status": "BLOCKED", "summary": summary, "version": version})
+            else:
+                store.save_candidate({
+                    "package_id": pkg_id,
+                    "version": version,
+                    "current_version": pkg.get("current_version"),
+                    "download_url": pkg.get("source_url"),
+                    "status": "BLOCKED",
+                    "summary": summary
+                })
+
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            self.wfile.write(json.dumps({"status": "SUCCESS", "message": summary, "package_id": pkg_id}).encode("utf-8"))
+            return
+
+        elif action in ("unblock", "unsnooze"):
+            if not pkg_id:
+                self.send_error(400, "package_id required for unblock")
+                return
+            store = get_datastore()
+            pkg = store.get_package(pkg_id)
+            if not pkg:
+                self.send_error(404, f"Package {pkg_id} not found")
+                return
+            summary = "Unblocked manually from dashboard. Ready for qualification."
+            store.update_package(pkg_id, {
+                "status": "REGISTERED",
+                "snooze_until": None,
+                "snoozed_version": None,
+                "blocked_version": None,
+                "qualification_summary": summary
+            })
+            cands = store.list_candidates(package_id=pkg_id)
+            has_active_other = any(c.get("status") in ("UPDATE_FOUND", "READY_FOR_REVIEW", "QUALIFIED") for c in cands)
+            for c in cands:
+                if c.get("status") in ("SNOOZED", "BLOCKED"):
+                    if has_active_other:
+                        store.delete_candidate(c["candidate_id"])
+                    else:
+                        store.update_candidate(c["candidate_id"], {
+                            "status": "UPDATE_FOUND",
+                            "summary": f"Unblocked candidate ({c.get('version')})."
+                        })
+
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            self.wfile.write(json.dumps({"status": "SUCCESS", "message": summary, "package_id": pkg_id}).encode("utf-8"))
+            return
 
         if action == "sync_repo":
             cmd_args = ["--sync-repo"]

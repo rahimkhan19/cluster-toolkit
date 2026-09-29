@@ -186,6 +186,39 @@ def parse_semver(v_str: str) -> Optional[Version]:
     except Exception:
         return None
 
+def clean_version_str(v_str: str) -> str:
+    s = v_str.strip()
+    s = re.sub(r'^[vV]', '', s)
+    s = re.sub(r'^[0-9]+:', '', s)
+    s = re.sub(r'-base-ubuntu[0-9.]+', '', s)
+    return s
+
+def is_version_greater(v1: str, v2: Optional[str]) -> bool:
+    """Returns True if v1 is strictly greater than v2."""
+    if not v1:
+        return False
+    if not v2:
+        return True
+    if v1 == v2:
+        return False
+    c1 = clean_version_str(v1)
+    c2 = clean_version_str(v2)
+    if c1 == c2:
+        return False
+    s1 = parse_semver(v1)
+    s2 = parse_semver(v2)
+    if s1 and s2 and s1 != s2:
+        return s1 > s2
+    try:
+        from packaging.version import Version as PkgVersion
+        p1 = PkgVersion(re.sub(r'[^0-9.]+', '.', c1).strip('.'))
+        p2 = PkgVersion(re.sub(r'[^0-9.]+', '.', c2).strip('.'))
+        if p1 != p2:
+            return p1 > p2
+    except Exception:
+        pass
+    return c1 > c2
+
 # ==============================================================================
 # Upfront Rule Checker (Section 4.2 & Case 3 Multi-Blueprint Scoping)
 # ==============================================================================
@@ -1179,20 +1212,25 @@ class SourceQualificationAgent:
             try:
                 now_str = datetime.datetime.now(datetime.timezone.utc).isoformat()
                 if str(snooze_until) <= now_str:
-                    self.store.update_package(package_id, {"status": "REGISTERED", "snooze_until": None})
+                    self.store.update_package(package_id, {
+                        "status": "REGISTERED",
+                        "snooze_until": None,
+                        "snoozed_version": None,
+                        "qualification_summary": "Snooze expired. Resumed monitoring."
+                    })
                     current_policy_status = "REGISTERED"
             except Exception:
                 pass
 
-        # If package is explicitly snoozed, blocked, or obsolete, respect long-term policy (Section 3.1)
-        if current_policy_status in ("SNOOZED", "OBSOLETE", "BLOCKED"):
-            summary = f"Package is currently {current_policy_status}."
+        # If package is explicitly OBSOLETE, respect long-term deprecation policy
+        if current_policy_status == "OBSOLETE":
+            summary = "Package is currently marked OBSOLETE."
             return {
                 "package_id": package_id,
                 "name": pkg_name,
                 "current_version": current_ver,
                 "upstream_version": "-",
-                "status": current_policy_status,
+                "status": "OBSOLETE",
                 "summary": summary
             }
 
@@ -1258,14 +1296,15 @@ class SourceQualificationAgent:
 
             if not candidate:
                 summary = f"Upstream source has no newer release than currently deployed version ({current_ver})."
-                self._update_package_db(package_id, "-", summary, policy_status="UP_TO_DATE")
+                status_to_report = current_policy_status if current_policy_status in ("SNOOZED", "BLOCKED") else "UP_TO_DATE"
+                self._update_package_db(package_id, "-", summary, policy_status=status_to_report)
                 return {
                     "package_id": package_id,
                     "name": pkg_name,
                     "current_version": current_ver,
                     "upstream_version": "-",
                     "candidate_version": None,
-                    "status": "UP_TO_DATE",
+                    "status": status_to_report,
                     "summary": summary
                 }
 
@@ -1287,26 +1326,28 @@ class SourceQualificationAgent:
                         summary = f"Upstream version ({upstream_version}) is older than deployed blueprint ({current_ver})."
                     else:
                         summary = f"Deployed blueprint matches latest upstream release ({upstream_version})."
-                    self._update_package_db(package_id, upstream_version, summary, policy_status="UP_TO_DATE")
+                    status_to_report = current_policy_status if current_policy_status in ("SNOOZED", "BLOCKED") else "UP_TO_DATE"
+                    self._update_package_db(package_id, upstream_version, summary, policy_status=status_to_report)
                     return {
                         "package_id": package_id,
                         "name": pkg_name,
                         "current_version": current_ver,
                         "upstream_version": upstream_version,
                         "candidate_version": None,
-                        "status": "UP_TO_DATE",
+                        "status": status_to_report,
                         "summary": summary
                     }
             elif upstream_version == current_ver:
                 summary = f"Already at latest upstream version ({current_ver})."
-                self._update_package_db(package_id, upstream_version, summary, policy_status="UP_TO_DATE")
+                status_to_report = current_policy_status if current_policy_status in ("SNOOZED", "BLOCKED") else "UP_TO_DATE"
+                self._update_package_db(package_id, upstream_version, summary, policy_status=status_to_report)
                 return {
                     "package_id": package_id,
                     "name": pkg_name,
                     "current_version": current_ver,
                     "upstream_version": upstream_version,
                     "candidate_version": None,
-                    "status": "UP_TO_DATE",
+                    "status": status_to_report,
                     "summary": summary
                 }
 
@@ -1324,7 +1365,58 @@ class SourceQualificationAgent:
                     "summary": summary
                 }
 
-            # 3. Upfront Learned Rule Check (Section 4.2 & Case 3)
+            # 3. Version-Aware Snooze & Block Policy Gates
+            now_str = datetime.datetime.now(datetime.timezone.utc).isoformat()
+            snoozed_ver = pkg.get("snoozed_version")
+            if snoozed_ver or current_policy_status == "SNOOZED":
+                # Check if snooze expired
+                if snooze_until and str(snooze_until) <= now_str:
+                    self.store.update_package(package_id, {
+                        "status": "REGISTERED",
+                        "snooze_until": None,
+                        "snoozed_version": None,
+                        "qualification_summary": "Snooze period expired. Monitoring resumed."
+                    })
+                    current_policy_status = "REGISTERED"
+                    snoozed_ver = None
+                elif snoozed_ver and is_version_greater(upstream_version, snoozed_ver):
+                    # Newer version released than the snoozed version!
+                    # The snoozed version remains as it is, and a new row/candidate will be created for upstream_version.
+                    pass
+                else:
+                    snooze_date_str = str(snooze_until)[:10] if snooze_until else "active period"
+                    summary = f"Package is SNOOZED for version {snoozed_ver or upstream_version} until {snooze_date_str}."
+                    self._update_package_db(package_id, upstream_version, summary, policy_status="SNOOZED")
+                    return {
+                        "package_id": package_id,
+                        "name": pkg_name,
+                        "current_version": current_ver,
+                        "upstream_version": upstream_version,
+                        "candidate_version": None,
+                        "status": "SNOOZED",
+                        "summary": summary
+                    }
+
+            blocked_ver = pkg.get("blocked_version")
+            if blocked_ver or current_policy_status == "BLOCKED":
+                if blocked_ver and is_version_greater(upstream_version, blocked_ver):
+                    # Newer version released than the blocked version!
+                    # The blocked version remains as it is, and a new row/candidate will be created for upstream_version.
+                    pass
+                else:
+                    summary = f"Package is BLOCKED for version {blocked_ver or upstream_version} (manual unblock required from dashboard)."
+                    self._update_package_db(package_id, upstream_version, summary, policy_status="BLOCKED")
+                    return {
+                        "package_id": package_id,
+                        "name": pkg_name,
+                        "current_version": current_ver,
+                        "upstream_version": upstream_version,
+                        "candidate_version": None,
+                        "status": "BLOCKED",
+                        "summary": summary
+                    }
+
+            # 4. Upfront Learned Rule Check (Section 4.2 & Case 3)
             is_blocked, rule = self.rule_checker.check_version(package_id, upstream_version)
             if is_blocked:
                 summary = f"Version {upstream_version} blocked by rule '{rule['rule_id']}': {rule['reason']}"
@@ -1359,7 +1451,7 @@ class SourceQualificationAgent:
             candidate_id = f"cand-{str(uuid.uuid4())[:8]}"
             rel_notes = candidate.get("release_notes") or candidate.get("reasoning") or ""
             cand_summary = self.summarize_release_notes(package_id, upstream_version, rel_notes)
-            self.store.delete_candidates(package_id, exclude_status="MERGED")
+            self.store.delete_candidates(package_id, exclude_status=("MERGED", "SNOOZED", "BLOCKED"))
             self.store.save_candidate({
                 "candidate_id": candidate_id,
                 "package_id": package_id,

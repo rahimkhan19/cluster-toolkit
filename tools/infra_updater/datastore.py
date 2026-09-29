@@ -102,6 +102,9 @@ class BaseDataStore(abc.ABC):
     def get_active_candidate(self, package_id: str) -> Optional[Dict[str, Any]]:
         cands = self.list_candidates(package_id=package_id)
         for c in cands:
+            if c.get("status") in ("UPDATE_FOUND", "READY_FOR_REVIEW", "QUALIFIED", "PR_CREATED"):
+                return c
+        for c in cands:
             if c.get("status") not in ("MERGED", "CANCELLED", "SUPERSEDED"):
                 return c
         return None
@@ -115,7 +118,11 @@ class BaseDataStore(abc.ABC):
         pass
 
     @abc.abstractmethod
-    def delete_candidates(self, package_id: Optional[str] = None, exclude_status: Optional[str] = "MERGED") -> int:
+    def delete_candidate(self, candidate_id: str) -> bool:
+        pass
+
+    @abc.abstractmethod
+    def delete_candidates(self, package_id: Optional[str] = None, exclude_status: Optional[Any] = "MERGED") -> int:
         pass
 
     # Learned Rules
@@ -148,12 +155,14 @@ class BaseDataStore(abc.ABC):
         rules = self.list_rules()
         audit_runs = self.list_audit_runs(limit=20)
 
-        # Index active candidate updates by package_id
+        # Index active candidate updates by package_id (prioritizing actionable updates)
         active_cands_by_pkg = {}
         for cand in candidates_list:
             pid = cand.get("package_id")
-            if cand.get("status") not in ("MERGED", "CANCELLED", "SUPERSEDED"):
-                active_cands_by_pkg[pid] = cand
+            c_status = cand.get("status")
+            if c_status not in ("MERGED", "CANCELLED", "SUPERSEDED"):
+                if pid not in active_cands_by_pkg or c_status in ("UPDATE_FOUND", "READY_FOR_REVIEW", "QUALIFIED"):
+                    active_cands_by_pkg[pid] = cand
 
         enriched_packages = []
         all_blueprints = []
@@ -298,14 +307,27 @@ class FirestoreDataStore(BaseDataStore):
         data.update(updates)
         return data
 
-    def delete_candidates(self, package_id: Optional[str] = None, exclude_status: Optional[str] = "MERGED") -> int:
+    def delete_candidate(self, candidate_id: str) -> bool:
+        doc_ref = self.db.collection("candidate_updates").document(candidate_id)
+        if doc_ref.get().exists:
+            doc_ref.delete()
+            return True
+        return False
+
+    def delete_candidates(self, package_id: Optional[str] = None, exclude_status: Optional[Any] = "MERGED") -> int:
         coll = self.db.collection("candidate_updates")
         deleted = 0
         batch = self.db.batch()
+        exclude_set = set()
+        if exclude_status:
+            if isinstance(exclude_status, (list, tuple, set)):
+                exclude_set = set(exclude_status)
+            else:
+                exclude_set = {exclude_status}
         for doc in coll.stream():
             data = doc.to_dict()
             if package_id is None or data.get("package_id") == package_id:
-                if exclude_status and data.get("status") == exclude_status:
+                if exclude_set and data.get("status") in exclude_set:
                     continue
                 batch.delete(doc.reference)
                 deleted += 1
@@ -518,13 +540,29 @@ class JsonDataStore(BaseDataStore):
             self._write_data(data)
             return copy.deepcopy(cand)
 
-    def delete_candidates(self, package_id: Optional[str] = None, exclude_status: Optional[str] = "MERGED") -> int:
+    def delete_candidate(self, candidate_id: str) -> bool:
         with self._lock:
             data = self._read_data()
             cands = data.setdefault("candidate_updates", {})
+            if candidate_id in cands:
+                del cands[candidate_id]
+                self._write_data(data)
+                return True
+            return False
+
+    def delete_candidates(self, package_id: Optional[str] = None, exclude_status: Optional[Any] = "MERGED") -> int:
+        with self._lock:
+            data = self._read_data()
+            cands = data.setdefault("candidate_updates", {})
+            exclude_set = set()
+            if exclude_status:
+                if isinstance(exclude_status, (list, tuple, set)):
+                    exclude_set = set(exclude_status)
+                else:
+                    exclude_set = {exclude_status}
             to_delete = [
                 cid for cid, c in cands.items()
-                if (package_id is None or c.get("package_id") == package_id) and (exclude_status is None or c.get("status") != exclude_status)
+                if (package_id is None or c.get("package_id") == package_id) and (not exclude_set or c.get("status") not in exclude_set)
             ]
             for cid in to_delete:
                 del cands[cid]

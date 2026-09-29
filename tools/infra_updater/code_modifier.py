@@ -174,6 +174,31 @@ class OrchestratorAgent:
         cand_url = cand.get("download_url", "")
         filename = os.path.basename(cand_url)
 
+        # Check if package is snoozed or blocked
+        pkg = self.store.get_package(package_id)
+        if pkg:
+            pkg_status = pkg.get("status")
+            if pkg_status == "SNOOZED":
+                snooze_until = pkg.get("snooze_until")
+                snoozed_ver = pkg.get("snoozed_version")
+                now_str = datetime.datetime.now(datetime.timezone.utc).isoformat()
+                is_expired = snooze_until and str(snooze_until) <= now_str
+                from source_agent import is_version_greater
+                if not is_expired and not is_version_greater(cand_version, snoozed_ver):
+                    snooze_date = str(snooze_until)[:10] if snooze_until else "active period"
+                    return {
+                        "status": "SNOOZED",
+                        "message": f"Package '{package_id}' is SNOOZED for version {snoozed_ver} until {snooze_date}. PR creation skipped."
+                    }
+            elif pkg_status == "BLOCKED":
+                blocked_ver = pkg.get("blocked_version")
+                from source_agent import is_version_greater
+                if not is_version_greater(cand_version, blocked_ver):
+                    return {
+                        "status": "BLOCKED",
+                        "message": f"Package '{package_id}' is BLOCKED for version {blocked_ver}. PR creation skipped (manual unblock required)."
+                    }
+
         # 2. Prepare atomic branch off latest develop in target workspace
         branch_name = self.repo_manager.prepare_update_branch(package_id, cand_version)
 

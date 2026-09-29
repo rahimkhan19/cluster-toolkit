@@ -262,7 +262,7 @@ def run_end_to_end(model: str = None):
     print(f"{BOLD}[STAGE 0/3] Synchronizing Target Repository ({CONFIG.repository.url})...{RESET}")
     run_sync_repo()
     print(f"{BOLD}[STAGE 0/3] Initializing Database & Verifying Registry...{RESET}")
-    init_database()
+    init_database(preserve_candidates=True)
 
     # Stage 1: Source Qualification Across Canonical Packages
     print(f"\n{BOLD}[STAGE 1/3] Running Source Qualification Agent Across Monitored Packages ({model})...{RESET}")
@@ -290,6 +290,111 @@ def run_end_to_end(model: str = None):
     print(f"[TIP] Run '{BOLD}python3 tools/infra_updater/run_updater.py --reset{RESET}' to restore files and reset state store.\n")
 
 
+def run_snooze(package_id: str, days: int = 30, version: str = None):
+    import datetime
+    store = get_datastore()
+    pkg = store.get_package(package_id)
+    if not pkg:
+        print(f"{RED}[ERROR] Package '{package_id}' not found in datastore.{RESET}")
+        return
+    if not version:
+        cand = store.get_active_candidate(package_id)
+        version = cand.get("version") if cand else pkg.get("upstream_version", pkg.get("current_version"))
+    snooze_until = (datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(days=days)).isoformat()
+    summary = f"Snoozed version {version} for {days} days (until {snooze_until[:10]})."
+    store.update_package(package_id, {
+        "status": "SNOOZED",
+        "snooze_until": snooze_until,
+        "snoozed_version": version,
+        "qualification_summary": summary
+    })
+    cand = None
+    for c in store.list_candidates(package_id=package_id):
+        if c.get("version") == version:
+            cand = c
+            break
+    if not cand:
+        cand = store.get_active_candidate(package_id)
+    if cand:
+        store.update_candidate(cand["candidate_id"], {"status": "SNOOZED", "summary": summary, "version": version})
+    else:
+        store.save_candidate({
+            "package_id": package_id,
+            "version": version,
+            "current_version": pkg.get("current_version"),
+            "download_url": pkg.get("source_url"),
+            "status": "SNOOZED",
+            "summary": summary
+        })
+    print(f"{YELLOW}[SNOOZE] Package '{package_id}' snoozed for version {version} until {snooze_until[:10]}.{RESET}")
+    print(f"[INFO] Future updates will skip PR generation for {version} during this period.")
+
+
+def run_block(package_id: str, version: str = None):
+    store = get_datastore()
+    pkg = store.get_package(package_id)
+    if not pkg:
+        print(f"{RED}[ERROR] Package '{package_id}' not found in datastore.{RESET}")
+        return
+    if not version:
+        cand = store.get_active_candidate(package_id)
+        version = cand.get("version") if cand else pkg.get("upstream_version", pkg.get("current_version"))
+    summary = f"Blocked version {version} (manual unblock required from dashboard)."
+    store.update_package(package_id, {
+        "status": "BLOCKED",
+        "blocked_version": version,
+        "qualification_summary": summary
+    })
+    cand = None
+    for c in store.list_candidates(package_id=package_id):
+        if c.get("version") == version:
+            cand = c
+            break
+    if not cand:
+        cand = store.get_active_candidate(package_id)
+    if cand:
+        store.update_candidate(cand["candidate_id"], {"status": "BLOCKED", "summary": summary, "version": version})
+    else:
+        store.save_candidate({
+            "package_id": package_id,
+            "version": version,
+            "current_version": pkg.get("current_version"),
+            "download_url": pkg.get("source_url"),
+            "status": "BLOCKED",
+            "summary": summary
+        })
+    print(f"{RED}[BLOCKED] Package '{package_id}' blocked for version {version}.{RESET}")
+    print(f"[INFO] Future updates will skip PR generation for {version} until manually unblocked.")
+
+
+def run_unblock(package_id: str):
+    store = get_datastore()
+    pkg = store.get_package(package_id)
+    if not pkg:
+        print(f"{RED}[ERROR] Package '{package_id}' not found in datastore.{RESET}")
+        return
+    summary = "Unblocked manually. Ready for qualification."
+    store.update_package(package_id, {
+        "status": "REGISTERED",
+        "snooze_until": None,
+        "snoozed_version": None,
+        "blocked_version": None,
+        "qualification_summary": summary
+    })
+    cands = store.list_candidates(package_id=package_id)
+    has_active_other = any(c.get("status") in ("UPDATE_FOUND", "READY_FOR_REVIEW", "QUALIFIED") for c in cands)
+    for c in cands:
+        if c.get("status") in ("SNOOZED", "BLOCKED"):
+            if has_active_other:
+                store.delete_candidate(c["candidate_id"])
+            else:
+                store.update_candidate(c["candidate_id"], {
+                    "status": "UPDATE_FOUND",
+                    "summary": f"Unblocked candidate ({c.get('version')})."
+                })
+    print(f"{GREEN}[UNBLOCKED] Package '{package_id}' is now unblocked and ready for qualification.{RESET}")
+
+
 def run_reset():
     print(f"\n{BOLD}{YELLOW}[RESET] Reverting blueprint files and resetting state store...{RESET}")
     agent = OrchestratorAgent()
@@ -310,6 +415,9 @@ Examples:
   python3 run_updater.py --sync-repo           # Fetch latest target repo develop branch
   python3 run_updater.py --check-all           # Run qualification (upstream discovery + rules + liveness)
   python3 run_updater.py --apply <package_id>  # Apply update, push branch & create GitHub PR
+  python3 run_updater.py --snooze <pkg>        # Snooze updates for 30 days
+  python3 run_updater.py --block <pkg>         # Block updates until manually unblocked
+  python3 run_updater.py --unblock <pkg>       # Unblock package
   python3 run_updater.py --rules               # Display active learned policy rules
   python3 run_updater.py --show-config         # Display active configuration & auth status
   python3 run_updater.py --show-tables         # Preview all datastore entities
@@ -323,6 +431,11 @@ Examples:
     parser.add_argument("-c", "--check-all", action="store_true", help="Run Source Qualification Agent across all packages")
     parser.add_argument("-a", "--apply", metavar="PACKAGE_ID", type=str, help="Apply qualified update, push branch & create PR for PACKAGE_ID")
     parser.add_argument("--no-pr", action="store_true", help="Skip GitHub PR creation during apply")
+    parser.add_argument("--snooze", metavar="PACKAGE_ID", type=str, help="Snooze updates for PACKAGE_ID")
+    parser.add_argument("--days", type=int, default=30, help="Number of days to snooze (default: 30)")
+    parser.add_argument("--version", type=str, default=None, help="Version to snooze or block (default: latest candidate)")
+    parser.add_argument("--block", metavar="PACKAGE_ID", type=str, help="Block updates for PACKAGE_ID until manually unblocked")
+    parser.add_argument("--unblock", metavar="PACKAGE_ID", type=str, help="Unblock/unsnooze PACKAGE_ID")
     parser.add_argument("-t", "--rules", "--test-rule-blocking", dest="rules", action="store_true", help="Display active learned policy rules")
     parser.add_argument("--show-config", action="store_true", help="Display active configuration values")
     parser.add_argument("-s", "--show-tables", action="store_true", help="Display previews of all datastore entities")
@@ -340,6 +453,12 @@ Examples:
         run_sync_repo()
     if args.sync_prs:
         run_sync_prs()
+    if args.snooze:
+        run_snooze(args.snooze, days=args.days, version=args.version)
+    if args.block:
+        run_block(args.block, version=args.version)
+    if args.unblock:
+        run_unblock(args.unblock)
     if args.end_to_end:
         run_end_to_end(model=args.model)
         return

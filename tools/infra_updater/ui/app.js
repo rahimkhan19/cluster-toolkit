@@ -172,7 +172,15 @@ function renderDiff(rawDiff) {
 
 function renderCandidates(candidates, packages) {
   const container = document.getElementById('candidates-container');
-  if (!candidates || candidates.length === 0) {
+  const pkgMap = {};
+  (packages || latestPackages || []).forEach(p => { pkgMap[p.package_id] = p; });
+
+  const activeCandidates = (candidates || []).filter(c => {
+    if (c.status === 'MERGED' || c.status === 'CANCELLED' || c.status === 'SUPERSEDED') return false;
+    return true;
+  });
+
+  if (!activeCandidates || activeCandidates.length === 0) {
     container.innerHTML = `
       <div class="empty-state">
         <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
@@ -183,14 +191,18 @@ function renderCandidates(candidates, packages) {
     return;
   }
 
-  const pkgMap = {};
-  (packages || latestPackages || []).forEach(p => { pkgMap[p.package_id] = p; });
-
-  container.innerHTML = candidates.map(c => {
+  container.innerHTML = activeCandidates.map(c => {
     const isReady = c.status === 'READY_FOR_REVIEW' || c.status === 'APPLIED';
-    const statusBadge = isReady 
-      ? '<span class="badge badge-green">READY_FOR_REVIEW</span>' 
-      : '<span class="badge badge-blue">UPDATE_FOUND</span>';
+    const isSnoozed = c.status === 'SNOOZED';
+    const isBlocked = c.status === 'BLOCKED';
+    let statusBadge = '<span class="badge badge-blue">UPDATE_FOUND</span>';
+    if (isReady) {
+      statusBadge = '<span class="badge badge-green">READY_FOR_REVIEW</span>';
+    } else if (isBlocked) {
+      statusBadge = '<span class="badge badge-red">BLOCKED</span>';
+    } else if (isSnoozed) {
+      statusBadge = '<span class="badge badge-amber">SNOOZED</span>';
+    }
 
     const pkg = pkgMap[c.package_id] || {};
     const currVer = pkg.current_version || '-';
@@ -204,6 +216,36 @@ function renderCandidates(candidates, packages) {
         </button>`
       : '';
 
+    let actionButtonsHtml = '';
+    if (isSnoozed || isBlocked) {
+      actionButtonsHtml = `
+        <button class="btn btn-secondary" style="color: #22c55e; border-color: rgba(34, 197, 94, 0.4); display: inline-flex; align-items: center; gap: 6px;" onclick="triggerUnblock('${escapeHtml(c.package_id)}')" title="Unblock / Resume updates">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
+          <span>Unblock</span>
+        </button>
+      `;
+    } else {
+      actionButtonsHtml = `
+        ${c.pr_url ? `
+          <a href="${escapeHtml(c.pr_url)}" target="_blank" class="btn btn-secondary" style="color: #22c55e; border-color: rgba(34, 197, 94, 0.4); text-decoration: none; display: inline-flex; align-items: center; gap: 6px;" title="View Pull Request on GitHub">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="18" cy="18" r="3"/><circle cx="6" cy="6" r="3"/><path d="M13 6h3a2 2 0 0 1 2 2v7"/><line x1="6" y1="9" x2="6" y2="21"/></svg>
+            <span>View PR #${escapeHtml(String(c.pr_url).split('/').pop())}</span>
+          </a>
+        ` : ''}
+        <button class="btn btn-secondary" onclick="openSnoozeModal('${escapeHtml(c.package_id)}', '${escapeHtml(c.version)}')" title="Snooze updates for this version (default: 30 days)">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+          <span>Snooze</span>
+        </button>
+        <button class="btn btn-secondary" style="color: var(--accent-red); border-color: rgba(239, 68, 68, 0.35);" onclick="confirmBlockPackage('${escapeHtml(c.package_id)}', '${escapeHtml(c.version)}')" title="Block updates for this version until manually unblocked">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="4.93" y1="4.93" x2="19.07" y2="19.07"/></svg>
+          <span>Block</span>
+        </button>
+        <button class="btn ${isReady ? 'btn-secondary' : 'btn-primary'}" onclick="triggerAction('apply', '${escapeHtml(c.package_id)}')" ${isReady ? 'disabled' : ''}>
+          ${isReady ? 'Applied &bull; Ready for Review' : 'Review &amp; Apply Update'}
+        </button>
+      `;
+    }
+
     return `
       <div class="candidate-card">
         <div class="candidate-header">
@@ -214,15 +256,7 @@ function renderCandidates(candidates, packages) {
             ${blueprintPillHtml}
           </div>
           <div class="candidate-action-group">
-            ${c.pr_url ? `
-              <a href="${escapeHtml(c.pr_url)}" target="_blank" class="btn btn-secondary" style="color: #22c55e; border-color: rgba(34, 197, 94, 0.4); text-decoration: none; display: inline-flex; align-items: center; gap: 6px;" title="View Pull Request on GitHub">
-                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="18" cy="18" r="3"/><circle cx="6" cy="6" r="3"/><path d="M13 6h3a2 2 0 0 1 2 2v7"/><line x1="6" y1="9" x2="6" y2="21"/></svg>
-                <span>View PR #${escapeHtml(String(c.pr_url).split('/').pop())}</span>
-              </a>
-            ` : ''}
-            <button class="btn ${isReady ? 'btn-secondary' : 'btn-primary'}" onclick="triggerAction('apply', '${escapeHtml(c.package_id)}')" ${isReady ? 'disabled' : ''}>
-              ${isReady ? 'Applied &bull; Ready for Review' : 'Review &amp; Apply Update'}
-            </button>
+            ${actionButtonsHtml}
           </div>
         </div>
 
@@ -264,97 +298,170 @@ function renderCandidates(candidates, packages) {
   }).join('');
 }
 
+function renderPackageTableRow(p, { effectiveStatus, upstreamVersion, summary, candidate, isSnoozedOrBlockedRow }) {
+  let badgeClass = 'badge-blue';
+  let statusLabel = effectiveStatus;
+  if (effectiveStatus === 'UPDATE_FOUND') {
+    badgeClass = 'badge-blue';
+    statusLabel = 'UPDATE_FOUND';
+  } else if (effectiveStatus === 'READY_FOR_REVIEW') {
+    badgeClass = 'badge-green';
+    statusLabel = 'READY_FOR_REVIEW';
+  } else if (effectiveStatus === 'TESTING') {
+    badgeClass = 'badge-amber';
+    statusLabel = 'TESTING';
+  } else if (effectiveStatus === 'UP_TO_DATE') {
+    badgeClass = 'badge-green';
+    statusLabel = 'UP-TO-DATE';
+  } else if (effectiveStatus === 'BLOCKED' || effectiveStatus === 'BLOCKED_BY_RULE') {
+    badgeClass = 'badge-red';
+    statusLabel = 'BLOCKED';
+  } else if (effectiveStatus === 'ERROR') {
+    badgeClass = 'badge-red';
+    statusLabel = 'ERROR';
+  } else if (effectiveStatus === 'SNOOZED') {
+    badgeClass = 'badge-amber';
+    statusLabel = p.snooze_until ? `SNOOZED (${p.snooze_until.substring(5, 10)})` : 'SNOOZED';
+  } else if (effectiveStatus === 'OBSOLETE') {
+    badgeClass = 'badge-amber';
+    statusLabel = 'OBSOLETE';
+  } else {
+    badgeClass = 'badge-blue';
+    statusLabel = 'REGISTERED';
+  }
+
+  const upVerHtml = (upstreamVersion && upstreamVersion !== '-')
+    ? `<span class="code-pill">${escapeHtml(upstreamVersion)}</span>`
+    : `<span style="color: var(--text-muted)">-</span>`;
+
+  const instances = (latestInstances || []).filter(inst => inst.package_id === p.package_id);
+  const instCount = instances.length;
+  const blueprintBtnHtml = instCount > 0
+    ? `<button class="btn-blueprint-pill" onclick="openBlueprintModal('${escapeHtml(p.package_id)}')" title="View ${instCount} associated blueprint${instCount === 1 ? '' : 's'}">
+         <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+         <span>${instCount} blueprint${instCount === 1 ? '' : 's'}</span>
+       </button>`
+    : `<span style="color: var(--text-muted); font-size: 11px;">None</span>`;
+
+  const rawSummary = summary || p.qualification_summary || 'Baseline registered.';
+  const isError = effectiveStatus === 'ERROR' || rawSummary.toLowerCase().includes('failed') || rawSummary.toLowerCase().includes('error:');
+  let displaySummary = rawSummary;
+  if (displaySummary.length > 95) {
+    displaySummary = displaySummary.substring(0, 92) + '...';
+  }
+
+  const summaryTdHtml = isError
+    ? `<td style="font-size: 12px; line-height: 1.4; max-width: 340px;" title="${escapeHtml(rawSummary)}">
+         <span class="badge badge-red" style="font-size: 9px; padding: 1px 5px; margin-right: 4px; vertical-align: middle;">ERROR</span>
+         <span style="color: var(--accent-red); vertical-align: middle;">${escapeHtml(displaySummary)}</span>
+       </td>`
+    : `<td style="font-size: 12px; color: var(--text-secondary); line-height: 1.4; max-width: 340px;" title="${escapeHtml(rawSummary)}">
+         ${escapeHtml(displaySummary)}
+       </td>`;
+
+  const targetVer = (upstreamVersion && upstreamVersion !== '-') ? upstreamVersion : p.current_version;
+  const actionsTdHtml = isSnoozedOrBlockedRow
+    ? `<td>
+         <button class="btn btn-secondary" style="padding: 4px 10px; font-size: 11px; color: #22c55e; border-color: rgba(34, 197, 94, 0.4); display: inline-flex; align-items: center; gap: 4px;" onclick="triggerUnblock('${escapeHtml(p.package_id)}')" title="Unblock / Resume updates">
+           <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
+           <span>Unblock</span>
+         </button>
+       </td>`
+    : `<td>
+         <div style="display: flex; align-items: center; gap: 4px;">
+           ${candidate && candidate.pr_url ? `
+             <a href="${escapeHtml(candidate.pr_url)}" target="_blank" class="btn btn-secondary" style="padding: 3px 7px; font-size: 11px; color: #22c55e; border-color: rgba(34, 197, 94, 0.4); text-decoration: none; display: inline-flex; align-items: center; gap: 3px;" title="View PR">
+               <span>PR #${escapeHtml(String(candidate.pr_url).split('/').pop())}</span>
+             </a>
+           ` : ''}
+           <button class="btn btn-secondary" style="padding: 4px 8px; font-size: 11px;" onclick="openSnoozeModal('${escapeHtml(p.package_id)}', '${escapeHtml(targetVer)}')" title="Snooze updates">
+             <span>Snooze</span>
+           </button>
+           <button class="btn btn-secondary" style="padding: 4px 8px; font-size: 11px; color: var(--accent-red); border-color: rgba(239, 68, 68, 0.3);" onclick="confirmBlockPackage('${escapeHtml(p.package_id)}', '${escapeHtml(targetVer)}')" title="Block updates">
+             <span>Block</span>
+           </button>
+         </div>
+       </td>`;
+
+  return `
+    <tr>
+      <td><span class="code-pill">${escapeHtml(p.package_id)}</span></td>
+      <td><strong>${escapeHtml(p.name)}</strong></td>
+      <td><span class="code-pill" style="color: var(--accent-green-light)">${escapeHtml(p.current_version)}</span></td>
+      <td>${upVerHtml}</td>
+      <td><span class="code-pill" style="color: var(--accent-amber)">${escapeHtml(p.upstream_type || 'github_release')}</span></td>
+      <td><span class="badge ${badgeClass}">${escapeHtml(statusLabel)}</span></td>
+      <td>${blueprintBtnHtml}</td>
+      ${summaryTdHtml}
+      <td><a href="${escapeHtml(p.source_url)}" target="_blank" style="color: var(--accent-blue); text-decoration: none; font-size: 12px; word-break: break-all;">${escapeHtml(p.source_url)}</a></td>
+      ${actionsTdHtml}
+    </tr>
+  `;
+}
+
 function renderPackages(packages, candidates) {
   const tbody = document.getElementById('packages-table-body');
   if (!tbody) return;
   const list = packages || latestPackages || [];
   if (list.length === 0) {
-    tbody.innerHTML = '<tr><td colspan="9" style="color: var(--text-muted); text-align: center; padding: 24px;">No packages registered in datastore.</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="10" style="color: var(--text-muted); text-align: center; padding: 24px;">No packages registered in datastore.</td></tr>';
     return;
   }
   const candList = candidates || latestCandidates || [];
-  tbody.innerHTML = list.map(p => {
-    // Determine single effective status for the package
-    const activeCand = candList.find(c => c.package_id === p.package_id && ['UPDATE_FOUND', 'TESTING', 'READY_FOR_REVIEW'].includes(c.status));
-    let effectiveStatus = p.status || 'REGISTERED';
-    if (activeCand) {
-      effectiveStatus = activeCand.status;
-    }
 
-    let badgeClass = 'badge-blue';
-    let statusLabel = effectiveStatus;
-    if (effectiveStatus === 'UPDATE_FOUND') {
-      badgeClass = 'badge-blue';
-      statusLabel = 'UPDATE_FOUND';
-    } else if (effectiveStatus === 'READY_FOR_REVIEW') {
-      badgeClass = 'badge-green';
-      statusLabel = 'READY_FOR_REVIEW';
-    } else if (effectiveStatus === 'TESTING') {
-      badgeClass = 'badge-amber';
-      statusLabel = 'TESTING';
-    } else if (effectiveStatus === 'UP_TO_DATE') {
-      badgeClass = 'badge-green';
-      statusLabel = 'UP-TO-DATE';
-    } else if (effectiveStatus === 'BLOCKED' || effectiveStatus === 'BLOCKED_BY_RULE') {
-      badgeClass = 'badge-red';
-      statusLabel = 'BLOCKED';
-    } else if (effectiveStatus === 'ERROR') {
-      badgeClass = 'badge-red';
-      statusLabel = 'ERROR';
-    } else if (effectiveStatus === 'SNOOZED') {
-      badgeClass = 'badge-amber';
-      statusLabel = 'SNOOZED';
-    } else if (effectiveStatus === 'OBSOLETE') {
-      badgeClass = 'badge-amber';
-      statusLabel = 'OBSOLETE';
+  const rows = [];
+  list.forEach(p => {
+    const pkgCands = candList.filter(c => c.package_id === p.package_id);
+    const snoozedOrBlockedCand = pkgCands.find(c => c.status === 'SNOOZED' || c.status === 'BLOCKED');
+    const activeCand = pkgCands.find(c => ['UPDATE_FOUND', 'READY_FOR_REVIEW', 'TESTING', 'QUALIFIED'].includes(c.status));
+
+    const isSnoozedOrBlocked = (p.status === 'SNOOZED' || p.status === 'BLOCKED' || !!snoozedOrBlockedCand || (p.snoozed_version && (!p.snooze_until || new Date(p.snooze_until) > new Date())) || !!p.blocked_version);
+
+    if (isSnoozedOrBlocked && activeCand) {
+      // 1. Render the Snoozed/Blocked row (preserves the snoozed/blocked version display)
+      const isBlocked = !!p.blocked_version || (snoozedOrBlockedCand && snoozedOrBlockedCand.status === 'BLOCKED') || p.status === 'BLOCKED';
+      const sbStatus = isBlocked ? 'BLOCKED' : 'SNOOZED';
+      const sbVersion = p.blocked_version || p.snoozed_version || (snoozedOrBlockedCand ? snoozedOrBlockedCand.version : p.upstream_version);
+      const sbSummary = snoozedOrBlockedCand?.summary || (isBlocked 
+        ? `Package is BLOCKED for version ${sbVersion} (manual unblock required from dashboard).` 
+        : `Package is SNOOZED for version ${sbVersion} until ${p.snooze_until ? p.snooze_until.substring(0, 10) : 'active period'}.`);
+
+      rows.push(renderPackageTableRow(p, {
+        effectiveStatus: sbStatus,
+        upstreamVersion: sbVersion,
+        summary: sbSummary,
+        candidate: snoozedOrBlockedCand,
+        isSnoozedOrBlockedRow: true
+      }));
+
+      // 2. Render the New Upstream Candidate row
+      rows.push(renderPackageTableRow(p, {
+        effectiveStatus: activeCand.status,
+        upstreamVersion: activeCand.version || p.upstream_version,
+        summary: activeCand.summary || p.qualification_summary,
+        candidate: activeCand,
+        isSnoozedOrBlockedRow: false
+      }));
     } else {
-      badgeClass = 'badge-blue';
-      statusLabel = 'REGISTERED';
+      let effectiveStatus = p.status || 'REGISTERED';
+      if (p.status === 'SNOOZED' || p.status === 'BLOCKED') {
+        effectiveStatus = p.status;
+      } else if (activeCand) {
+        effectiveStatus = activeCand.status;
+      } else if (snoozedOrBlockedCand) {
+        effectiveStatus = snoozedOrBlockedCand.status;
+      }
+      rows.push(renderPackageTableRow(p, {
+        effectiveStatus: effectiveStatus,
+        upstreamVersion: p.upstream_version,
+        summary: p.qualification_summary,
+        candidate: activeCand || snoozedOrBlockedCand,
+        isSnoozedOrBlockedRow: effectiveStatus === 'SNOOZED' || effectiveStatus === 'BLOCKED'
+      }));
     }
+  });
 
-    const upVerHtml = (p.upstream_version && p.upstream_version !== '-')
-      ? `<span class="code-pill">${escapeHtml(p.upstream_version)}</span>`
-      : `<span style="color: var(--text-muted)">-</span>`;
-
-    const instances = (latestInstances || []).filter(inst => inst.package_id === p.package_id);
-    const instCount = instances.length;
-    const blueprintBtnHtml = instCount > 0
-      ? `<button class="btn-blueprint-pill" onclick="openBlueprintModal('${escapeHtml(p.package_id)}')" title="View ${instCount} associated blueprint${instCount === 1 ? '' : 's'}">
-           <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
-           <span>${instCount} blueprint${instCount === 1 ? '' : 's'}</span>
-         </button>`
-      : `<span style="color: var(--text-muted); font-size: 11px;">None</span>`;
-
-    const rawSummary = p.qualification_summary || 'Baseline registered.';
-    const isError = effectiveStatus === 'ERROR' || rawSummary.toLowerCase().includes('failed') || rawSummary.toLowerCase().includes('error:');
-    let displaySummary = rawSummary;
-    if (displaySummary.length > 95) {
-      displaySummary = displaySummary.substring(0, 92) + '...';
-    }
-
-    const summaryTdHtml = isError
-      ? `<td style="font-size: 12px; line-height: 1.4; max-width: 340px;" title="${escapeHtml(rawSummary)}">
-           <span class="badge badge-red" style="font-size: 9px; padding: 1px 5px; margin-right: 4px; vertical-align: middle;">ERROR</span>
-           <span style="color: var(--accent-red); vertical-align: middle;">${escapeHtml(displaySummary)}</span>
-         </td>`
-      : `<td style="font-size: 12px; color: var(--text-secondary); line-height: 1.4; max-width: 340px;" title="${escapeHtml(rawSummary)}">
-           ${escapeHtml(displaySummary)}
-         </td>`;
-
-    return `
-      <tr>
-        <td><span class="code-pill">${escapeHtml(p.package_id)}</span></td>
-        <td><strong>${escapeHtml(p.name)}</strong></td>
-        <td><span class="code-pill" style="color: var(--accent-green-light)">${escapeHtml(p.current_version)}</span></td>
-        <td>${upVerHtml}</td>
-        <td><span class="code-pill" style="color: var(--accent-amber)">${escapeHtml(p.upstream_type || 'github_release')}</span></td>
-        <td><span class="badge ${badgeClass}">${escapeHtml(statusLabel)}</span></td>
-        <td>${blueprintBtnHtml}</td>
-        ${summaryTdHtml}
-        <td><a href="${escapeHtml(p.source_url)}" target="_blank" style="color: var(--accent-blue); text-decoration: none; font-size: 12px; word-break: break-all;">${escapeHtml(p.source_url)}</a></td>
-      </tr>
-    `;
-  }).join('');
+  tbody.innerHTML = rows.join('');
 }
 
 function renderInstances(instances) {
@@ -414,7 +521,13 @@ function renderDynamicApplyButtons(candidates, packages) {
   const container = document.getElementById('dynamic-apply-buttons');
   if (!container) return;
 
-  const pendingCandidates = (candidates || []).filter(c => c.status === 'UPDATE_FOUND' || c.status === 'QUALIFIED');
+  const pkgMap = {};
+  (packages || latestPackages || []).forEach(p => { pkgMap[p.package_id] = p; });
+
+  const pendingCandidates = (candidates || []).filter(c => {
+    return c.status === 'UPDATE_FOUND' || c.status === 'QUALIFIED';
+  });
+
   if (pendingCandidates.length === 0) {
     container.innerHTML = '<span style="font-size: 11px; color: var(--text-muted); line-height: 1.4; display: block;">No pending updates. Run "Check for Updates" above.</span>';
     return;
@@ -614,11 +727,124 @@ function copyBlueprintPath(btn, path) {
   });
 }
 
+function openSnoozeModal(packageId, version) {
+  const pkgInput = document.getElementById('snooze-package-id');
+  const verInput = document.getElementById('snooze-version-val');
+  const displayPkg = document.getElementById('snooze-display-pkg');
+  const displayVer = document.getElementById('snooze-display-ver');
+
+  if (pkgInput) pkgInput.value = packageId;
+  if (verInput) verInput.value = version || '';
+  if (displayPkg) displayPkg.textContent = packageId;
+  if (displayVer) displayVer.textContent = version || 'Latest';
+
+  const modal = document.getElementById('snooze-modal');
+  if (modal) {
+    modal.classList.add('active');
+    document.body.style.overflow = 'hidden';
+  }
+}
+
+function closeSnoozeModal(event) {
+  if (event && event.target && event.target.id !== 'snooze-modal' && !event.target.classList.contains('modal-close-btn') && !event.target.closest('.modal-close-btn') && event.target.tagName !== 'BUTTON') {
+    return;
+  }
+  const modal = document.getElementById('snooze-modal');
+  if (modal) {
+    modal.classList.remove('active');
+    document.body.style.overflow = '';
+  }
+}
+
+async function submitSnooze() {
+  const packageId = document.getElementById('snooze-package-id')?.value;
+  const version = document.getElementById('snooze-version-val')?.value;
+  const days = parseInt(document.getElementById('snooze-days-select')?.value || '30', 10);
+
+  if (!packageId) return;
+
+  closeSnoozeModal();
+
+  try {
+    const res = await fetch('/api/action', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        action: 'snooze',
+        package_id: packageId,
+        version: version,
+        days: days
+      })
+    });
+    const result = await res.json();
+    if (res.ok) {
+      lastRenderedSignature = "";
+      await fetchState();
+    } else {
+      alert(`Snooze failed: ${result.error || result.message}`);
+    }
+  } catch (err) {
+    console.error('Error submitting snooze:', err);
+  }
+}
+
+async function confirmBlockPackage(packageId, version) {
+  const confirmMsg = `Are you sure you want to BLOCK updates for '${packageId}' (version: ${version || 'all'})?\n\nNo PRs will be created for this version unless manually unblocked from the dashboard or a newer upstream version is released.`;
+  if (!confirm(confirmMsg)) return;
+
+  try {
+    const res = await fetch('/api/action', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        action: 'block',
+        package_id: packageId,
+        version: version
+      })
+    });
+    const result = await res.json();
+    if (res.ok) {
+      lastRenderedSignature = "";
+      await fetchState();
+    } else {
+      alert(`Block failed: ${result.error || result.message}`);
+    }
+  } catch (err) {
+    console.error('Error blocking package:', err);
+  }
+}
+
+async function triggerUnblock(packageId) {
+  try {
+    const res = await fetch('/api/action', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        action: 'unblock',
+        package_id: packageId
+      })
+    });
+    const result = await res.json();
+    if (res.ok) {
+      lastRenderedSignature = "";
+      await fetchState();
+    } else {
+      alert(`Unblock failed: ${result.error || result.message}`);
+    }
+  } catch (err) {
+    console.error('Error unblocking package:', err);
+  }
+}
+
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') {
-    const modal = document.getElementById('blueprint-modal');
-    if (modal && modal.classList.contains('active')) {
+    const bpModal = document.getElementById('blueprint-modal');
+    if (bpModal && bpModal.classList.contains('active')) {
       closeBlueprintModal();
+    }
+    const snzModal = document.getElementById('snooze-modal');
+    if (snzModal && snzModal.classList.contains('active')) {
+      closeSnoozeModal();
     }
   }
 });
