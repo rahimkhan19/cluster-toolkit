@@ -87,7 +87,11 @@ async function fetchState() {
     if (data.config) {
       const badgeText = document.getElementById('repo-badge-text');
       if (badgeText) {
-        badgeText.textContent = `${data.config.owner}/${data.config.repo_name} (${data.config.base_branch})`;
+        if (data.config.is_fork && data.config.fork_owner) {
+          badgeText.textContent = `${data.config.owner}/${data.config.repo_name} (${data.config.base_branch}) ← fork: ${data.config.fork_owner}`;
+        } else {
+          badgeText.textContent = `${data.config.owner}/${data.config.repo_name} (${data.config.base_branch})`;
+        }
       }
     }
 
@@ -192,11 +196,21 @@ function renderCandidates(candidates, packages) {
   }
 
   container.innerHTML = activeCandidates.map(c => {
-    const isReady = c.status === 'READY_FOR_REVIEW' || c.status === 'APPLIED';
+    const isTesting = c.status === 'TESTING' || c.test_status === 'RUNNING';
+    const testPassed = c.test_status === 'SUCCESS';
+    const testFailed = c.test_status === 'FAILURE' || c.status === 'TEST_FAILED';
+    const isReady = (c.status === 'READY_FOR_REVIEW' || c.status === 'APPLIED') && !isTesting;
     const isSnoozed = c.status === 'SNOOZED';
     const isBlocked = c.status === 'BLOCKED';
+
     let statusBadge = '<span class="badge badge-blue">UPDATE_FOUND</span>';
-    if (isReady) {
+    if (isTesting) {
+      statusBadge = '<span class="badge badge-amber"><span class="spinner-sm"></span> TESTING</span>';
+    } else if (testPassed) {
+      statusBadge = '<span class="badge badge-green">READY_FOR_REVIEW</span> <span class="badge badge-green" style="margin-left: 6px; font-size: 10px;">✓ TEST PASSED</span>';
+    } else if (testFailed) {
+      statusBadge = '<span class="badge badge-red">✗ TEST FAILED</span>';
+    } else if (isReady) {
       statusBadge = '<span class="badge badge-green">READY_FOR_REVIEW</span>';
     } else if (isBlocked) {
       statusBadge = '<span class="badge badge-red">BLOCKED</span>';
@@ -224,6 +238,24 @@ function renderCandidates(candidates, packages) {
           <span>Unblock</span>
         </button>
       `;
+    } else if (isTesting) {
+      actionButtonsHtml = `
+        ${c.pr_url ? `
+          <a href="${escapeHtml(c.pr_url)}" target="_blank" class="btn btn-secondary" style="color: #22c55e; border-color: rgba(34, 197, 94, 0.4); text-decoration: none; display: inline-flex; align-items: center; gap: 6px;" title="View Pull Request on GitHub">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="18" cy="18" r="3"/><circle cx="6" cy="6" r="3"/><path d="M13 6h3a2 2 0 0 1 2 2v7"/><line x1="6" y1="9" x2="6" y2="21"/></svg>
+            <span>View PR #${escapeHtml(String(c.pr_url).split('/').pop())}</span>
+          </a>
+        ` : ''}
+        ${c.build_url ? `
+          <a href="${escapeHtml(c.build_url)}" target="_blank" class="btn btn-secondary" style="color: #f59e0b; border-color: rgba(245, 158, 11, 0.4); text-decoration: none; display: inline-flex; align-items: center; gap: 6px;" title="View Cloud Build Execution Log">
+            <span class="spinner-sm"></span>
+            <span>Build Log</span>
+          </a>
+        ` : ''}
+        <button class="btn btn-secondary" disabled style="opacity: 0.85;">
+          <span>Testing ${escapeHtml(c.test_name || 'Blueprint')}...</span>
+        </button>
+      `;
     } else {
       actionButtonsHtml = `
         ${c.pr_url ? `
@@ -231,6 +263,18 @@ function renderCandidates(candidates, packages) {
             <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="18" cy="18" r="3"/><circle cx="6" cy="6" r="3"/><path d="M13 6h3a2 2 0 0 1 2 2v7"/><line x1="6" y1="9" x2="6" y2="21"/></svg>
             <span>View PR #${escapeHtml(String(c.pr_url).split('/').pop())}</span>
           </a>
+        ` : ''}
+        ${c.build_url ? `
+          <a href="${escapeHtml(c.build_url)}" target="_blank" class="btn btn-secondary" style="color: ${testPassed ? '#22c55e' : (testFailed ? 'var(--accent-red)' : '#f59e0b')}; border-color: rgba(255, 255, 255, 0.15); text-decoration: none; display: inline-flex; align-items: center; gap: 6px;" title="View Cloud Build Test Log">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+            <span>${testPassed ? 'Test Log (Passed)' : (testFailed ? 'Test Log (Failed)' : 'Build Log')}</span>
+          </a>
+        ` : ''}
+        ${testFailed ? `
+          <button class="btn btn-secondary" style="color: var(--accent-blue); border-color: rgba(59, 130, 246, 0.4);" onclick="triggerAction('test', '${escapeHtml(c.package_id)}')" title="Re-trigger blueprint test on Cloud Build">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
+            <span>Re-run Test</span>
+          </button>
         ` : ''}
         <button class="btn btn-secondary" onclick="openSnoozeModal('${escapeHtml(c.package_id)}', '${escapeHtml(c.version)}')" title="Snooze updates for this version (default: 30 days)">
           <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
@@ -241,7 +285,7 @@ function renderCandidates(candidates, packages) {
           <span>Block</span>
         </button>
         <button class="btn ${isReady ? 'btn-secondary' : 'btn-primary'}" onclick="triggerAction('apply', '${escapeHtml(c.package_id)}')" ${isReady ? 'disabled' : ''}>
-          ${isReady ? 'Applied &bull; Ready for Review' : 'Review &amp; Apply Update'}
+          ${isReady ? (testPassed ? 'Applied &bull; Test Passed' : 'Applied &bull; Ready for Review') : 'Review &amp; Apply Update'}
         </button>
       `;
     }
@@ -306,10 +350,15 @@ function renderPackageTableRow(p, { effectiveStatus, upstreamVersion, summary, c
     statusLabel = 'UPDATE_FOUND';
   } else if (effectiveStatus === 'READY_FOR_REVIEW') {
     badgeClass = 'badge-green';
-    statusLabel = 'READY_FOR_REVIEW';
+    statusLabel = (candidate && candidate.test_status === 'SUCCESS')
+      ? 'READY_FOR_REVIEW <span style="font-size: 9px; padding: 1px 4px; background: rgba(35, 134, 54, 0.4); border-radius: 3px; margin-left: 3px;">✓ PASSED</span>'
+      : 'READY_FOR_REVIEW';
   } else if (effectiveStatus === 'TESTING') {
     badgeClass = 'badge-amber';
-    statusLabel = 'TESTING';
+    statusLabel = '<span class="spinner-sm"></span> TESTING';
+  } else if (effectiveStatus === 'TEST_FAILED') {
+    badgeClass = 'badge-red';
+    statusLabel = 'TEST_FAILED';
   } else if (effectiveStatus === 'UP_TO_DATE') {
     badgeClass = 'badge-green';
     statusLabel = 'UP-TO-DATE';
@@ -374,6 +423,11 @@ function renderPackageTableRow(p, { effectiveStatus, upstreamVersion, summary, c
                <span>PR #${escapeHtml(String(candidate.pr_url).split('/').pop())}</span>
              </a>
            ` : ''}
+           ${candidate && candidate.build_url ? `
+             <a href="${escapeHtml(candidate.build_url)}" target="_blank" class="btn btn-secondary" style="padding: 3px 7px; font-size: 11px; color: ${candidate.test_status === 'SUCCESS' ? '#22c55e' : (candidate.test_status === 'FAILURE' ? 'var(--accent-red)' : '#f59e0b')}; border-color: rgba(255, 255, 255, 0.15); text-decoration: none; display: inline-flex; align-items: center; gap: 3px;" title="View Cloud Build Test Log">
+               <span>Build Log</span>
+             </a>
+           ` : ''}
            <button class="btn btn-secondary" style="padding: 4px 8px; font-size: 11px;" onclick="openSnoozeModal('${escapeHtml(p.package_id)}', '${escapeHtml(targetVer)}')" title="Snooze updates">
              <span>Snooze</span>
            </button>
@@ -390,7 +444,7 @@ function renderPackageTableRow(p, { effectiveStatus, upstreamVersion, summary, c
       <td><span class="code-pill" style="color: var(--accent-green-light)">${escapeHtml(p.current_version)}</span></td>
       <td>${upVerHtml}</td>
       <td><span class="code-pill" style="color: var(--accent-amber)">${escapeHtml(p.upstream_type || 'github_release')}</span></td>
-      <td><span class="badge ${badgeClass}">${escapeHtml(statusLabel)}</span></td>
+      <td><span class="badge ${badgeClass}">${statusLabel}</span></td>
       <td>${blueprintBtnHtml}</td>
       ${summaryTdHtml}
       <td><a href="${escapeHtml(p.source_url)}" target="_blank" style="color: var(--accent-blue); text-decoration: none; font-size: 12px; word-break: break-all;">${escapeHtml(p.source_url)}</a></td>
@@ -413,7 +467,7 @@ function renderPackages(packages, candidates) {
   list.forEach(p => {
     const pkgCands = candList.filter(c => c.package_id === p.package_id);
     const snoozedOrBlockedCand = pkgCands.find(c => c.status === 'SNOOZED' || c.status === 'BLOCKED');
-    const activeCand = pkgCands.find(c => ['UPDATE_FOUND', 'READY_FOR_REVIEW', 'TESTING', 'QUALIFIED'].includes(c.status));
+    const activeCand = pkgCands.find(c => ['UPDATE_FOUND', 'READY_FOR_REVIEW', 'TESTING', 'TEST_FAILED', 'QUALIFIED'].includes(c.status));
 
     const isSnoozedOrBlocked = (p.status === 'SNOOZED' || p.status === 'BLOCKED' || !!snoozedOrBlockedCand || (p.snoozed_version && (!p.snooze_until || new Date(p.snooze_until) > new Date())) || !!p.blocked_version);
 

@@ -201,6 +201,10 @@ class DashboardHandler(SimpleHTTPRequestHandler):
                     "owner": CONFIG.repository.owner,
                     "repo_name": CONFIG.repository.name,
                     "base_branch": CONFIG.repository.base_branch,
+                    "fork_url": CONFIG.repository.fork_url,
+                    "fork_owner": CONFIG.repository.fork_owner,
+                    "fork_name": CONFIG.repository.fork_name,
+                    "is_fork": CONFIG.repository.is_fork,
                     "llm_model": CONFIG.llm.model,
                     "token_present": bool(CONFIG.get_github_token()),
                     "workspace_dir": REPO_MANAGER.workspace_dir
@@ -424,6 +428,12 @@ class DashboardHandler(SimpleHTTPRequestHandler):
                 return
             cmd_args = ["--apply", pkg_id]
             action_name = f"Orchestrator Agent Update ({pkg_id})"
+        elif action == "test":
+            if not pkg_id:
+                self.send_error(400, "package_id required for test")
+                return
+            cmd_args = ["--test", pkg_id]
+            action_name = f"Trigger & Monitor Test ({pkg_id})"
         elif action == "create_pr":
             if not pkg_id:
                 self.send_error(400, "package_id required for create_pr")

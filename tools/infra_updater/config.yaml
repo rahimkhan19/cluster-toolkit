@@ -10,13 +10,16 @@ database:
 
 # Target Repository & Branch
 repository:
-  url: "https://github.com/rahimkhan19/cluster-toolkit.git"
+  # Upstream target repository where Pull Requests will be opened
+  url: "https://github.com/GoogleCloudPlatform/cluster-toolkit.git"
   branch: "develop"
+  # Fork repository where update branches will be pushed
+  fork_url: "https://github.com/rahimkhan19/cluster-toolkit.git"
 
-# Git Commit Author
-git:
-  author_name: "Cluster Toolkit Infra Updater Bot"
-  author_email: "infra-updater-bot@google.com"
+# Git Commit Author (Optional overrides; defaults are dynamically resolved from GitHub token and git config)
+# git:
+#   author_name: "rahimkhan19"
+#   author_email: "rahimkh@google.com"
 
 # Gemini LLM Model
 llm:

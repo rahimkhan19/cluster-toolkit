@@ -113,7 +113,7 @@ def run_check_all(model: str = None):
         pass
 
 
-def run_apply(package_id: str, create_pr: bool = True):
+def run_apply(package_id: str, create_pr: bool = True, wait_for_test: bool = True, skip_test: bool = False):
     print(f"\n{BOLD}{CYAN}=== STEP 2: Orchestrator Agent (Blueprint Update & PR Creation) ==={RESET}")
     print(f"Target Package:    {BOLD}{package_id}{RESET}")
     print(f"Target Repository: {BOLD}{CONFIG.repository.url}{RESET} (branch: {BOLD}{CONFIG.repository.base_branch}{RESET})\n")
@@ -128,7 +128,12 @@ def run_apply(package_id: str, create_pr: bool = True):
             print(f"{CYAN}[Candidate]{RESET} Summary:        {cand.get('summary')}\n")
 
     agent = OrchestratorAgent(store=store)
-    res = agent.apply_update(package_id, create_pr=create_pr)
+    res = agent.apply_update(
+        package_id,
+        create_pr=create_pr,
+        run_test=not skip_test,
+        wait_for_test=wait_for_test
+    )
 
     if res["status"] != "SUCCESS":
         print(f"{RED}[ERROR] {res.get('message')}{RESET}")
@@ -136,14 +141,45 @@ def run_apply(package_id: str, create_pr: bool = True):
 
     print(f"{GREEN}[SUCCESS] Target Version:   {res['target_version']}{RESET}")
     print(f"{GREEN}[SUCCESS] Download URL:     {res['download_url']}{RESET}")
-    print(f"{GREEN}[SUCCESS] Workflow Status:  READY_FOR_REVIEW{RESET}")
+    print(f"{GREEN}[SUCCESS] Workflow Status:  {res.get('workflow_status', 'READY_FOR_REVIEW')}{RESET}")
     if res.get("branch"):
         print(f"{CYAN}[BRANCH]{RESET}        Update Branch:  {BOLD}{res['branch']}{RESET}")
     if res.get("pushed"):
-        print(f"{GREEN}[GIT PUSH]{RESET}      Remote Branch:  {CONFIG.repository.url}")
+        dest = f"{CONFIG.repository.push_url} (fork: {CONFIG.repository.fork_owner})" if CONFIG.repository.is_fork else CONFIG.repository.url
+        print(f"{GREEN}[GIT PUSH]{RESET}      Remote Branch:  {dest}")
     if res.get("pr_url"):
         print(f"{GREEN}{BOLD}[PULL REQUEST]{RESET}  GitHub PR:      {BOLD}{res['pr_url']}{RESET}")
+    if res.get("test_name"):
+        print(f"{CYAN}[INTEGRATION TEST]{RESET} Blueprint Test: {BOLD}{res['test_name']}{RESET}")
+    if res.get("build_id"):
+        print(f"{CYAN}[CLOUD BUILD]{RESET}      Build ID:       {res['build_id']}")
+    if res.get("build_url"):
+        print(f"{CYAN}[CLOUD BUILD]{RESET}      Build Log:      {BOLD}{res['build_url']}{RESET}")
+    if res.get("test_status"):
+        color = GREEN if res["test_status"] == "SUCCESS" else (RED if res["test_status"] == "FAILURE" else YELLOW)
+        print(f"{color}[TEST RESULT]{RESET}     Test Status:    {BOLD}{res['test_status']}{RESET}")
     print()
+
+
+def run_test(package_id: str, wait: bool = True):
+    print(f"\n{BOLD}{CYAN}=== Blueprint Integration Test Trigger ==={RESET}")
+    store = get_datastore()
+    candidates = store.list_candidates(package_id=package_id)
+    cand = candidates[-1] if candidates else None
+    if not cand:
+        print(f"{RED}[ERROR] No candidate found for package '{package_id}'.{RESET}")
+        return
+    agent = OrchestratorAgent(store=store)
+    res = agent.trigger_candidate_test(cand["candidate_id"], wait_for_test=wait)
+    if res.get("status") == "SUCCESS":
+        print(f"{GREEN}[SUCCESS] Test triggered successfully!{RESET}")
+        if res.get("build_url"):
+            print(f"Log URL: {res['build_url']}")
+        if res.get("test_status"):
+            color = GREEN if res["test_status"] == "SUCCESS" else RED
+            print(f"{color}Final Status: {res['test_status']}{RESET}")
+    else:
+        print(f"{RED}[ERROR] {res.get('message')}{RESET}")
 
     print(f"{BOLD}Modified Blueprints & Synchronized Variables:{RESET}")
     for mod in res["modified_files"]:
@@ -239,6 +275,9 @@ def run_show_config():
     print(f"  * URL:              {CONFIG.repository.url}")
     print(f"  * Owner / Repo:     {CONFIG.repository.owner} / {CONFIG.repository.name}")
     print(f"  * Branch:           {CONFIG.repository.branch}")
+    if CONFIG.repository.is_fork:
+        print(f"  * Fork URL:         {CONFIG.repository.fork_url}")
+        print(f"  * Fork Owner:       {CONFIG.repository.fork_owner} (cross-repo PR target: {CONFIG.repository.owner}/{CONFIG.repository.name}:{CONFIG.repository.branch})")
     print(f"  * Workspace Path:   {repo_mgr.workspace_dir}")
     print(f"  * GitHub Token:     {token_display}")
     print(f"\n{BOLD}Git Author Configuration:{RESET}")
@@ -430,6 +469,9 @@ Examples:
     parser.add_argument("--sync-prs", action="store_true", help="Synchronize open PR statuses with GitHub (detect closed PRs)")
     parser.add_argument("-c", "--check-all", action="store_true", help="Run Source Qualification Agent across all packages")
     parser.add_argument("-a", "--apply", metavar="PACKAGE_ID", type=str, help="Apply qualified update, push branch & create PR for PACKAGE_ID")
+    parser.add_argument("--test", metavar="PACKAGE_ID", type=str, help="Trigger and monitor integration test for package PR")
+    parser.add_argument("--skip-test", action="store_true", help="Skip integration test trigger after PR creation")
+    parser.add_argument("--no-wait-test", action="store_true", help="Trigger integration test asynchronously without waiting in CLI")
     parser.add_argument("--no-pr", action="store_true", help="Skip GitHub PR creation during apply")
     parser.add_argument("--snooze", metavar="PACKAGE_ID", type=str, help="Snooze updates for PACKAGE_ID")
     parser.add_argument("--days", type=int, default=30, help="Number of days to snooze (default: 30)")
@@ -471,7 +513,9 @@ Examples:
     if args.check_all:
         run_check_all(model=args.model)
     if args.apply:
-        run_apply(args.apply, create_pr=not args.no_pr)
+        run_apply(args.apply, create_pr=not args.no_pr, wait_for_test=not args.no_wait_test, skip_test=args.skip_test)
+    if args.test:
+        run_test(args.test, wait=not args.no_wait_test)
 
 if __name__ == "__main__":
     main()
