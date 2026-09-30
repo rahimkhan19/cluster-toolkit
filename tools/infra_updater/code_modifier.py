@@ -218,10 +218,21 @@ class OrchestratorAgent:
                 "message": f"No blueprint instances registered for package '{package_id}'."
             }
 
+        selected_instances = [inst for inst in instances if inst.get("enabled", True) is not False]
+        if not selected_instances:
+            print(f"[Orchestrator] All {len(instances)} blueprint instance(s) for package '{package_id}' are deselected. Skipping update.")
+            return {
+                "status": "SKIPPED",
+                "message": f"All {len(instances)} blueprint instance(s) for package '{package_id}' are deselected. Update skipped."
+            }
+
+        if len(selected_instances) < len(instances):
+            print(f"[Orchestrator] Selected blueprints for '{package_id}': {len(selected_instances)}/{len(instances)} (deselected instances skipped).")
+
         modified_files = []
         all_diffs = {}
 
-        for inst in instances:
+        for inst in selected_instances:
             inst_id = inst.get("instance_id")
             rel_path = inst.get("blueprint_path")
             var_name = inst.get("variable_name")
@@ -455,92 +466,93 @@ class OrchestratorAgent:
                     "message": f"Pull request creation failed for package '{package_id}': {pr_res.get('message')}"
                 }
 
-        # 8. Testing Stage: Trigger integration test for modified blueprint(s)
-        test_info = None
+        # 8. Testing Stage: Trigger integration test(s) for modified blueprint(s)
+        test_name = None
         build_id = None
         build_url = None
         test_status = None
-        test_name = None
+        tests = []
+        tests_summary = None
 
         if create_pr and pr_number and run_test:
-            from test_manager import get_test_manager
+            from test_manager import get_test_manager, compute_tests_summary
             tm = get_test_manager()
             bp_paths = [m["file_path"] for m in modified_files]
             resolved_tests = tm.resolve_tests_for_blueprints(bp_paths)
 
             if resolved_tests:
-                test_info = resolved_tests[0]
-                test_name = test_info.get("test_name")
-                print(f"[Orchestrator] Triggering integration test '{test_name}' for PR #{pr_number}...", flush=True)
-
-                trig_res = tm.trigger_test_for_pr(
+                print(f"[Orchestrator] Triggering {len(resolved_tests)} integration test(s) for PR #{pr_number}...", flush=True)
+                test_results = tm.trigger_all_tests_for_pr(
                     pr_number=pr_number,
                     branch_name=branch_name,
-                    test_info=test_info
+                    test_infos=resolved_tests
                 )
+                tests = test_results
+                summary_text, overall_test, overall_workflow = compute_tests_summary(tests)
+                tests_summary = summary_text
+                test_status = overall_test
+                test_name = tests[0].get("test_name") if tests else None
+                build_id = tests[0].get("build_id") if tests else None
+                build_url = tests[0].get("build_url") if tests else None
 
-                if trig_res.get("status") == "TRIGGERED":
-                    build_id = trig_res.get("build_id")
-                    build_url = trig_res.get("build_url")
-                    test_status = "RUNNING"
+                # Transition DataStore to TESTING
+                self.store.update_candidate(cand_id, {
+                    "status": "TESTING",
+                    "previous_version": current_blueprint_ver,
+                    "current_version": current_blueprint_ver,
+                    "pr_url": pr_url,
+                    "branch": branch_name,
+                    "test_name": test_name,
+                    "test_status": test_status,
+                    "build_id": build_id,
+                    "build_url": build_url,
+                    "tests": tests,
+                    "tests_summary": tests_summary
+                })
+                self.store.update_package(package_id, {
+                    "status": "TESTING",
+                    "test_status": test_status,
+                    "tests_summary": tests_summary
+                })
 
-                    # Transition DataStore to TESTING
+                if wait_for_test:
+                    print(f"[Orchestrator] Waiting for {len(tests)} blueprint test(s) to complete...", flush=True)
+                    tm.wait_for_all_tests_completion(tests)
+                    summary_text, overall_test, overall_workflow = compute_tests_summary(tests)
+                    tests_summary = summary_text
+                    test_status = overall_test
+                    total = len(tests)
+
+                    if overall_test == "SUCCESS":
+                        qual_summary = f"All {total} integration test(s) PASSED on PR #{pr_number}. Ready for review."
+                    elif overall_test == "FAILURE":
+                        failed = sum(1 for t in tests if t.get("status") in ("FAILURE", "ERROR", "TIMEOUT"))
+                        qual_summary = f"{failed}/{total} integration test(s) FAILED on PR #{pr_number}."
+                    else:
+                        qual_summary = f"Tests completed: {summary_text} on PR #{pr_number}."
+
+                    primary_url = tests[0].get("build_url") if tests else build_url
                     self.store.update_candidate(cand_id, {
-                        "status": "TESTING",
-                        "previous_version": current_blueprint_ver,
-                        "current_version": current_blueprint_ver,
-                        "pr_url": pr_url,
-                        "branch": branch_name,
-                        "test_name": test_name,
-                        "test_status": "RUNNING",
-                        "build_id": build_id,
-                        "build_url": build_url
+                        "status": overall_workflow,
+                        "test_status": overall_test,
+                        "tests": tests,
+                        "tests_summary": tests_summary,
+                        "build_url": primary_url
                     })
                     self.store.update_package(package_id, {
-                        "status": "TESTING",
-                        "test_status": "RUNNING"
+                        "status": overall_workflow,
+                        "test_status": overall_test,
+                        "tests_summary": tests_summary,
+                        "qualification_summary": qual_summary
                     })
-
-                    if wait_for_test:
-                        print(f"[Orchestrator] Waiting for blueprint test '{test_name}' to complete...", flush=True)
-                        wait_res = tm.wait_for_test_completion(build_id)
-                        final_status = wait_res.get("status")
-                        if final_status == "SUCCESS":
-                            test_status = "SUCCESS"
-                            self.store.update_candidate(cand_id, {
-                                "status": "READY_FOR_REVIEW",
-                                "test_status": "SUCCESS",
-                                "build_url": wait_res.get("build_url")
-                            })
-                            self.store.update_package(package_id, {
-                                "status": "READY_FOR_REVIEW",
-                                "test_status": "SUCCESS",
-                                "qualification_summary": f"Integration test '{test_name}' PASSED on PR #{pr_number}. Ready for review."
-                            })
-                        else:
-                            test_status = "FAILURE"
-                            reason = wait_res.get("failure_reason", "FAILED")
-                            self.store.update_candidate(cand_id, {
-                                "status": "TEST_FAILED",
-                                "test_status": "FAILURE",
-                                "build_url": wait_res.get("build_url")
-                            })
-                            self.store.update_package(package_id, {
-                                "status": "TEST_FAILED",
-                                "test_status": "FAILURE",
-                                "qualification_summary": f"Integration test '{test_name}' FAILED ({reason}) on PR #{pr_number}."
-                            })
-                    else:
-                        # Async monitoring in background thread
-                        tm.start_async_test_monitor(
-                            candidate_id=cand_id,
-                            package_id=package_id,
-                            build_id=build_id,
-                            test_name=test_name,
-                            pr_number=pr_number
-                        )
                 else:
-                    print(f"[Orchestrator] [WARN] Triggering test failed: {trig_res.get('message')}", flush=True)
+                    # Async monitoring in background thread
+                    tm.start_async_tests_monitor(
+                        candidate_id=cand_id,
+                        package_id=package_id,
+                        tests=tests,
+                        pr_number=pr_number
+                    )
             else:
                 print(f"[Orchestrator] No integration test mapped for modified blueprints: {bp_paths}", flush=True)
 
@@ -572,6 +584,8 @@ class OrchestratorAgent:
             "pushed": pushed,
             "test_name": test_name,
             "test_status": test_status,
+            "tests": tests,
+            "tests_summary": tests_summary,
             "build_id": build_id,
             "build_url": build_url,
             "modified_files": modified_files,
@@ -596,54 +610,79 @@ class OrchestratorAgent:
         branch_name = cand.get("branch") or f"infra-update/{package_id}-{cand.get('version')}"
 
         instances = self.store.get_blueprints_for_package(package_id)
-        bp_paths = [i.get("blueprint_path") for i in instances if i.get("blueprint_path")]
+        selected_instances = [i for i in instances if i.get("enabled", True) is not False]
+        bp_paths = [i.get("blueprint_path") for i in selected_instances if i.get("blueprint_path")]
+        if not bp_paths:
+            return {"status": "ERROR", "message": f"No active/selected blueprints found for package '{package_id}'."}
 
-        from test_manager import get_test_manager
+        from test_manager import get_test_manager, compute_tests_summary
         tm = get_test_manager()
         resolved_tests = tm.resolve_tests_for_blueprints(bp_paths)
         if not resolved_tests:
             return {"status": "ERROR", "message": f"No integration tests mapped for package '{package_id}'."}
 
-        test_info = resolved_tests[0]
-        test_name = test_info["test_name"]
-
-        trig_res = tm.trigger_test_for_pr(
+        print(f"[Orchestrator] Triggering {len(resolved_tests)} integration test(s) for PR #{pr_number}...", flush=True)
+        test_results = tm.trigger_all_tests_for_pr(
             pr_number=pr_number,
             branch_name=branch_name,
-            test_info=test_info
+            test_infos=resolved_tests
         )
-        if trig_res.get("status") != "TRIGGERED":
-            return {"status": "ERROR", "message": trig_res.get("message", "Failed to trigger test.")}
-
-        build_id = trig_res["build_id"]
-        build_url = trig_res["build_url"]
+        tests = test_results
+        summary_text, overall_test, overall_workflow = compute_tests_summary(tests)
+        primary_build_id = tests[0].get("build_id") if tests else None
+        primary_build_url = tests[0].get("build_url") if tests else None
+        primary_test_name = tests[0].get("test_name") if tests else None
 
         self.store.update_candidate(candidate_id, {
             "status": "TESTING",
-            "test_name": test_name,
-            "test_status": "RUNNING",
-            "build_id": build_id,
-            "build_url": build_url
+            "test_name": primary_test_name,
+            "test_status": overall_test,
+            "build_id": primary_build_id,
+            "build_url": primary_build_url,
+            "tests": tests,
+            "tests_summary": summary_text
         })
         self.store.update_package(package_id, {
             "status": "TESTING",
-            "test_status": "RUNNING"
+            "test_status": overall_test,
+            "tests_summary": summary_text
         })
 
         if wait_for_test:
-            wait_res = tm.wait_for_test_completion(build_id)
-            final_status = wait_res.get("status")
-            if final_status == "SUCCESS":
-                self.store.update_candidate(candidate_id, {"status": "READY_FOR_REVIEW", "test_status": "SUCCESS", "build_url": wait_res.get("build_url")})
-                self.store.update_package(package_id, {"status": "READY_FOR_REVIEW", "test_status": "SUCCESS", "qualification_summary": f"Integration test '{test_name}' PASSED."})
-                return {"status": "SUCCESS", "test_status": "SUCCESS", "build_url": wait_res.get("build_url")}
-            else:
-                self.store.update_candidate(candidate_id, {"status": "TEST_FAILED", "test_status": "FAILURE", "build_url": wait_res.get("build_url")})
-                self.store.update_package(package_id, {"status": "TEST_FAILED", "test_status": "FAILURE", "qualification_summary": f"Integration test '{test_name}' FAILED."})
-                return {"status": "FAILURE", "test_status": "FAILURE", "build_url": wait_res.get("build_url")}
+            tm.wait_for_all_tests_completion(tests)
+            summary_text, overall_test, overall_workflow = compute_tests_summary(tests)
+            total = len(tests)
+            qual_summary = f"{summary_text} on PR #{pr_number}."
+            self.store.update_candidate(candidate_id, {
+                "status": overall_workflow,
+                "test_status": overall_test,
+                "tests": tests,
+                "tests_summary": summary_text,
+                "build_url": tests[0].get("build_url") if tests else primary_build_url
+            })
+            self.store.update_package(package_id, {
+                "status": overall_workflow,
+                "test_status": overall_test,
+                "tests_summary": summary_text,
+                "qualification_summary": qual_summary
+            })
+            return {
+                "status": "SUCCESS" if overall_test == "SUCCESS" else "FAILURE",
+                "test_status": overall_test,
+                "tests": tests,
+                "tests_summary": summary_text,
+                "build_url": primary_build_url
+            }
         else:
-            tm.start_async_test_monitor(candidate_id, package_id, build_id, test_name, pr_number)
-            return {"status": "SUCCESS", "test_status": "RUNNING", "build_id": build_id, "build_url": build_url}
+            tm.start_async_tests_monitor(candidate_id, package_id, tests, pr_number)
+            return {
+                "status": "SUCCESS",
+                "test_status": "RUNNING",
+                "tests": tests,
+                "tests_summary": summary_text,
+                "build_id": primary_build_id,
+                "build_url": primary_build_url
+            }
 
     def revert_update(self, package_id: Optional[str] = None) -> Dict[str, Any]:
         """Reverts modified files in target workspace back to clean develop and synchronizes DataStore."""

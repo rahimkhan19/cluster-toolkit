@@ -66,12 +66,26 @@ class BaseDataStore(abc.ABC):
     def update_package(self, package_id: str, updates: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         pass
 
+    @staticmethod
+    def _normalize_package_blueprints(pkg: Optional[Dict[str, Any]]) -> None:
+        if not pkg:
+            return
+        disabled = set(pkg.get("disabled_blueprints") or [])
+        for bp in pkg.get("blueprints", []):
+            iid = bp.get("instance_id")
+            bp["enabled"] = (iid not in disabled) and bp.get("enabled", True)
+
     # Blueprints
     def get_blueprints_for_package(self, package_id: str) -> List[Dict[str, Any]]:
         pkg = self.get_package(package_id)
         if not pkg:
             return []
-        return copy.deepcopy(pkg.get("blueprints", []))
+        blueprints = copy.deepcopy(pkg.get("blueprints", []))
+        disabled = set(pkg.get("disabled_blueprints") or [])
+        for bp in blueprints:
+            iid = bp.get("instance_id")
+            bp["enabled"] = (iid not in disabled) and bp.get("enabled", True)
+        return blueprints
 
     def list_all_blueprints(self) -> List[Dict[str, Any]]:
         pkgs = self.list_packages()
@@ -80,13 +94,95 @@ class BaseDataStore(abc.ABC):
             pid = pkg.get("package_id")
             pname = pkg.get("name", pid)
             pver = pkg.get("current_version", "")
+            disabled = set(pkg.get("disabled_blueprints") or [])
             for bp in pkg.get("blueprints", []):
                 bp_copy = copy.deepcopy(bp)
                 bp_copy["package_id"] = pid
                 bp_copy["package_name"] = pname
                 bp_copy["current_version"] = pver
+                iid = bp_copy.get("instance_id")
+                bp_copy["enabled"] = (iid not in disabled) and bp_copy.get("enabled", True)
                 all_bps.append(bp_copy)
         return all_bps
+
+    def update_blueprint_selection(
+        self,
+        package_id: str,
+        action: str = "toggle_blueprint",
+        instance_id: Optional[str] = None,
+        enabled: Optional[bool] = None,
+        selected_instance_ids: Optional[List[str]] = None
+    ) -> Optional[Dict[str, Any]]:
+        pkg = self.get_package(package_id)
+        if not pkg:
+            return None
+
+        blueprints = copy.deepcopy(pkg.get("blueprints", []))
+        disabled = set(pkg.get("disabled_blueprints") or [])
+
+        if action == "select_all_blueprints":
+            disabled.clear()
+            for bp in blueprints:
+                bp["enabled"] = True
+        elif action == "deselect_all_blueprints":
+            for bp in blueprints:
+                bp["enabled"] = False
+                iid = bp.get("instance_id")
+                if iid:
+                    disabled.add(iid)
+        elif action == "toggle_blueprint":
+            if instance_id:
+                if enabled is not None:
+                    new_enabled = bool(enabled)
+                else:
+                    curr_enabled = (instance_id not in disabled) and any(
+                        bp.get("enabled", True) for bp in blueprints if bp.get("instance_id") == instance_id
+                    )
+                    new_enabled = not curr_enabled
+
+                if new_enabled:
+                    disabled.discard(instance_id)
+                else:
+                    disabled.add(instance_id)
+
+                for bp in blueprints:
+                    if bp.get("instance_id") == instance_id:
+                        bp["enabled"] = new_enabled
+                    else:
+                        bp["enabled"] = (bp.get("instance_id") not in disabled) and bp.get("enabled", True)
+        elif action == "update_blueprint_selection":
+            if selected_instance_ids is not None:
+                selected_set = set(selected_instance_ids)
+                disabled.clear()
+                for bp in blueprints:
+                    iid = bp.get("instance_id")
+                    is_en = iid in selected_set
+                    bp["enabled"] = is_en
+                    if not is_en and iid:
+                        disabled.add(iid)
+
+        # Normalize all blueprints with the final disabled set
+        for bp in blueprints:
+            iid = bp.get("instance_id")
+            bp["enabled"] = (iid not in disabled) and bp.get("enabled", True)
+
+        updates = {
+            "blueprints": blueprints,
+            "disabled_blueprints": sorted(list(disabled))
+        }
+        self.update_package(package_id, updates)
+
+        selected_count = sum(1 for bp in blueprints if bp.get("enabled", True))
+        total_count = len(blueprints)
+        return {
+            "status": "SUCCESS",
+            "package_id": package_id,
+            "blueprints": blueprints,
+            "disabled_blueprints": sorted(list(disabled)),
+            "selected_count": selected_count,
+            "total_count": total_count,
+            "message": f"Updated blueprint selection for {package_id} ({selected_count}/{total_count} selected)."
+        }
 
     # Candidates
     @abc.abstractmethod
@@ -249,11 +345,17 @@ class FirestoreDataStore(BaseDataStore):
     # Packages
     def get_package(self, package_id: str) -> Optional[Dict[str, Any]]:
         doc = self.db.collection("packages").document(package_id).get()
-        return doc.to_dict() if doc.exists else None
+        if not doc.exists:
+            return None
+        pkg = doc.to_dict()
+        self._normalize_package_blueprints(pkg)
+        return pkg
 
     def list_packages(self) -> List[Dict[str, Any]]:
         docs = self.db.collection("packages").stream()
         pkgs = [d.to_dict() for d in docs]
+        for pkg in pkgs:
+            self._normalize_package_blueprints(pkg)
         pkgs.sort(key=lambda x: x.get("package_id", ""))
         return pkgs
 
@@ -269,6 +371,7 @@ class FirestoreDataStore(BaseDataStore):
         }
         doc_ref.set(updates_with_ts, merge=True)
         data.update(updates_with_ts)
+        self._normalize_package_blueprints(data)
         return data
 
     # Candidates
@@ -473,14 +576,21 @@ class JsonDataStore(BaseDataStore):
         with self._lock:
             data = self._read_data()
             pkg = data.get("packages", {}).get(package_id)
-            return copy.deepcopy(pkg) if pkg else None
+            if not pkg:
+                return None
+            res = copy.deepcopy(pkg)
+            self._normalize_package_blueprints(res)
+            return res
 
     def list_packages(self) -> List[Dict[str, Any]]:
         with self._lock:
             data = self._read_data()
             pkgs = list(data.get("packages", {}).values())
-            pkgs.sort(key=lambda x: x.get("package_id", ""))
-            return copy.deepcopy(pkgs)
+            res = copy.deepcopy(pkgs)
+            for pkg in res:
+                self._normalize_package_blueprints(pkg)
+            res.sort(key=lambda x: x.get("package_id", ""))
+            return res
 
     def update_package(self, package_id: str, updates: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         with self._lock:
@@ -493,7 +603,9 @@ class JsonDataStore(BaseDataStore):
                 pkg[k] = v
             pkg["updated_at"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
             self._write_data(data)
-            return copy.deepcopy(pkg)
+            res = copy.deepcopy(pkg)
+            self._normalize_package_blueprints(res)
+            return res
 
     # Candidates
     def get_candidate(self, candidate_id: str) -> Optional[Dict[str, Any]]:

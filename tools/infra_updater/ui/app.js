@@ -56,20 +56,34 @@ async function fetchState() {
     const pendingCount = stats.pending_updates !== undefined ? stats.pending_updates : (stats.qualified_candidates || 0);
     const readyCount = stats.ready_updates !== undefined ? stats.ready_updates : (stats.applied_candidates || 0);
 
+    const totalPkg = stats.total_packages !== undefined ? stats.total_packages : latestPackages.length;
+    const totalInst = stats.total_instances !== undefined ? stats.total_instances : latestInstances.length;
+    const totalRules = stats.total_rules !== undefined ? stats.total_rules : latestRules.length;
+
     const elPkg = document.getElementById('metric-packages');
-    if (elPkg) elPkg.textContent = stats.total_packages || latestPackages.length;
+    if (elPkg) elPkg.textContent = totalPkg;
 
     const elInst = document.getElementById('metric-instances');
-    if (elInst) elInst.textContent = stats.total_instances || latestInstances.length;
+    if (elInst) elInst.textContent = totalInst;
 
     const elRules = document.getElementById('metric-rules');
-    if (elRules) elRules.textContent = stats.total_rules || latestRules.length;
+    if (elRules) elRules.textContent = totalRules;
 
     const elCand = document.getElementById('metric-candidates');
     if (elCand) elCand.textContent = pendingCount;
     
     const counterEl = document.getElementById('counter-candidates');
     if (counterEl) counterEl.textContent = pendingCount;
+
+    // Persist to localStorage for instant restoration on page reloads
+    try {
+      localStorage.setItem('infra_updater_stats', JSON.stringify({
+        total_packages: totalPkg,
+        total_instances: totalInst,
+        total_rules: totalRules,
+        pending_updates: pendingCount
+      }));
+    } catch (e) {}
 
     const diffDot = document.getElementById('diff-dot');
     if (diffDot) diffDot.style.display = data.has_modifications ? 'inline-block' : 'none';
@@ -174,6 +188,95 @@ function renderDiff(rawDiff) {
   diffBody.innerHTML = formatted;
 }
 
+// Multi-Blueprint Test Utilities
+function getCandidateTests(candidate) {
+  if (!candidate) return [];
+  if (Array.isArray(candidate.tests) && candidate.tests.length > 0) {
+    return candidate.tests;
+  }
+  if (candidate.build_url || candidate.test_name) {
+    const isSuccess = candidate.test_status === 'SUCCESS' || candidate.status === 'READY_FOR_REVIEW';
+    const isFailure = candidate.test_status === 'FAILURE' || candidate.status === 'TEST_FAILED';
+    const isRunning = candidate.test_status === 'RUNNING' || candidate.status === 'TESTING';
+    const status = isSuccess ? 'SUCCESS' : (isFailure ? 'FAILURE' : (isRunning ? 'RUNNING' : 'UNKNOWN'));
+    return [{
+      test_name: candidate.test_name || 'Integration Test',
+      trigger_name: candidate.trigger_name || (candidate.test_name ? `PR-test-${candidate.test_name}` : 'Integration Test'),
+      blueprint_path: candidate.blueprint_path || '',
+      blueprint_paths: candidate.blueprint_paths || [],
+      build_id: candidate.build_id || '',
+      build_url: candidate.build_url || '',
+      status: status
+    }];
+  }
+  return [];
+}
+
+function renderTestPillHtml(candidate, isSmall = false) {
+  const tests = getCandidateTests(candidate);
+  if (!tests || tests.length === 0) return '';
+
+  const total = tests.length;
+  const passed = tests.filter(t => t.status === 'SUCCESS').length;
+  const failed = tests.filter(t => ['FAILURE', 'ERROR', 'TIMEOUT'].includes(t.status)).length;
+  const running = tests.filter(t => ['RUNNING', 'TRIGGERED', 'PENDING', 'QUEUED'].includes(t.status)).length;
+
+  let pillClass = 'test-pill-all-passed';
+  let pillText = '';
+  let pillIcon = '';
+  let tooltip = '';
+
+  if (running > 0) {
+    pillClass = 'test-pill-running';
+    pillIcon = `<span class="spinner-sm" style="width: 10px; height: 10px; margin-right: 2px;"></span>`;
+    if (isSmall) {
+      pillText = total === 1 ? '1 running' : `${running}/${total} run`;
+    } else {
+      if (total === 1) {
+        pillText = '1 running';
+      } else if (passed > 0) {
+        pillText = `${passed}/${total} passed (${running} running)`;
+      } else {
+        pillText = `${running}/${total} running`;
+      }
+    }
+    tooltip = `Click to monitor test execution (${running} running, ${passed} passed, ${failed} failed)`;
+  } else if (failed > 0) {
+    pillClass = 'test-pill-partial-failed';
+    pillIcon = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>`;
+    if (isSmall) {
+      pillText = total === 1 ? '0/1 passed' : `${passed}/${total} passed`;
+    } else {
+      if (total === 1) {
+        pillText = '0/1 passed (1 failed)';
+      } else {
+        pillText = `${passed}/${total} passed (${failed} failed)`;
+      }
+    }
+    tooltip = `Click to view test failure logs (${failed} failed, ${passed} passed)`;
+  } else {
+    pillClass = 'test-pill-all-passed';
+    pillIcon = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>`;
+    if (isSmall) {
+      pillText = total === 1 ? '1/1 passed' : `${passed}/${total} passed`;
+    } else {
+      pillText = total === 1 ? '1/1 test passed' : `${passed}/${total} tests passed`;
+    }
+    tooltip = `Click to view all ${total} passing Cloud Build test logs`;
+  }
+
+  const smClass = isSmall ? 'btn-test-pill-sm' : '';
+  const candId = escapeHtml(candidate.candidate_id || '');
+
+  return `
+    <button class="btn-test-pill ${pillClass} ${smClass}" onclick="openTestResultsModal('${candId}', event)" title="${escapeHtml(tooltip)}">
+      ${pillIcon}
+      <span>${pillText}</span>
+      <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="opacity: 0.8; margin-left: 1px;"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
+    </button>
+  `;
+}
+
 function renderCandidates(candidates, packages) {
   const container = document.getElementById('candidates-container');
   const pkgMap = {};
@@ -207,9 +310,9 @@ function renderCandidates(candidates, packages) {
     if (isTesting) {
       statusBadge = '<span class="badge badge-amber"><span class="spinner-sm"></span> TESTING</span>';
     } else if (testPassed) {
-      statusBadge = '<span class="badge badge-green">READY_FOR_REVIEW</span> <span class="badge badge-green" style="margin-left: 6px; font-size: 10px;">✓ TEST PASSED</span>';
+      statusBadge = '<span class="badge badge-green">READY_FOR_REVIEW</span> <span class="badge badge-green" style="margin-left: 6px; font-size: 10px;">✓ TESTS PASSED</span>';
     } else if (testFailed) {
-      statusBadge = '<span class="badge badge-red">✗ TEST FAILED</span>';
+      statusBadge = `<span class="badge badge-red">✗ TEST FAILED</span> <span class="badge badge-amber" style="margin-left: 4px; font-size: 10px;">${escapeHtml(c.tests_summary || '')}</span>`;
     } else if (isReady) {
       statusBadge = '<span class="badge badge-green">READY_FOR_REVIEW</span>';
     } else if (isBlocked) {
@@ -222,13 +325,25 @@ function renderCandidates(candidates, packages) {
     const currVer = pkg.current_version || '-';
 
     const instances = (latestInstances || []).filter(inst => inst.package_id === c.package_id);
-    const instCount = instances.length;
-    const blueprintPillHtml = instCount > 0
-      ? `<button class="btn-blueprint-pill" onclick="openBlueprintModal('${escapeHtml(c.package_id)}')" title="Click to view ${instCount} associated blueprint${instCount === 1 ? '' : 's'}">
+    const totalCount = instances.length;
+    const selectedCount = instances.filter(inst => inst.enabled !== false).length;
+    let blueprintPillHtml = '';
+    if (totalCount > 0) {
+      let pillClass = 'pill-all-selected';
+      if (selectedCount === 0) {
+        pillClass = 'pill-none-selected';
+      } else if (selectedCount < totalCount) {
+        pillClass = 'pill-partial-selected';
+      }
+      blueprintPillHtml = `
+        <button class="btn-blueprint-pill ${pillClass}" onclick="openBlueprintModal('${escapeHtml(c.package_id)}')" title="Click to view & select blueprints for PR update (${selectedCount}/${totalCount} selected)">
           <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
-          <span>${instCount} Blueprint${instCount === 1 ? '' : 's'}</span>
-        </button>`
-      : '';
+          <span>${selectedCount}/${totalCount} selected</span>
+        </button>
+      `;
+    }
+
+    const testPillHtml = renderTestPillHtml(c);
 
     let actionButtonsHtml = '';
     if (isSnoozed || isBlocked) {
@@ -246,12 +361,12 @@ function renderCandidates(candidates, packages) {
             <span>View PR #${escapeHtml(String(c.pr_url).split('/').pop())}</span>
           </a>
         ` : ''}
-        ${c.build_url ? `
+        ${testPillHtml || (c.build_url ? `
           <a href="${escapeHtml(c.build_url)}" target="_blank" class="btn btn-secondary" style="color: #f59e0b; border-color: rgba(245, 158, 11, 0.4); text-decoration: none; display: inline-flex; align-items: center; gap: 6px;" title="View Cloud Build Execution Log">
             <span class="spinner-sm"></span>
             <span>Build Log</span>
           </a>
-        ` : ''}
+        ` : '')}
         <button class="btn btn-secondary" disabled style="opacity: 0.85;">
           <span>Testing ${escapeHtml(c.test_name || 'Blueprint')}...</span>
         </button>
@@ -264,16 +379,16 @@ function renderCandidates(candidates, packages) {
             <span>View PR #${escapeHtml(String(c.pr_url).split('/').pop())}</span>
           </a>
         ` : ''}
-        ${c.build_url ? `
+        ${testPillHtml || (c.build_url ? `
           <a href="${escapeHtml(c.build_url)}" target="_blank" class="btn btn-secondary" style="color: ${testPassed ? '#22c55e' : (testFailed ? 'var(--accent-red)' : '#f59e0b')}; border-color: rgba(255, 255, 255, 0.15); text-decoration: none; display: inline-flex; align-items: center; gap: 6px;" title="View Cloud Build Test Log">
             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
             <span>${testPassed ? 'Test Log (Passed)' : (testFailed ? 'Test Log (Failed)' : 'Build Log')}</span>
           </a>
-        ` : ''}
+        ` : '')}
         ${testFailed ? `
-          <button class="btn btn-secondary" style="color: var(--accent-blue); border-color: rgba(59, 130, 246, 0.4);" onclick="triggerAction('test', '${escapeHtml(c.package_id)}')" title="Re-trigger blueprint test on Cloud Build">
+          <button class="btn btn-secondary" style="color: var(--accent-blue); border-color: rgba(59, 130, 246, 0.4);" onclick="triggerAction('test', '${escapeHtml(c.package_id)}')" title="Re-trigger blueprint tests on Cloud Build">
             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
-            <span>Re-run Test</span>
+            <span>Re-run Tests</span>
           </button>
         ` : ''}
         <button class="btn btn-secondary" onclick="openSnoozeModal('${escapeHtml(c.package_id)}', '${escapeHtml(c.version)}')" title="Snooze updates for this version (default: 30 days)">
@@ -285,7 +400,7 @@ function renderCandidates(candidates, packages) {
           <span>Block</span>
         </button>
         <button class="btn ${isReady ? 'btn-secondary' : 'btn-primary'}" onclick="triggerAction('apply', '${escapeHtml(c.package_id)}')" ${isReady ? 'disabled' : ''}>
-          ${isReady ? (testPassed ? 'Applied &bull; Test Passed' : 'Applied &bull; Ready for Review') : 'Review &amp; Apply Update'}
+          ${isReady ? (testPassed ? 'Applied &bull; Tests Passed' : (testFailed ? 'Applied &bull; Test Failed' : 'Applied &bull; Ready for Review')) : 'Review &amp; Apply Update'}
         </button>
       `;
     }
@@ -319,6 +434,13 @@ function renderCandidates(candidates, packages) {
           </div>
         </div>
 
+        ${(totalCount > 0 && selectedCount === 0) ? `
+          <div style="background: rgba(239, 68, 68, 0.12); border: 1px solid rgba(239, 68, 68, 0.3); border-radius: 6px; padding: 6px 10px; font-size: 11.5px; color: #fca5a5; display: flex; align-items: center; gap: 6px; margin: 4px 0 8px 0;">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+            <span>All ${totalCount} blueprints are deselected. Click the blueprint pill above to select blueprints for PR updates.</span>
+          </div>
+        ` : ''}
+
         ${(c.summary || c.changelog_summary) ? `
           <div style="font-size: 13px; color: var(--text-secondary); line-height: 1.5; padding: 4px 0 8px 0;">
             ${escapeHtml(c.summary || c.changelog_summary)}
@@ -330,10 +452,10 @@ function renderCandidates(candidates, packages) {
             <span style="color: var(--text-muted); font-size: 11px; text-transform: uppercase; font-weight: 600; margin-right: 6px;">Artifact URL:</span>
             <a href="${escapeHtml(c.download_url)}" target="_blank" class="candidate-url">${escapeHtml(c.download_url)}</a>
           </div>
-          ${instCount > 0 ? `
+          ${totalCount > 0 ? `
             <button class="btn-text-link" onclick="openBlueprintModal('${escapeHtml(c.package_id)}')" title="Inspect target blueprint files and variable couplings">
               <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
-              <span>View ${instCount} Affected Blueprint${instCount === 1 ? '' : 's'} &rarr;</span>
+              <span>View ${totalCount} Affected Blueprint${totalCount === 1 ? '' : 's'} &rarr;</span>
             </button>
           ` : ''}
         </div>
@@ -384,13 +506,23 @@ function renderPackageTableRow(p, { effectiveStatus, upstreamVersion, summary, c
     : `<span style="color: var(--text-muted)">-</span>`;
 
   const instances = (latestInstances || []).filter(inst => inst.package_id === p.package_id);
-  const instCount = instances.length;
-  const blueprintBtnHtml = instCount > 0
-    ? `<button class="btn-blueprint-pill" onclick="openBlueprintModal('${escapeHtml(p.package_id)}')" title="View ${instCount} associated blueprint${instCount === 1 ? '' : 's'}">
-         <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
-         <span>${instCount} blueprint${instCount === 1 ? '' : 's'}</span>
-       </button>`
-    : `<span style="color: var(--text-muted); font-size: 11px;">None</span>`;
+  const totalCount = instances.length;
+  const selectedCount = instances.filter(inst => inst.enabled !== false).length;
+  let blueprintBtnHtml = `<span style="color: var(--text-muted); font-size: 11px;">None</span>`;
+  if (totalCount > 0) {
+    let pillClass = 'pill-all-selected';
+    if (selectedCount === 0) {
+      pillClass = 'pill-none-selected';
+    } else if (selectedCount < totalCount) {
+      pillClass = 'pill-partial-selected';
+    }
+    blueprintBtnHtml = `
+      <button class="btn-blueprint-pill ${pillClass}" onclick="openBlueprintModal('${escapeHtml(p.package_id)}')" title="Click to view & select blueprints for PR updates (${selectedCount}/${totalCount} selected)">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+        <span>${selectedCount}/${totalCount} selected</span>
+      </button>
+    `;
+  }
 
   const rawSummary = summary || p.qualification_summary || 'Baseline registered.';
   const isError = effectiveStatus === 'ERROR' || rawSummary.toLowerCase().includes('failed') || rawSummary.toLowerCase().includes('error:');
@@ -400,38 +532,34 @@ function renderPackageTableRow(p, { effectiveStatus, upstreamVersion, summary, c
   }
 
   const summaryTdHtml = isError
-    ? `<td style="font-size: 12px; line-height: 1.4; max-width: 340px;" title="${escapeHtml(rawSummary)}">
+    ? `<td style="font-size: 12px; line-height: 1.4; max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="${escapeHtml(rawSummary)}">
          <span class="badge badge-red" style="font-size: 9px; padding: 1px 5px; margin-right: 4px; vertical-align: middle;">ERROR</span>
          <span style="color: var(--accent-red); vertical-align: middle;">${escapeHtml(displaySummary)}</span>
        </td>`
-    : `<td style="font-size: 12px; color: var(--text-secondary); line-height: 1.4; max-width: 340px;" title="${escapeHtml(rawSummary)}">
+    : `<td style="font-size: 12px; color: var(--text-secondary); line-height: 1.4; max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="${escapeHtml(rawSummary)}">
          ${escapeHtml(displaySummary)}
        </td>`;
 
   const targetVer = (upstreamVersion && upstreamVersion !== '-') ? upstreamVersion : p.current_version;
   const actionsTdHtml = isSnoozedOrBlockedRow
-    ? `<td>
+    ? `<td style="text-align: right; white-space: nowrap;">
          <button class="btn btn-secondary" style="padding: 4px 10px; font-size: 11px; color: #22c55e; border-color: rgba(34, 197, 94, 0.4); display: inline-flex; align-items: center; gap: 4px;" onclick="triggerUnblock('${escapeHtml(p.package_id)}')" title="Unblock / Resume updates">
            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
            <span>Unblock</span>
          </button>
        </td>`
-    : `<td>
-         <div style="display: flex; align-items: center; gap: 4px;">
+    : `<td style="text-align: right; white-space: nowrap;">
+         <div style="display: inline-flex; align-items: center; justify-content: flex-end; gap: 4px; flex-wrap: nowrap;">
            ${candidate && candidate.pr_url ? `
-             <a href="${escapeHtml(candidate.pr_url)}" target="_blank" class="btn btn-secondary" style="padding: 3px 7px; font-size: 11px; color: #22c55e; border-color: rgba(34, 197, 94, 0.4); text-decoration: none; display: inline-flex; align-items: center; gap: 3px;" title="View PR">
+             <a href="${escapeHtml(candidate.pr_url)}" target="_blank" class="btn btn-secondary" style="padding: 3px 7px; font-size: 11px; color: #22c55e; border-color: rgba(34, 197, 94, 0.4); text-decoration: none; display: inline-flex; align-items: center; gap: 3px; flex-shrink: 0;" title="View PR">
                <span>PR #${escapeHtml(String(candidate.pr_url).split('/').pop())}</span>
              </a>
            ` : ''}
-           ${candidate && candidate.build_url ? `
-             <a href="${escapeHtml(candidate.build_url)}" target="_blank" class="btn btn-secondary" style="padding: 3px 7px; font-size: 11px; color: ${candidate.test_status === 'SUCCESS' ? '#22c55e' : (candidate.test_status === 'FAILURE' ? 'var(--accent-red)' : '#f59e0b')}; border-color: rgba(255, 255, 255, 0.15); text-decoration: none; display: inline-flex; align-items: center; gap: 3px;" title="View Cloud Build Test Log">
-               <span>Build Log</span>
-             </a>
-           ` : ''}
-           <button class="btn btn-secondary" style="padding: 4px 8px; font-size: 11px;" onclick="openSnoozeModal('${escapeHtml(p.package_id)}', '${escapeHtml(targetVer)}')" title="Snooze updates">
+           ${candidate ? renderTestPillHtml(candidate, true) : ''}
+           <button class="btn btn-secondary" style="padding: 4px 8px; font-size: 11px; flex-shrink: 0;" onclick="openSnoozeModal('${escapeHtml(p.package_id)}', '${escapeHtml(targetVer)}')" title="Snooze updates">
              <span>Snooze</span>
            </button>
-           <button class="btn btn-secondary" style="padding: 4px 8px; font-size: 11px; color: var(--accent-red); border-color: rgba(239, 68, 68, 0.3);" onclick="confirmBlockPackage('${escapeHtml(p.package_id)}', '${escapeHtml(targetVer)}')" title="Block updates">
+           <button class="btn btn-secondary" style="padding: 4px 8px; font-size: 11px; color: var(--accent-red); border-color: rgba(239, 68, 68, 0.3); flex-shrink: 0;" onclick="confirmBlockPackage('${escapeHtml(p.package_id)}', '${escapeHtml(targetVer)}')" title="Block updates">
              <span>Block</span>
            </button>
          </div>
@@ -447,7 +575,7 @@ function renderPackageTableRow(p, { effectiveStatus, upstreamVersion, summary, c
       <td><span class="badge ${badgeClass}">${statusLabel}</span></td>
       <td>${blueprintBtnHtml}</td>
       ${summaryTdHtml}
-      <td><a href="${escapeHtml(p.source_url)}" target="_blank" style="color: var(--accent-blue); text-decoration: none; font-size: 12px; word-break: break-all;">${escapeHtml(p.source_url)}</a></td>
+      <td style="max-width: 160px;"><a href="${escapeHtml(p.source_url)}" target="_blank" style="color: var(--accent-blue); text-decoration: none; font-size: 12px; display: inline-block; max-width: 150px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; vertical-align: middle;" title="${escapeHtml(p.source_url)}">${escapeHtml(p.source_url ? p.source_url.replace(/^https?:\/\//, '') : '')}</a></td>
       ${actionsTdHtml}
     </tr>
   `;
@@ -536,10 +664,18 @@ function renderInstances(instances) {
     const coupledDesc = coupled.length > 0 
       ? coupled.map(c => `<span class="code-pill" style="color: var(--accent-amber)">${escapeHtml(c.variable_name || '')} (${escapeHtml(c.pattern || '{filename}')})</span>`).join(', ')
       : '<span style="color: var(--text-muted)">Direct</span>';
+    const statusBadge = inst.enabled !== false
+      ? `<span class="badge badge-green" style="font-size: 10px; margin-left: 6px;">Active</span>`
+      : `<span class="badge badge-gray" style="font-size: 10px; margin-left: 6px; color: var(--text-muted); border-color: rgba(255,255,255,0.1);">Deselected</span>`;
 
     return `
       <tr>
-        <td><span class="code-pill">${escapeHtml(inst.instance_id)}</span></td>
+        <td>
+          <div style="display: flex; align-items: center; gap: 4px;">
+            <span class="code-pill">${escapeHtml(inst.instance_id)}</span>
+            ${statusBadge}
+          </div>
+        </td>
         <td><span class="code-pill">${escapeHtml(inst.package_id)}</span></td>
         <td><span class="code-pill" style="color: #58a6ff">${escapeHtml(inst.variable_name)}</span></td>
         <td>${coupledDesc}</td>
@@ -661,14 +797,40 @@ function escapeHtml(str) {
     .replace(/'/g, '&#039;');
 }
 
+let activeModalPackageId = null;
+
+function updateModalSelectionStats(packageId) {
+  const instances = (latestInstances || []).filter(inst => inst.package_id === packageId);
+  const totalCount = instances.length;
+  const selectedCount = instances.filter(inst => inst.enabled !== false).length;
+
+  const countBadge = document.getElementById('modal-selection-count-badge');
+  if (countBadge) {
+    let badgeClass = 'badge-green';
+    if (selectedCount === 0) badgeClass = 'badge-red';
+    else if (selectedCount < totalCount) badgeClass = 'badge-amber';
+    countBadge.className = `badge ${badgeClass}`;
+    countBadge.textContent = `${selectedCount}/${totalCount} Selected`;
+  }
+  const countEl = document.getElementById('modal-instance-count');
+  if (countEl) {
+    countEl.textContent = `${selectedCount} of ${totalCount} blueprint${totalCount === 1 ? '' : 's'} selected for automated PR updates`;
+  }
+}
+
 function openBlueprintModal(packageId) {
+  activeModalPackageId = packageId;
   const pkg = latestPackages.find(p => p.package_id === packageId) || { package_id: packageId, name: packageId };
   const instances = (latestInstances || []).filter(inst => inst.package_id === packageId);
+  const totalCount = instances.length;
+
+  const cand = (latestCandidates || []).find(c => c.package_id === packageId && c.status !== 'CANCELLED' && c.status !== 'SUPERSEDED');
+  const candTests = cand ? getCandidateTests(cand) : [];
 
   const titleEl = document.getElementById('modal-package-title');
   const subtitleEl = document.getElementById('modal-package-subtitle');
   const listEl = document.getElementById('modal-blueprint-list');
-  const countEl = document.getElementById('modal-instance-count');
+  const selBar = document.getElementById('modal-selection-bar');
 
   if (titleEl) {
     titleEl.textContent = `Associated Blueprints: ${pkg.package_id}`;
@@ -676,9 +838,11 @@ function openBlueprintModal(packageId) {
   if (subtitleEl) {
     subtitleEl.innerHTML = `<strong>${escapeHtml(pkg.name || pkg.package_id)}</strong> &bull; Current version: <code class="code-pill">${escapeHtml(pkg.current_version || '-')}</code>`;
   }
-  if (countEl) {
-    countEl.textContent = `${instances.length} blueprint instance${instances.length === 1 ? '' : 's'} configured`;
+  if (selBar) {
+    selBar.style.display = totalCount > 0 ? 'flex' : 'none';
   }
+
+  updateModalSelectionStats(packageId);
 
   if (!instances || instances.length === 0) {
     listEl.innerHTML = `
@@ -688,6 +852,7 @@ function openBlueprintModal(packageId) {
     `;
   } else {
     listEl.innerHTML = instances.map(inst => {
+      const isSelected = inst.enabled !== false;
       const coupled = Array.isArray(inst.coupled_vars) ? inst.coupled_vars : [];
       let coupledHtml = '';
       if (coupled.length > 0) {
@@ -716,17 +881,52 @@ function openBlueprintModal(packageId) {
         `;
       }
 
-      return `
-        <div class="blueprint-card">
-          <div class="blueprint-card-header">
-            <div class="blueprint-path-box">
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
-              <span>${escapeHtml(inst.blueprint_path)}</span>
+      let testInfoHtml = '';
+      if (candTests.length > 0) {
+        const matchingTest = candTests.find(t => {
+          return t.blueprint_path === inst.blueprint_path ||
+                 (Array.isArray(t.blueprint_paths) && t.blueprint_paths.includes(inst.blueprint_path)) ||
+                 (inst.blueprint_path && t.blueprint_path && (inst.blueprint_path.endsWith(t.blueprint_path) || t.blueprint_path.endsWith(inst.blueprint_path)));
+        });
+        if (matchingTest) {
+          const isPass = matchingTest.status === 'SUCCESS';
+          const isFail = ['FAILURE', 'ERROR', 'TIMEOUT'].includes(matchingTest.status);
+          const badgeCls = isPass ? 'badge-green' : (isFail ? 'badge-red' : 'badge-blue');
+          testInfoHtml = `
+            <div class="detail-row">
+              <span class="detail-label">Integration Test:</span>
+              <span class="code-pill">${escapeHtml(matchingTest.test_name)}</span>
+              <span class="badge ${badgeCls}" style="font-size: 10px;">${escapeHtml(matchingTest.status)}</span>
+              ${matchingTest.build_url ? `
+                <a href="${escapeHtml(matchingTest.build_url)}" target="_blank" style="color: var(--accent-blue); text-decoration: none; font-size: 11.5px; display: inline-flex; align-items: center; gap: 3px;" title="View Cloud Build log for this test">
+                  <span>View Log</span>
+                  <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
+                </a>
+              ` : ''}
             </div>
+          `;
+        }
+      }
+
+      return `
+        <div class="blueprint-card ${isSelected ? 'bp-card-selected' : 'bp-card-deselected'}" id="bp-card-${escapeHtml(inst.instance_id)}">
+          <div class="blueprint-card-header">
+            <label class="bp-checkbox-label" title="${isSelected ? 'Deselect blueprint to exclude from automated PR updates' : 'Select blueprint to include in automated PR updates'}">
+              <input type="checkbox"
+                     class="bp-toggle-checkbox"
+                     id="bp-check-${escapeHtml(inst.instance_id)}"
+                     ${isSelected ? 'checked' : ''}
+                     onchange="toggleBlueprintSelection('${escapeHtml(packageId)}', '${escapeHtml(inst.instance_id)}', this.checked)">
+              <span class="bp-toggle-text">${isSelected ? 'Included in PR Updates' : 'Excluded from Updates'}</span>
+            </label>
             <button class="btn-copy-path" onclick="copyBlueprintPath(this, '${escapeHtml(inst.blueprint_path)}')" title="Copy relative path to clipboard">
               <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
               <span>Copy</span>
             </button>
+          </div>
+          <div class="blueprint-path-box">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+            <span>${escapeHtml(inst.blueprint_path)}</span>
           </div>
           <div class="blueprint-card-details">
             <div class="detail-row">
@@ -738,6 +938,7 @@ function openBlueprintModal(packageId) {
               <span class="code-pill var-pill">${escapeHtml(inst.variable_name)}</span>
             </div>
             ${coupledHtml}
+            ${testInfoHtml}
           </div>
         </div>
       `;
@@ -751,10 +952,135 @@ function openBlueprintModal(packageId) {
   }
 }
 
+async function toggleBlueprintSelection(packageId, instanceId, isChecked) {
+  // 1. Optimistic in-memory update
+  const inst = (latestInstances || []).find(i => i.package_id === packageId && i.instance_id === instanceId);
+  if (inst) {
+    inst.enabled = isChecked;
+  }
+  const pkg = (latestPackages || []).find(p => p.package_id === packageId);
+  if (pkg && pkg.blueprints) {
+    const bp = pkg.blueprints.find(b => b.instance_id === instanceId);
+    if (bp) bp.enabled = isChecked;
+  }
+
+  // 2. Optimistic DOM update
+  const card = document.getElementById(`bp-card-${instanceId}`);
+  if (card) {
+    card.classList.toggle('bp-card-selected', isChecked);
+    card.classList.toggle('bp-card-deselected', !isChecked);
+    const txt = card.querySelector('.bp-toggle-text');
+    if (txt) {
+      txt.textContent = isChecked ? 'Included in PR Updates' : 'Excluded from Updates';
+    }
+  }
+
+  // 3. Update counter badges in modal, package table, and candidate cards
+  updateModalSelectionStats(packageId);
+  renderPackages(latestPackages);
+  renderCandidates(latestCandidates, latestPackages);
+
+  // 4. Send API action
+  try {
+    const res = await fetch('/api/action', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        action: 'toggle_blueprint',
+        package_id: packageId,
+        instance_id: instanceId,
+        enabled: isChecked
+      })
+    });
+    if (!res.ok) {
+      const err = await res.json();
+      throw new Error(err.error || err.message || 'Failed to save blueprint selection');
+    }
+  } catch (err) {
+    console.error('Error toggling blueprint selection:', err);
+    // Revert state on failure
+    if (inst) inst.enabled = !isChecked;
+    if (pkg && pkg.blueprints) {
+      const bp = pkg.blueprints.find(b => b.instance_id === instanceId);
+      if (bp) bp.enabled = !isChecked;
+    }
+    const chk = document.getElementById(`bp-check-${instanceId}`);
+    if (chk) chk.checked = !isChecked;
+    if (card) {
+      card.classList.toggle('bp-card-selected', !isChecked);
+      card.classList.toggle('bp-card-deselected', isChecked);
+      const txt = card.querySelector('.bp-toggle-text');
+      if (txt) txt.textContent = !isChecked ? 'Included in PR Updates' : 'Excluded from Updates';
+    }
+    updateModalSelectionStats(packageId);
+    renderPackages(latestPackages);
+    renderCandidates(latestCandidates, latestPackages);
+    alert(`Failed to save blueprint selection: ${err.message}`);
+  }
+}
+
+async function bulkToggleModalBlueprints(shouldSelectAll) {
+  if (!activeModalPackageId) return;
+  const packageId = activeModalPackageId;
+
+  // 1. Optimistic in-memory update
+  (latestInstances || []).forEach(inst => {
+    if (inst.package_id === packageId) {
+      inst.enabled = shouldSelectAll;
+    }
+  });
+  const pkg = (latestPackages || []).find(p => p.package_id === packageId);
+  if (pkg && pkg.blueprints) {
+    pkg.blueprints.forEach(bp => { bp.enabled = shouldSelectAll; });
+  }
+
+  // 2. Optimistic DOM update for all cards in modal
+  const instances = (latestInstances || []).filter(i => i.package_id === packageId);
+  instances.forEach(inst => {
+    const card = document.getElementById(`bp-card-${inst.instance_id}`);
+    if (card) {
+      card.classList.toggle('bp-card-selected', shouldSelectAll);
+      card.classList.toggle('bp-card-deselected', !shouldSelectAll);
+      const txt = card.querySelector('.bp-toggle-text');
+      if (txt) {
+        txt.textContent = shouldSelectAll ? 'Included in PR Updates' : 'Excluded from Updates';
+      }
+    }
+    const chk = document.getElementById(`bp-check-${inst.instance_id}`);
+    if (chk) chk.checked = shouldSelectAll;
+  });
+
+  // 3. Update counter badges in modal, package table, and candidate cards
+  updateModalSelectionStats(packageId);
+  renderPackages(latestPackages);
+  renderCandidates(latestCandidates, latestPackages);
+
+  // 4. Send API action
+  try {
+    const res = await fetch('/api/action', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        action: shouldSelectAll ? 'select_all_blueprints' : 'deselect_all_blueprints',
+        package_id: packageId
+      })
+    });
+    if (!res.ok) {
+      const err = await res.json();
+      throw new Error(err.error || err.message || 'Failed to save bulk selection');
+    }
+  } catch (err) {
+    console.error('Error bulk updating blueprint selection:', err);
+    alert(`Failed to save bulk selection: ${err.message}`);
+    openBlueprintModal(packageId);
+  }
+}
+
 function closeBlueprintModal(event) {
   if (event && event.target && event.target.id !== 'blueprint-modal' && !event.target.classList.contains('modal-close-btn') && !event.target.closest('.modal-close-btn') && event.target.tagName !== 'BUTTON') {
     return;
   }
+  activeModalPackageId = null;
   const modal = document.getElementById('blueprint-modal');
   if (modal) {
     modal.classList.remove('active');
@@ -890,6 +1216,192 @@ async function triggerUnblock(packageId) {
   }
 }
 
+let activeTestModalCandidateId = null;
+
+function openTestResultsModal(candidateId, event) {
+  if (event) {
+    event.stopPropagation();
+    event.preventDefault();
+  }
+
+  activeTestModalCandidateId = candidateId;
+  const cand = (latestCandidates || []).find(c => c.candidate_id === candidateId);
+  if (!cand) {
+    console.warn(`Candidate not found for id: ${candidateId}`);
+    return;
+  }
+
+  const pkg = (latestPackages || []).find(p => p.package_id === cand.package_id) || { package_id: cand.package_id, name: cand.package_id };
+  const tests = getCandidateTests(cand);
+
+  const titleEl = document.getElementById('test-modal-title');
+  const subtitleEl = document.getElementById('test-modal-subtitle');
+  const listEl = document.getElementById('test-modal-list');
+  const prLinkBox = document.getElementById('test-modal-pr-link-box');
+
+  const summaryChip = document.getElementById('test-chip-summary');
+  const passedChip = document.getElementById('test-chip-passed');
+  const failedChip = document.getElementById('test-chip-failed');
+  const runningChip = document.getElementById('test-chip-running');
+
+  if (titleEl) {
+    titleEl.textContent = `Test Matrix: ${pkg.name || cand.package_id}`;
+  }
+  if (subtitleEl) {
+    const prPart = cand.pr_url ? ` &bull; Pull Request #${escapeHtml(String(cand.pr_url).split('/').pop())}` : '';
+    subtitleEl.innerHTML = `Candidate <code class="code-pill">${escapeHtml(cand.version || '-')}</code> &bull; Package: <code class="code-pill">${escapeHtml(cand.package_id)}</code>${prPart}`;
+  }
+
+  const total = tests.length;
+  const passed = tests.filter(t => t.status === 'SUCCESS').length;
+  const failed = tests.filter(t => ['FAILURE', 'ERROR', 'TIMEOUT'].includes(t.status)).length;
+  const running = tests.filter(t => ['RUNNING', 'TRIGGERED', 'PENDING', 'QUEUED'].includes(t.status)).length;
+
+  if (summaryChip) {
+    summaryChip.textContent = cand.tests_summary || `${passed}/${total} Tests Passed`;
+    if (failed > 0) {
+      summaryChip.style.background = 'rgba(239, 68, 68, 0.2)';
+      summaryChip.style.color = '#f87171';
+    } else if (running > 0) {
+      summaryChip.style.background = 'rgba(59, 130, 246, 0.2)';
+      summaryChip.style.color = '#60a5fa';
+    } else {
+      summaryChip.style.background = 'rgba(34, 197, 94, 0.2)';
+      summaryChip.style.color = '#4ade80';
+    }
+  }
+
+  if (passedChip) passedChip.textContent = `✓ ${passed} Passed`;
+  if (failedChip) {
+    failedChip.textContent = `✗ ${failed} Failed`;
+    failedChip.style.display = failed > 0 ? 'inline-flex' : 'none';
+  }
+  if (runningChip) {
+    runningChip.textContent = `⟳ ${running} Running`;
+    runningChip.style.display = running > 0 ? 'inline-flex' : 'none';
+  }
+
+  if (prLinkBox) {
+    if (cand.pr_url) {
+      prLinkBox.innerHTML = `
+        <a href="${escapeHtml(cand.pr_url)}" target="_blank" class="btn btn-secondary btn-sm" style="color: #22c55e; border-color: rgba(34, 197, 94, 0.4); text-decoration: none; display: inline-flex; align-items: center; gap: 6px;">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="18" cy="18" r="3"/><circle cx="6" cy="6" r="3"/><path d="M13 6h3a2 2 0 0 1 2 2v7"/><line x1="6" y1="9" x2="21"/></svg>
+          <span>View GitHub PR #${escapeHtml(String(cand.pr_url).split('/').pop())}</span>
+          <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
+        </a>
+      `;
+    } else {
+      prLinkBox.innerHTML = '';
+    }
+  }
+
+  if (listEl) {
+    if (tests.length === 0) {
+      listEl.innerHTML = `
+        <div style="text-align: center; padding: 36px 20px; color: var(--text-muted);">
+          No integration tests mapped or executed for this candidate update yet.
+        </div>
+      `;
+    } else {
+      listEl.innerHTML = tests.map(t => {
+        const isSuccess = t.status === 'SUCCESS';
+        const isFailure = ['FAILURE', 'ERROR', 'TIMEOUT'].includes(t.status);
+
+        let cardClass = 'test-status-running';
+        let badgeClass = 'badge-blue';
+        let statusLabel = t.status || 'RUNNING';
+
+        if (isSuccess) {
+          cardClass = 'test-status-success';
+          badgeClass = 'badge-green';
+          statusLabel = 'PASSED';
+        } else if (isFailure) {
+          cardClass = 'test-status-failure';
+          badgeClass = 'badge-red';
+          statusLabel = t.status === 'TIMEOUT' ? 'TIMEOUT' : 'FAILED';
+        }
+
+        const bps = Array.isArray(t.blueprint_paths) && t.blueprint_paths.length > 0 ? t.blueprint_paths : (t.blueprint_path ? [t.blueprint_path] : []);
+        const bpDisplay = bps.length > 0 
+          ? bps.map(b => `<div class="test-blueprint-path">&bull; ${escapeHtml(b)}</div>`).join('')
+          : `<span style="color: var(--text-muted); font-size: 11.5px;">Cluster Toolkit test harness</span>`;
+
+        return `
+          <div class="test-item-card ${cardClass}">
+            <div class="test-item-header">
+              <div class="test-name-box">
+                <span class="test-title">${escapeHtml(t.test_name)}</span>
+                <span class="code-pill" style="font-size: 11px; color: var(--text-secondary);">${escapeHtml(t.trigger_name || `PR-test-${t.test_name}`)}</span>
+              </div>
+              <span class="badge ${badgeClass}" style="font-weight: 700; letter-spacing: 0.5px;">${escapeHtml(statusLabel)}</span>
+            </div>
+
+            <div class="test-item-details">
+              <div class="test-blueprint-row">
+                <span style="min-width: 95px; font-weight: 500; color: var(--text-muted);">Blueprint(s):</span>
+                <div style="display: flex; flex-direction: column; gap: 2px;">${bpDisplay}</div>
+              </div>
+
+              ${t.build_id ? `
+                <div class="test-blueprint-row">
+                  <span style="min-width: 95px; font-weight: 500; color: var(--text-muted);">Cloud Build ID:</span>
+                  <span class="code-pill" style="font-size: 11px;">${escapeHtml(t.build_id)}</span>
+                </div>
+              ` : ''}
+
+              ${t.failure_reason ? `
+                <div class="test-blueprint-row" style="color: var(--accent-red);">
+                  <span style="min-width: 95px; font-weight: 600;">Failure Reason:</span>
+                  <span>${escapeHtml(t.failure_reason)}</span>
+                </div>
+              ` : ''}
+            </div>
+
+            <div class="test-item-actions">
+              ${t.build_url ? `
+                <a href="${escapeHtml(t.build_url)}" target="_blank" class="btn-test-log-link" title="Open Cloud Build Console execution log">
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+                  <span>View Cloud Build Log</span>
+                  <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
+                </a>
+              ` : `
+                <span style="font-size: 11.5px; color: var(--text-muted); font-style: italic;">Log will be available once triggered</span>
+              `}
+            </div>
+          </div>
+        `;
+      }).join('');
+    }
+  }
+
+  const modal = document.getElementById('test-results-modal');
+  if (modal) {
+    modal.classList.add('active');
+    document.body.style.overflow = 'hidden';
+  }
+}
+
+function closeTestResultsModal(event) {
+  if (event && event.target && event.target.id !== 'test-results-modal' && !event.target.classList.contains('modal-close-btn') && !event.target.closest('.modal-close-btn') && event.target.tagName !== 'BUTTON') {
+    return;
+  }
+  activeTestModalCandidateId = null;
+  const modal = document.getElementById('test-results-modal');
+  if (modal) {
+    modal.classList.remove('active');
+    document.body.style.overflow = '';
+  }
+}
+
+function rerunTestsFromModal() {
+  if (!activeTestModalCandidateId) return;
+  const cand = (latestCandidates || []).find(c => c.candidate_id === activeTestModalCandidateId);
+  if (!cand) return;
+  const pkgId = cand.package_id;
+  closeTestResultsModal();
+  triggerAction('test', pkgId);
+}
+
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') {
     const bpModal = document.getElementById('blueprint-modal');
@@ -900,11 +1412,34 @@ document.addEventListener('keydown', (e) => {
     if (snzModal && snzModal.classList.contains('active')) {
       closeSnoozeModal();
     }
+    const testModal = document.getElementById('test-results-modal');
+    if (testModal && testModal.classList.contains('active')) {
+      closeTestResultsModal();
+    }
   }
 });
 
+function restoreCachedStats() {
+  try {
+    const raw = localStorage.getItem('infra_updater_stats');
+    if (!raw) return;
+    const stats = JSON.parse(raw);
+    const elPkg = document.getElementById('metric-packages');
+    if (elPkg && stats.total_packages !== undefined) elPkg.textContent = stats.total_packages;
+    const elInst = document.getElementById('metric-instances');
+    if (elInst && stats.total_instances !== undefined) elInst.textContent = stats.total_instances;
+    const elRules = document.getElementById('metric-rules');
+    if (elRules && stats.total_rules !== undefined) elRules.textContent = stats.total_rules;
+    const elCand = document.getElementById('metric-candidates');
+    if (elCand && stats.pending_updates !== undefined) elCand.textContent = stats.pending_updates;
+    const counterEl = document.getElementById('counter-candidates');
+    if (counterEl && stats.pending_updates !== undefined) counterEl.textContent = stats.pending_updates;
+  } catch (e) {}
+}
+
 // Initial setup
 document.addEventListener('DOMContentLoaded', () => {
+  restoreCachedStats();
   fetchState();
   setInterval(fetchState, 3000);
 });

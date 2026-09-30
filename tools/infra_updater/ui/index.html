@@ -18,7 +18,7 @@
           <span class="logo-badge">CLUSTER TOOLKIT</span>
           <span class="repo-badge" id="repo-badge" style="font-family: 'JetBrains Mono', monospace; font-size: 11px; padding: 2px 8px; border-radius: 4px; background: rgba(59, 130, 246, 0.12); color: #60a5fa; border: 1px solid rgba(59, 130, 246, 0.3);">
             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align: -2px; margin-right: 4px;"><path d="M9 19c-5 1.5-5-2.5-7-3m14 6v-3.87a3.37 3.37 0 0 0-.94-2.61c3.14-.35 6.44-1.54 6.44-7A5.44 5.44 0 0 0 20 4.77 5.07 5.07 0 0 0 19.91 1S18.73.65 16 2.48a13.38 13.38 0 0 0-7 0C6.27.65 5.09 1 5.09 1A5.07 5.07 0 0 0 5 4.77a5.44 5.44 0 0 0-1.5 3.78c0 5.42 3.3 6.61 6.44 7A3.37 3.37 0 0 0 9 18.13V22"/></svg>
-            <span id="repo-badge-text">GoogleCloudPlatform/cluster-toolkit (develop)</span>
+            <span id="repo-badge-text">rahimkhan19/cluster-toolkit (develop)</span>
           </span>
         </div>
         <h1 class="brand-title">Automated Dependency Management</h1>
@@ -51,31 +51,47 @@
       <section class="metrics-strip">
         <div class="metric-card">
           <div class="metric-label">Monitored Dependencies</div>
-          <div class="metric-value" id="metric-packages">8</div>
+          <div class="metric-value" id="metric-packages">-</div>
           <div class="metric-sub">Canonical packages tracked</div>
         </div>
         <div class="metric-card">
           <div class="metric-label">Blueprint Targets</div>
-          <div class="metric-value" id="metric-instances">10</div>
+          <div class="metric-value" id="metric-instances">-</div>
           <div class="metric-sub">Variable bindings synchronized</div>
         </div>
         <div class="metric-card">
           <div class="metric-label">Policy Rules</div>
-          <div class="metric-value" id="metric-rules">2</div>
+          <div class="metric-value" id="metric-rules">-</div>
           <div class="metric-sub">Pre-execution constraints</div>
         </div>
         <div class="metric-card">
           <div class="metric-label">Pending Updates</div>
-          <div class="metric-value" id="metric-candidates">0</div>
+          <div class="metric-value" id="metric-candidates">-</div>
           <div class="metric-sub" id="metric-candidates-sub">Qualified &amp; ready for review</div>
         </div>
       </section>
+      <script>
+        try {
+          const _cached = localStorage.getItem('infra_updater_stats');
+          if (_cached) {
+            const _s = JSON.parse(_cached);
+            if (_s.total_packages !== undefined) document.getElementById('metric-packages').textContent = _s.total_packages;
+            if (_s.total_instances !== undefined) document.getElementById('metric-instances').textContent = _s.total_instances;
+            if (_s.total_rules !== undefined) document.getElementById('metric-rules').textContent = _s.total_rules;
+            if (_s.pending_updates !== undefined) {
+              document.getElementById('metric-candidates').textContent = _s.pending_updates;
+              const _ce = document.getElementById('counter-candidates');
+              if (_ce) _ce.textContent = _s.pending_updates;
+            }
+          }
+        } catch (e) {}
+      </script>
 
       <!-- Tabs Navigation -->
       <nav class="tabs-header">
         <button class="tab-btn active" onclick="switchTab('tab-candidates', this)">
           Available Updates
-          <span class="tab-counter" id="counter-candidates">0</span>
+          <span class="tab-counter" id="counter-candidates">-</span>
         </button>
         <button class="tab-btn" onclick="switchTab('tab-packages', this)">Dependency Registry</button>
         <button class="tab-btn" onclick="switchTab('tab-instances', this)">Blueprint Instances</button>
@@ -121,23 +137,25 @@
               <div class="card-subtitle">Canonical packages tracked across repository blueprints (table: <code>packages</code>)</div>
             </div>
           </div>
-          <table class="data-table">
-            <thead>
-              <tr>
-                <th>Package ID</th>
-                <th>Name</th>
-                <th>Current Version</th>
-                <th>Latest Upstream</th>
-                <th>Source Type</th>
-                <th>Status</th>
-                <th>Blueprints</th>
-                <th>Qualification Summary &amp; Rationale</th>
-                <th>Upstream Source</th>
-                <th>Actions</th>
-              </tr>
-            </thead>
-            <tbody id="packages-table-body"></tbody>
-          </table>
+          <div class="table-responsive">
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th>Package ID</th>
+                  <th>Name</th>
+                  <th>Current Version</th>
+                  <th>Latest Upstream</th>
+                  <th>Source Type</th>
+                  <th>Status</th>
+                  <th>Blueprints</th>
+                  <th>Qualification Summary &amp; Rationale</th>
+                  <th>Upstream Source</th>
+                  <th style="text-align: right; min-width: 220px;">Actions</th>
+                </tr>
+              </thead>
+              <tbody id="packages-table-body"></tbody>
+            </table>
+          </div>
         </div>
       </section>
 
@@ -150,18 +168,20 @@
               <div class="card-subtitle">Blueprint variable bindings and coupled sibling synchronizations (table: <code>blueprint_instances</code>)</div>
             </div>
           </div>
-          <table class="data-table">
-            <thead>
-              <tr>
-                <th>Instance ID</th>
-                <th>Package ID</th>
-                <th>Primary Variable</th>
-                <th>Coupled Variable Rules</th>
-                <th>Target Blueprint File</th>
-              </tr>
-            </thead>
-            <tbody id="instances-table-body"></tbody>
-          </table>
+          <div class="table-responsive">
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th>Instance ID</th>
+                  <th>Package ID</th>
+                  <th>Primary Variable</th>
+                  <th>Coupled Variable Rules</th>
+                  <th>Target Blueprint File</th>
+                </tr>
+              </thead>
+              <tbody id="instances-table-body"></tbody>
+            </table>
+          </div>
         </div>
       </section>
 
@@ -175,19 +195,21 @@
             </div>
             <button class="btn btn-secondary" onclick="triggerAction('test_rule_blocking')">Run Policy Evaluation</button>
           </div>
-          <table class="data-table">
-            <thead>
-              <tr>
-                <th>Rule ID</th>
-                <th>Package ID</th>
-                <th>Constraint Type</th>
-                <th>Version Constraint</th>
-                <th>Action</th>
-                <th>Diagnostic Rationale</th>
-              </tr>
-            </thead>
-            <tbody id="rules-table-body"></tbody>
-          </table>
+          <div class="table-responsive">
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th>Rule ID</th>
+                  <th>Package ID</th>
+                  <th>Constraint Type</th>
+                  <th>Version Constraint</th>
+                  <th>Action</th>
+                  <th>Diagnostic Rationale</th>
+                </tr>
+              </thead>
+              <tbody id="rules-table-body"></tbody>
+            </table>
+          </div>
         </div>
       </section>
 
@@ -274,12 +296,31 @@
         </div>
         <button class="modal-close-btn" onclick="closeBlueprintModal()" title="Close (Esc)">✕</button>
       </div>
+      <div class="modal-selection-bar" id="modal-selection-bar">
+        <div class="selection-status-box">
+          <div class="selection-status-title">
+            <span id="modal-selection-count-badge" class="badge badge-green">0/0 Selected</span>
+            <span class="selection-title-label">Target Blueprints for Automated PRs</span>
+          </div>
+          <div class="selection-status-hint">Deselected blueprints are remembered and excluded from PR creation &amp; testing.</div>
+        </div>
+        <div class="selection-actions">
+          <button class="btn btn-secondary btn-sm" id="btn-modal-select-all" onclick="bulkToggleModalBlueprints(true)" title="Select all blueprints for this package">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>
+            <span>Select All</span>
+          </button>
+          <button class="btn btn-secondary btn-sm" id="btn-modal-deselect-all" onclick="bulkToggleModalBlueprints(false)" title="Deselect all blueprints for this package">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+            <span>Deselect All</span>
+          </button>
+        </div>
+      </div>
       <div class="modal-body" id="modal-blueprint-list">
         <!-- Blueprint cards injected by JavaScript -->
       </div>
       <div class="modal-footer">
         <span id="modal-instance-count" style="font-size: 12px; color: var(--text-muted);"></span>
-        <button class="btn btn-secondary" onclick="closeBlueprintModal()">Close</button>
+        <button class="btn btn-secondary" onclick="closeBlueprintModal()">Done</button>
       </div>
     </div>
   </div>
@@ -335,6 +376,55 @@
     </div>
   </div>
 
-  <script src="app.js?v=2026092901"></script>
+  <!-- Multi-Blueprint Integration Test Results Modal -->
+  <div id="test-results-modal" class="modal-overlay" onclick="closeTestResultsModal(event)">
+    <div class="modal-card test-modal-card" onclick="event.stopPropagation()">
+      <div class="modal-header">
+        <div class="modal-title-group">
+          <div class="modal-title">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>
+            </svg>
+            <span id="test-modal-title">Integration Test Results</span>
+          </div>
+          <div class="modal-subtitle" id="test-modal-subtitle">Cloud Build validation matrix across associated blueprints</div>
+        </div>
+        <button class="modal-close-btn" onclick="closeTestResultsModal()" title="Close (Esc)">✕</button>
+      </div>
+
+      <!-- KPI Bar with Summary Chips -->
+      <div class="test-kpi-bar" id="test-modal-kpi-bar">
+        <div class="test-kpi-group">
+          <span class="test-chip-pill" id="test-chip-summary">0/0 Passed</span>
+          <span class="test-chip-stat chip-stat-passed" id="test-chip-passed">✓ 0 Passed</span>
+          <span class="test-chip-stat chip-stat-failed" id="test-chip-failed">✗ 0 Failed</span>
+          <span class="test-chip-stat chip-stat-running" id="test-chip-running">⟳ 0 Running</span>
+        </div>
+        <div class="test-kpi-links" id="test-modal-pr-link-box">
+          <!-- Dynamic PR link injected here -->
+        </div>
+      </div>
+
+      <!-- Test Matrix List -->
+      <div class="modal-body test-modal-body" id="test-modal-list">
+        <!-- Rendered test items injected by JavaScript -->
+      </div>
+
+      <div class="modal-footer">
+        <div class="test-modal-footer-info" id="test-modal-project-info">
+          <span>Target Project: <code class="code-pill">hpc-toolkit-dev</code></span>
+        </div>
+        <div style="display: flex; gap: 8px;">
+          <button class="btn btn-secondary" id="test-modal-rerun-btn" onclick="rerunTestsFromModal()" style="display: inline-flex; align-items: center; gap: 6px;">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
+            <span>Re-run Tests</span>
+          </button>
+          <button class="btn btn-secondary" onclick="closeTestResultsModal()">Close</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="app.js?v=2026093002"></script>
 </body>
 </html>

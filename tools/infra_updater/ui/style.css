@@ -392,6 +392,12 @@ body {
   margin-top: 2px;
 }
 
+.table-responsive {
+  width: 100%;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
 .data-table {
   width: 100%;
   border-collapse: collapse;
@@ -495,11 +501,14 @@ body {
   background: var(--bg-surface);
   border: 1px solid var(--border-color);
   border-radius: 8px;
-  padding: 20px 24px;
+  padding: 18px 22px;
   display: flex;
   flex-direction: column;
   gap: 14px;
   transition: all 0.2s ease;
+  overflow: hidden;
+  max-width: 100%;
+  box-sizing: border-box;
 }
 
 .candidate-card:hover {
@@ -511,8 +520,10 @@ body {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  gap: 16px;
+  gap: 12px;
   flex-wrap: wrap;
+  width: 100%;
+  box-sizing: border-box;
 }
 
 .candidate-title-group {
@@ -520,6 +531,8 @@ body {
   align-items: center;
   gap: 10px;
   flex-wrap: wrap;
+  flex: 1 1 auto;
+  min-width: 240px;
 }
 
 .candidate-name {
@@ -532,8 +545,23 @@ body {
 .candidate-action-group {
   display: flex;
   align-items: center;
-  gap: 10px;
-  flex-shrink: 0;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  flex: 1 1 auto;
+  max-width: 100%;
+}
+
+@media (max-width: 1120px) {
+  .candidate-header {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 12px;
+  }
+  .candidate-action-group {
+    width: 100%;
+    justify-content: flex-start;
+  }
 }
 
 /* Version Transition Banner */
@@ -711,6 +739,42 @@ body {
   flex-shrink: 0;
 }
 
+.btn-blueprint-pill.pill-all-selected {
+  background: rgba(34, 197, 94, 0.1);
+  border: 1px solid rgba(34, 197, 94, 0.35);
+  color: #4ade80;
+}
+
+.btn-blueprint-pill.pill-all-selected:hover {
+  background: rgba(34, 197, 94, 0.2);
+  border-color: rgba(34, 197, 94, 0.6);
+  color: #86efac;
+}
+
+.btn-blueprint-pill.pill-partial-selected {
+  background: rgba(245, 158, 11, 0.12);
+  border: 1px solid rgba(245, 158, 11, 0.4);
+  color: #fbbf24;
+}
+
+.btn-blueprint-pill.pill-partial-selected:hover {
+  background: rgba(245, 158, 11, 0.22);
+  border-color: rgba(245, 158, 11, 0.65);
+  color: #fde68a;
+}
+
+.btn-blueprint-pill.pill-none-selected {
+  background: rgba(239, 68, 68, 0.1);
+  border: 1px solid rgba(239, 68, 68, 0.35);
+  color: #f87171;
+}
+
+.btn-blueprint-pill.pill-none-selected:hover {
+  background: rgba(239, 68, 68, 0.2);
+  border-color: rgba(239, 68, 68, 0.6);
+  color: #fca5a5;
+}
+
 /* Subtle Text Link Button */
 .btn-text-link {
   background: none;
@@ -837,6 +901,48 @@ body {
   background: var(--bg-surface);
 }
 
+/* Modal Selection Toolbar */
+.modal-selection-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 12px 22px;
+  background: rgba(15, 23, 42, 0.65);
+  border-bottom: 1px solid var(--border-color);
+  flex-wrap: wrap;
+}
+
+.selection-status-box {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.selection-status-title {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+
+.selection-title-label {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.selection-status-hint {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.selection-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* Blueprint Card Selection & Checkbox States */
 .blueprint-card {
   background: var(--bg-surface-elevated);
   border: 1px solid var(--border-color);
@@ -845,7 +951,86 @@ body {
   display: flex;
   flex-direction: column;
   gap: 10px;
-  transition: border-color 0.15s ease;
+  transition: all 0.2s ease;
+}
+
+.bp-card-selected {
+  border-color: rgba(56, 139, 253, 0.35);
+  background: var(--bg-surface-elevated);
+}
+
+.bp-card-deselected {
+  opacity: 0.6;
+  border-color: rgba(255, 255, 255, 0.06);
+  background: rgba(15, 23, 42, 0.4);
+}
+
+.bp-card-deselected:hover {
+  opacity: 0.85;
+  border-color: rgba(255, 255, 255, 0.15);
+}
+
+.bp-checkbox-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  user-select: none;
+  font-size: 12px;
+}
+
+.bp-toggle-checkbox {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 17px;
+  height: 17px;
+  border: 1.5px solid rgba(255, 255, 255, 0.35);
+  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.3);
+  cursor: pointer;
+  position: relative;
+  outline: none;
+  transition: all 0.15s ease;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.bp-toggle-checkbox:hover {
+  border-color: var(--accent-blue);
+  box-shadow: 0 0 0 2px rgba(56, 139, 253, 0.2);
+}
+
+.bp-toggle-checkbox:checked {
+  background: #2563eb;
+  border-color: #3b82f6;
+}
+
+.bp-toggle-checkbox:checked::after {
+  content: '';
+  width: 4px;
+  height: 8px;
+  border: solid white;
+  border-width: 0 2px 2px 0;
+  transform: rotate(45deg);
+  position: absolute;
+  top: 1.5px;
+}
+
+.bp-toggle-text {
+  font-size: 12px;
+  font-weight: 500;
+  transition: color 0.15s ease;
+}
+
+.bp-card-selected .bp-toggle-text {
+  color: #79c0ff;
+  font-weight: 600;
+}
+
+.bp-card-deselected .bp-toggle-text {
+  color: var(--text-muted);
 }
 
 .blueprint-card:hover {
@@ -976,5 +1161,261 @@ body {
   display: flex;
   align-items: center;
   justify-content: space-between;
+}
+
+/* ==============================================================================
+   Multi-Blueprint Integration Test Pills & Modal
+   ============================================================================== */
+
+.btn-test-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-family: var(--font-sans);
+  font-size: 11.5px;
+  font-weight: 600;
+  padding: 3px 9px;
+  border-radius: 12px;
+  border: 1px solid transparent;
+  cursor: pointer;
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text-secondary);
+  transition: all 0.2s ease;
+  line-height: 1.4;
+  white-space: nowrap;
+}
+
+.btn-test-pill:hover {
+  transform: translateY(-1px);
+}
+
+.btn-test-pill.btn-test-pill-sm {
+  padding: 2px 7px;
+  font-size: 11px;
+}
+
+.test-pill-all-passed {
+  background: rgba(34, 197, 94, 0.12) !important;
+  color: #4ade80 !important;
+  border-color: rgba(34, 197, 94, 0.4) !important;
+}
+
+.test-pill-all-passed:hover {
+  background: rgba(34, 197, 94, 0.22) !important;
+  border-color: #22c55e !important;
+  box-shadow: 0 0 10px rgba(34, 197, 94, 0.2);
+}
+
+.test-pill-partial-failed {
+  background: rgba(239, 68, 68, 0.14) !important;
+  color: #f87171 !important;
+  border-color: rgba(239, 68, 68, 0.45) !important;
+}
+
+.test-pill-partial-failed:hover {
+  background: rgba(239, 68, 68, 0.25) !important;
+  border-color: #ef4444 !important;
+  box-shadow: 0 0 10px rgba(239, 68, 68, 0.25);
+}
+
+.test-pill-running {
+  background: rgba(59, 130, 246, 0.14) !important;
+  color: #60a5fa !important;
+  border-color: rgba(59, 130, 246, 0.45) !important;
+  animation: pulse-border 2s infinite ease-in-out;
+}
+
+.test-pill-running:hover {
+  background: rgba(59, 130, 246, 0.24) !important;
+  border-color: #3b82f6 !important;
+}
+
+@keyframes pulse-border {
+  0% { box-shadow: 0 0 0 0 rgba(59, 130, 246, 0.4); }
+  70% { box-shadow: 0 0 0 6px rgba(59, 130, 246, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(59, 130, 246, 0); }
+}
+
+.test-modal-card {
+  max-width: 780px !important;
+  width: 92vw !important;
+}
+
+.test-kpi-bar {
+  background: rgba(22, 27, 34, 0.85);
+  border-bottom: 1px solid var(--border-color);
+  padding: 12px 20px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.test-kpi-group {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.test-chip-pill {
+  font-size: 13px;
+  font-weight: 700;
+  padding: 4px 10px;
+  border-radius: 6px;
+  font-family: var(--font-sans);
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text-primary);
+}
+
+.test-chip-stat {
+  font-size: 11.5px;
+  font-weight: 600;
+  padding: 3px 8px;
+  border-radius: 6px;
+  border: 1px solid transparent;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.chip-stat-passed {
+  color: #4ade80;
+  background: rgba(34, 197, 94, 0.1);
+  border-color: rgba(34, 197, 94, 0.3);
+}
+
+.chip-stat-failed {
+  color: #f87171;
+  background: rgba(239, 68, 68, 0.1);
+  border-color: rgba(239, 68, 68, 0.3);
+}
+
+.chip-stat-running {
+  color: #60a5fa;
+  background: rgba(59, 130, 246, 0.1);
+  border-color: rgba(59, 130, 246, 0.3);
+}
+
+.test-modal-body {
+  max-height: 60vh;
+  overflow-y: auto;
+  padding: 16px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.test-item-card {
+  background: rgba(22, 27, 34, 0.6);
+  border: 1px solid var(--border-color);
+  border-left: 4px solid var(--border-color);
+  border-radius: 8px;
+  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  transition: all 0.2s ease;
+}
+
+.test-item-card:hover {
+  background: rgba(30, 36, 46, 0.8);
+  border-color: rgba(255, 255, 255, 0.18);
+}
+
+.test-item-card.test-status-success {
+  border-left-color: #22c55e;
+}
+
+.test-item-card.test-status-failure {
+  border-left-color: #ef4444;
+  background: rgba(239, 68, 68, 0.05);
+}
+
+.test-item-card.test-status-running {
+  border-left-color: #3b82f6;
+  background: rgba(59, 130, 246, 0.05);
+}
+
+.test-item-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.test-name-box {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.test-title {
+  font-weight: 600;
+  font-size: 13.5px;
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+}
+
+.test-item-details {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 12px;
+}
+
+.test-blueprint-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  color: var(--text-secondary);
+}
+
+.test-blueprint-path {
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  color: var(--text-secondary);
+  word-break: break-all;
+}
+
+.test-item-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.btn-test-log-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 12px;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 500;
+  text-decoration: none;
+  border: 1px solid var(--border-color);
+  color: var(--text-primary);
+  background: rgba(255, 255, 255, 0.05);
+  transition: all 0.2s;
+}
+
+.btn-test-log-link:hover {
+  background: rgba(255, 255, 255, 0.12);
+  border-color: rgba(255, 255, 255, 0.25);
+  color: #fff;
+}
+
+.blueprint-test-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  padding: 2px 7px;
+  border-radius: 4px;
+  font-weight: 500;
 }
 

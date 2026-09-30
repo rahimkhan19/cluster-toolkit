@@ -135,7 +135,10 @@ def run_apply(package_id: str, create_pr: bool = True, wait_for_test: bool = Tru
         wait_for_test=wait_for_test
     )
 
-    if res["status"] != "SUCCESS":
+    if res.get("status") == "SKIPPED":
+        print(f"{YELLOW}[SKIPPED] {res.get('message')}{RESET}")
+        return
+    elif res.get("status") != "SUCCESS":
         print(f"{RED}[ERROR] {res.get('message')}{RESET}")
         return
 
@@ -172,36 +175,45 @@ def run_test(package_id: str, wait: bool = True):
     agent = OrchestratorAgent(store=store)
     res = agent.trigger_candidate_test(cand["candidate_id"], wait_for_test=wait)
     if res.get("status") == "SUCCESS":
-        print(f"{GREEN}[SUCCESS] Test triggered successfully!{RESET}")
-        if res.get("build_url"):
+        print(f"{GREEN}[SUCCESS] Tests triggered successfully!{RESET}")
+        if res.get("tests_summary"):
+            print(f"Summary: {BOLD}{res['tests_summary']}{RESET}")
+        if res.get("tests"):
+            print(f"\n{BOLD}Test Suite Breakdown:{RESET}")
+            for t in res["tests"]:
+                t_status = t.get("status", "UNKNOWN")
+                col = GREEN if t_status == "SUCCESS" else (RED if t_status in ("FAILURE", "ERROR") else YELLOW)
+                print(f"  * {BOLD}{t.get('test_name')}{RESET}: {col}{t_status}{RESET} -> {t.get('build_url') or 'Pending'}")
+        elif res.get("build_url"):
             print(f"Log URL: {res['build_url']}")
         if res.get("test_status"):
             color = GREEN if res["test_status"] == "SUCCESS" else RED
-            print(f"{color}Final Status: {res['test_status']}{RESET}")
+            print(f"{color}Overall Status: {res['test_status']}{RESET}")
     else:
         print(f"{RED}[ERROR] {res.get('message')}{RESET}")
 
-    print(f"{BOLD}Modified Blueprints & Synchronized Variables:{RESET}")
-    for mod in res["modified_files"]:
-        print(f"  * {BOLD}{mod['file_path']}{RESET}")
-        print(f"    - Primary Var:  {mod['primary_variable']} = {mod['new_value']}")
-        for c in mod["coupled_changes"]:
-            print(f"    - Coupled Var:  {c['variable']} = {c['new_value']} {YELLOW}(Synchronized){RESET}")
+    if res.get("modified_files"):
+        print(f"{BOLD}Modified Blueprints & Synchronized Variables:{RESET}")
+        for mod in res["modified_files"]:
+            print(f"  * {BOLD}{mod['file_path']}{RESET}")
+            print(f"    - Primary Var:  {mod['primary_variable']} = {mod['new_value']}")
+            for c in mod.get("coupled_changes", []):
+                print(f"    - Coupled Var:  {c['variable']} = {c['new_value']} {YELLOW}(Synchronized){RESET}")
 
-    print(f"\n{BOLD}{CYAN}=== Generated Git Diff (Comments & Structure Preserved) ==={RESET}\n")
-    for path, diff in res["diffs"].items():
-        for line in diff.splitlines():
-            if line.startswith("+") and not line.startswith("+++"):
-                print(f"{GREEN}{line}{RESET}")
-            elif line.startswith("-") and not line.startswith("---"):
-                print(f"{RED}{line}{RESET}")
-            elif line.startswith("@@"):
-                print(f"{CYAN}{line}{RESET}")
-            else:
-                print(line)
-        print()
-
-    print(f"{GREEN}[VERIFIED] YAML syntax valid on all modified files.{RESET}")
+    if res.get("diffs"):
+        print(f"\n{BOLD}{CYAN}=== Generated Git Diff (Comments & Structure Preserved) ==={RESET}\n")
+        for path, diff in res["diffs"].items():
+            for line in diff.splitlines():
+                if line.startswith("+") and not line.startswith("+++"):
+                    print(f"{GREEN}{line}{RESET}")
+                elif line.startswith("-") and not line.startswith("---"):
+                    print(f"{RED}{line}{RESET}")
+                elif line.startswith("@@"):
+                    print(f"{CYAN}{line}{RESET}")
+                else:
+                    print(line)
+            print()
+        print(f"{GREEN}[VERIFIED] YAML syntax valid on all modified files.{RESET}")
 
 
 def run_test_rule_blocking():

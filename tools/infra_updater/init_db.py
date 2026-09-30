@@ -567,6 +567,7 @@ def build_canonical_seed_dict() -> dict:
             "qualification_summary": "Monitored baseline.",
             "snooze_until": p[6],
             "updated_at": "2026-09-23T06:00:00Z",
+            "disabled_blueprints": [],
             "blueprints": []
         }
 
@@ -577,7 +578,8 @@ def build_canonical_seed_dict() -> dict:
             "blueprint_path": inst[2],
             "variable_name": inst[3],
             "coupled_vars": json.loads(inst[4]) if isinstance(inst[4], str) else inst[4],
-            "signature_keywords": json.loads(inst[5]) if isinstance(inst[5], str) else inst[5]
+            "signature_keywords": json.loads(inst[5]) if isinstance(inst[5], str) else inst[5],
+            "enabled": True
         }
         if pkg_id in pkgs:
             pkgs[pkg_id]["blueprints"].append(bp_dict)
@@ -627,6 +629,12 @@ def init_database(preserve_candidates: bool = False):
                             seed_json["packages"][pid]["upstream_version"] = old_pkg["upstream_version"]
                         if old_pkg.get("qualification_summary"):
                             seed_json["packages"][pid]["qualification_summary"] = old_pkg["qualification_summary"]
+                        if old_pkg.get("disabled_blueprints"):
+                            seed_json["packages"][pid]["disabled_blueprints"] = old_pkg["disabled_blueprints"]
+                            disabled_set = set(old_pkg["disabled_blueprints"])
+                            for bp in seed_json["packages"][pid]["blueprints"]:
+                                if bp.get("instance_id") in disabled_set:
+                                    bp["enabled"] = False
         except Exception:
             pass
 

@@ -11,6 +11,7 @@
       "qualification_summary": "Monitored baseline.",
       "snooze_until": null,
       "updated_at": "2026-09-23T06:00:00Z",
+      "disabled_blueprints": [],
       "blueprints": [
         {
           "instance_id": "a3ultra-slurm-cuda",
@@ -25,7 +26,8 @@
           "signature_keywords": [
             "cuda",
             "nvidia"
-          ]
+          ],
+          "enabled": true
         },
         {
           "instance_id": "a4high-slurm-cuda",
@@ -40,7 +42,8 @@
           "signature_keywords": [
             "cuda",
             "nvidia"
-          ]
+          ],
+          "enabled": true
         }
       ]
     },
@@ -55,6 +58,7 @@
       "qualification_summary": "Monitored baseline.",
       "snooze_until": null,
       "updated_at": "2026-09-23T06:00:00Z",
+      "disabled_blueprints": [],
       "blueprints": [
         {
           "instance_id": "a4xhigh-slurm-cuda",
@@ -69,7 +73,8 @@
           "signature_keywords": [
             "cuda",
             "nvidia"
-          ]
+          ],
+          "enabled": true
         }
       ]
     },
@@ -84,6 +89,7 @@
       "qualification_summary": "Monitored baseline.",
       "snooze_until": null,
       "updated_at": "2026-09-23T06:00:00Z",
+      "disabled_blueprints": [],
       "blueprints": [
         {
           "instance_id": "a3m-image-gve",
@@ -93,7 +99,8 @@
           "signature_keywords": [
             "gve",
             "ethernet"
-          ]
+          ],
+          "enabled": true
         },
         {
           "instance_id": "a3mega-image-gve",
@@ -103,7 +110,8 @@
           "signature_keywords": [
             "gve",
             "ethernet"
-          ]
+          ],
+          "enabled": true
         }
       ]
     },
@@ -118,6 +126,7 @@
       "qualification_summary": "Monitored baseline.",
       "snooze_until": null,
       "updated_at": "2026-09-23T06:00:00Z",
+      "disabled_blueprints": [],
       "blueprints": [
         {
           "instance_id": "a4xmax-slurm-mft",
@@ -127,7 +136,8 @@
           "signature_keywords": [
             "mft",
             "mellanox"
-          ]
+          ],
+          "enabled": true
         },
         {
           "instance_id": "a4x-vm-mft",
@@ -137,7 +147,8 @@
           "signature_keywords": [
             "mft",
             "mellanox"
-          ]
+          ],
+          "enabled": true
         }
       ]
     },
@@ -152,6 +163,7 @@
       "qualification_summary": "Monitored baseline.",
       "snooze_until": null,
       "updated_at": "2026-09-23T06:00:00Z",
+      "disabled_blueprints": [],
       "blueprints": [
         {
           "instance_id": "gke-a3-tcpx",
@@ -161,7 +173,8 @@
           "signature_keywords": [
             "tcpx",
             "nccl"
-          ]
+          ],
+          "enabled": true
         }
       ]
     },
@@ -176,6 +189,7 @@
       "qualification_summary": "Monitored baseline.",
       "snooze_until": null,
       "updated_at": "2026-09-23T06:00:00Z",
+      "disabled_blueprints": [],
       "blueprints": [
         {
           "instance_id": "gke-a3mega-tcpxo",
@@ -185,7 +199,8 @@
           "signature_keywords": [
             "tcpxo",
             "nccl"
-          ]
+          ],
+          "enabled": true
         }
       ]
     },
@@ -200,6 +215,7 @@
       "qualification_summary": "Monitored baseline.",
       "snooze_until": null,
       "updated_at": "2026-09-23T06:00:00Z",
+      "disabled_blueprints": [],
       "blueprints": [
         {
           "instance_id": "a4xmax-slurm-nccl",
@@ -209,7 +225,8 @@
           "signature_keywords": [
             "nccl",
             "rdma"
-          ]
+          ],
+          "enabled": true
         },
         {
           "instance_id": "gke-a3ultra-gib",
@@ -219,7 +236,8 @@
           "signature_keywords": [
             "gib",
             "template_vars"
-          ]
+          ],
+          "enabled": true
         },
         {
           "instance_id": "gke-a4-gib",
@@ -229,7 +247,8 @@
           "signature_keywords": [
             "gib",
             "template_vars"
-          ]
+          ],
+          "enabled": true
         },
         {
           "instance_id": "gke-a4x-gib",
@@ -239,7 +258,8 @@
           "signature_keywords": [
             "gib",
             "template_vars"
-          ]
+          ],
+          "enabled": true
         },
         {
           "instance_id": "gke-a4xmax-gib",
@@ -249,7 +269,8 @@
           "signature_keywords": [
             "gib",
             "template_vars"
-          ]
+          ],
+          "enabled": true
         }
       ]
     },
@@ -264,6 +285,7 @@
       "qualification_summary": "Monitored baseline.",
       "snooze_until": null,
       "updated_at": "2026-09-23T06:00:00Z",
+      "disabled_blueprints": [],
       "blueprints": [
         {
           "instance_id": "shared-image-slurm",
@@ -273,7 +295,8 @@
           "signature_keywords": [
             "slurm",
             "schedmd"
-          ]
+          ],
+          "enabled": true
         },
         {
           "instance_id": "a3high-slurm-gcp",
@@ -283,7 +306,8 @@
           "signature_keywords": [
             "slurm",
             "schedmd"
-          ]
+          ],
+          "enabled": true
         },
         {
           "instance_id": "a3mega-slurm-gcp",
@@ -293,7 +317,8 @@
           "signature_keywords": [
             "slurm",
             "schedmd"
-          ]
+          ],
+          "enabled": true
         },
         {
           "instance_id": "a3mega-gcsfuse-slurm-gcp",
@@ -303,7 +328,8 @@
           "signature_keywords": [
             "slurm",
             "schedmd"
-          ]
+          ],
+          "enabled": true
         },
         {
           "instance_id": "a4xmax-slurm-gcp",
@@ -313,7 +339,8 @@
           "signature_keywords": [
             "slurm",
             "schedmd"
-          ]
+          ],
+          "enabled": true
         },
         {
           "instance_id": "ml-slurm-g4-gcp",
@@ -323,7 +350,8 @@
           "signature_keywords": [
             "slurm",
             "schedmd"
-          ]
+          ],
+          "enabled": true
         },
         {
           "instance_id": "ml-slurm-g4-vgpu-gcp",
@@ -333,7 +361,8 @@
           "signature_keywords": [
             "slurm",
             "schedmd"
-          ]
+          ],
+          "enabled": true
         }
       ]
     },
@@ -348,6 +377,7 @@
       "qualification_summary": "Monitored baseline.",
       "snooze_until": null,
       "updated_at": "2026-09-23T06:00:00Z",
+      "disabled_blueprints": [],
       "blueprints": [
         {
           "instance_id": "a3ultra-slurm-dcgm",
@@ -357,7 +387,8 @@
           "signature_keywords": [
             "dcgm",
             "datacenter-gpu-manager"
-          ]
+          ],
+          "enabled": true
         },
         {
           "instance_id": "a4high-slurm-dcgm",
@@ -367,7 +398,8 @@
           "signature_keywords": [
             "dcgm",
             "datacenter-gpu-manager"
-          ]
+          ],
+          "enabled": true
         },
         {
           "instance_id": "a4xhigh-slurm-dcgm",
@@ -377,7 +409,8 @@
           "signature_keywords": [
             "dcgm",
             "datacenter-gpu-manager"
-          ]
+          ],
+          "enabled": true
         },
         {
           "instance_id": "a3mega-slurm-dcgm",
@@ -387,7 +420,8 @@
           "signature_keywords": [
             "dcgm",
             "datacenter-gpu-manager"
-          ]
+          ],
+          "enabled": true
         },
         {
           "instance_id": "a4xmax-slurm-dcgm",
@@ -397,7 +431,8 @@
           "signature_keywords": [
             "dcgm",
             "datacenter-gpu-manager"
-          ]
+          ],
+          "enabled": true
         },
         {
           "instance_id": "a3high-slurm-dcgm",
@@ -407,7 +442,8 @@
           "signature_keywords": [
             "dcgm",
             "datacenter-gpu-manager"
-          ]
+          ],
+          "enabled": true
         }
       ]
     },
@@ -422,6 +458,7 @@
       "qualification_summary": "Monitored baseline.",
       "snooze_until": null,
       "updated_at": "2026-09-23T06:00:00Z",
+      "disabled_blueprints": [],
       "blueprints": [
         {
           "instance_id": "gke-h4d-mpi-operator",
@@ -431,7 +468,8 @@
           "signature_keywords": [
             "mpi-operator",
             "kubeflow"
-          ]
+          ],
+          "enabled": true
         },
         {
           "instance_id": "dws-gke-h4d-mpi-operator",
@@ -441,7 +479,8 @@
           "signature_keywords": [
             "mpi-operator",
             "kubeflow"
-          ]
+          ],
+          "enabled": true
         }
       ]
     },
@@ -456,6 +495,7 @@
       "qualification_summary": "Monitored baseline.",
       "snooze_until": null,
       "updated_at": "2026-09-23T06:00:00Z",
+      "disabled_blueprints": [],
       "blueprints": [
         {
           "instance_id": "batch-mpi-spack",
@@ -465,7 +505,8 @@
           "signature_keywords": [
             "spack",
             "mpi"
-          ]
+          ],
+          "enabled": true
         }
       ]
     },
@@ -480,6 +521,7 @@
       "qualification_summary": "Monitored baseline.",
       "snooze_until": null,
       "updated_at": "2026-09-23T06:00:00Z",
+      "disabled_blueprints": [],
       "blueprints": [
         {
           "instance_id": "a4x-vm-openmpi",
@@ -489,7 +531,8 @@
           "signature_keywords": [
             "openmpi",
             "mpi"
-          ]
+          ],
+          "enabled": true
         }
       ]
     },
@@ -504,6 +547,7 @@
       "qualification_summary": "Monitored baseline.",
       "snooze_until": null,
       "updated_at": "2026-09-23T06:00:00Z",
+      "disabled_blueprints": [],
       "blueprints": [
         {
           "instance_id": "gke-a4xmax-dra",
@@ -512,7 +556,8 @@
           "coupled_vars": [],
           "signature_keywords": [
             "nvidia_dra_driver"
-          ]
+          ],
+          "enabled": true
         }
       ]
     },
@@ -527,6 +572,7 @@
       "qualification_summary": "Monitored baseline.",
       "snooze_until": null,
       "updated_at": "2026-09-23T06:00:00Z",
+      "disabled_blueprints": [],
       "blueprints": [
         {
           "instance_id": "gke-a3ultra-cuda-image",
@@ -535,7 +581,8 @@
           "coupled_vars": [],
           "signature_keywords": [
             "nvidia-smi"
-          ]
+          ],
+          "enabled": true
         },
         {
           "instance_id": "gke-a4-cuda-image",
@@ -544,7 +591,8 @@
           "coupled_vars": [],
           "signature_keywords": [
             "nvidia-smi"
-          ]
+          ],
+          "enabled": true
         },
         {
           "instance_id": "gke-a4x-cuda-image",
@@ -553,7 +601,8 @@
           "coupled_vars": [],
           "signature_keywords": [
             "nvidia-smi"
-          ]
+          ],
+          "enabled": true
         },
         {
           "instance_id": "gke-a4xmax-cuda-image",
@@ -562,7 +611,8 @@
           "coupled_vars": [],
           "signature_keywords": [
             "nvidia-smi"
-          ]
+          ],
+          "enabled": true
         },
         {
           "instance_id": "gke-g4-cuda-image",
@@ -571,7 +621,8 @@
           "coupled_vars": [],
           "signature_keywords": [
             "nvidia-smi"
-          ]
+          ],
+          "enabled": true
         },
         {
           "instance_id": "gke-g4conf-cuda-image",
@@ -580,7 +631,8 @@
           "coupled_vars": [],
           "signature_keywords": [
             "nvidia-smi"
-          ]
+          ],
+          "enabled": true
         }
       ]
     },
@@ -595,6 +647,7 @@
       "qualification_summary": "Monitored baseline.",
       "snooze_until": null,
       "updated_at": "2026-09-23T06:00:00Z",
+      "disabled_blueprints": [],
       "blueprints": [
         {
           "instance_id": "ml-slurm-g4-vgpu-cmake",
@@ -612,7 +665,8 @@
           ],
           "signature_keywords": [
             "cmake"
-          ]
+          ],
+          "enabled": true
         }
       ]
     },
@@ -627,6 +681,7 @@
       "qualification_summary": "Monitored baseline.",
       "snooze_until": null,
       "updated_at": "2026-09-23T06:00:00Z",
+      "disabled_blueprints": [],
       "blueprints": [
         {
           "instance_id": "ml-slurm-miniforge",
@@ -635,7 +690,8 @@
           "coupled_vars": [],
           "signature_keywords": [
             "miniforge"
-          ]
+          ],
+          "enabled": true
         }
       ]
     }

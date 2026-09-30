@@ -407,6 +407,33 @@ class DashboardHandler(SimpleHTTPRequestHandler):
             self.wfile.write(json.dumps({"status": "SUCCESS", "message": summary, "package_id": pkg_id}).encode("utf-8"))
             return
 
+        elif action in ("toggle_blueprint", "update_blueprint_selection", "select_all_blueprints", "deselect_all_blueprints"):
+            if not pkg_id:
+                self.send_error(400, "package_id required for blueprint selection")
+                return
+            store = get_datastore()
+            instance_id = data.get("instance_id")
+            enabled = data.get("enabled")
+            selected_ids = data.get("selected_instance_ids")
+
+            res = store.update_blueprint_selection(
+                package_id=pkg_id,
+                action=action,
+                instance_id=instance_id,
+                enabled=enabled,
+                selected_instance_ids=selected_ids
+            )
+            if res is None:
+                self.send_error(404, f"Package '{pkg_id}' not found")
+                return
+
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            self.wfile.write(json.dumps(res).encode("utf-8"))
+            return
+
         if action == "sync_repo":
             cmd_args = ["--sync-repo"]
             action_name = "Sync Target Repository"
