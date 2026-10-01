@@ -546,6 +546,17 @@ def build_canonical_seed_dict() -> dict:
         )
     ]
 
+    # Per-package fetcher options (see fetchers.py): artifact selection, APT coordinates, etc.
+    source_options = {
+        "nvidia-cuda-x86": {"asset_pattern": r"/cuda_[\d.]+(?:_[\d.]+)?_linux\.run$"},
+        "nvidia-cuda-arm64": {"asset_pattern": r"/cuda_[\d.]+(?:_[\d.]+)?_linux_sbsa\.run$"},
+        "gve-dkms": {"asset_pattern": r"_all\.deb$"},
+        "mft": {"arch": "aarch64", "os": "DEB based"},
+        "nvidia-dcgm": {"apt_package": "datacenter-gpu-manager-4-core", "distro": "debian12", "arch": "x86_64"},
+        "cmake": {"asset_pattern": r"-linux-x86_64\.sh$"},
+        "miniforge": {"asset_pattern": r"^Miniforge3-.*-Linux-x86_64\.sh$"},
+    }
+
     # Build seed dict (packages with embedded blueprint instances)
     pkgs = {}
     for p in packages_data:
@@ -557,6 +568,7 @@ def build_canonical_seed_dict() -> dict:
             "upstream_version": "-",
             "source_url": p[3],
             "upstream_type": p[4],
+            "source_options": source_options.get(pkg_id, {}),
             "status": p[5],
             "qualification_summary": "Monitored baseline.",
             "snooze_until": p[6],

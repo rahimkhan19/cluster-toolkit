@@ -53,6 +53,11 @@ http:
 policy:
   default_snooze_days: 30
 
+# Upstream qualification (check-all)
+qualification:
+  max_workers: 6        # packages qualified in parallel
+  max_candidates: 25    # newest releases shown to the selector per package
+
 # Web Dashboard Server Port & Settings
 server:
   port: 8080

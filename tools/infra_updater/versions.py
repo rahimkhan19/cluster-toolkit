@@ -36,7 +36,7 @@ def parse_semver(v_str: str) -> Optional[Version]:
 def clean_version_str(v_str: str) -> str:
     s = re.sub(r'^[vV]', '', v_str.strip())
     s = re.sub(r'^[0-9]+:', '', s)
-    return re.sub(r'-base-ubuntu[0-9.]+', '', s)
+    return re.sub(r'-[A-Za-z][\w.-]*$', '', s)  # drop a flavor suffix such as '-base-ubuntu24.04'
 
 
 def is_version_greater(v1: str, v2: Optional[str]) -> bool:

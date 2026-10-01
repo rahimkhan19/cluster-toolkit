@@ -32,11 +32,14 @@ if BASE_DIR not in sys.path:
     sys.path.insert(0, BASE_DIR)
 from config import get_config
 from datastore import BaseDataStore, get_datastore
+from fetchers import variant_image_ref
 from policy import policy_hold
 from repo_manager import RepoManager
 from statuses import APPLICABLE_CANDIDATE_STATUSES, CandidateStatus, PackageStatus, TestStatus
 
 _VERSION_RE = r'v?[0-9]+(?:\.[0-9]+)+(?:-[a-zA-Z0-9._]+)?'
+# repo[:port]/path:tag where the repository part has a letter (so '1:4.7.0-1' is not an image).
+_IMAGE_REF_RE = re.compile(r'^(?=[^:]*[a-z])[a-z0-9][\w./-]*:v?[0-9][\w.-]*$')
 
 
 def _match_v_prefix(reference: str, value: str) -> str:
@@ -56,15 +59,21 @@ def _format_like(old_val: str, new_val: str) -> str:
     """
     Shapes new_val after old_val:
     - URL with a /<version>/ path segment + bare version -> swap only that segment
-    - image reference with a :<version> tag + bare version -> swap only the tag
+    - image reference + bare tag -> move to the new version, keeping the reference's own
+      variant (e.g. -runtime-ubuntu20.04); the old value is kept if no such variant exists
     - otherwise keep the old value's v-prefix style
     """
+    if _IMAGE_REF_RE.match(old_val) and not _is_url(old_val) and "/" not in new_val and ":" not in new_val:
+        ref = variant_image_ref(old_val, new_val)
+        if not ref:
+            print(f"[WARN] No '{new_val.split('-')[0]}' variant of {old_val} found; left unchanged.")
+        return ref or old_val
     if _is_url(old_val) and not _is_url(new_val):
         m = re.search(rf'/({_VERSION_RE})/', old_val)
         if m:
             return old_val.replace(f"/{m.group(1)}/", f"/{_match_v_prefix(m.group(1), new_val)}/")
         return new_val
-    if ":" in old_val and not _is_url(new_val) and not ("/" in new_val and ":" in new_val):
+    if ":" in old_val and ":" not in new_val and not _is_url(new_val):  # e.g. epoch '1:4.6.1-1' + '4.7.0-1'
         m = re.search(rf':({_VERSION_RE})$', old_val)
         if m:
             return old_val[:m.start(1)] + _match_v_prefix(m.group(1), new_val)
@@ -272,8 +281,6 @@ class OrchestratorAgent:
 
             # Primary replacement value based on variable type
             primary_val = cand_url if "url" in var_name.lower() else cand_version
-            if "image" in var_name.lower() and "/" not in primary_val:
-                primary_val = f"nvidia/cuda:{primary_val}"
             if package_id == "cmake" or "cmake" in var_name.lower():
                 parts = cand_version.lstrip("v").split(".")
                 maj_min = f"v{parts[0]}.{parts[1]}" if len(parts) >= 2 else f"v{cand_version}"

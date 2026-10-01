@@ -193,6 +193,12 @@ class PolicyConfig:
         self.default_snooze_days: int = int(raw.get("default_snooze_days", 30))
 
 
+class QualificationConfig:
+    def __init__(self, raw: Dict[str, Any]):
+        self.max_workers: int = max(1, int(raw.get("max_workers", 6)))
+        self.max_candidates: int = max(1, int(raw.get("max_candidates", 25)))
+
+
 class ServerConfig:
     def __init__(self, raw: Dict[str, Any]):
         self.port: int = int(os.environ.get("PORT") or os.environ.get("UPDATER_SERVER_PORT") or raw.get("port", 8080))
@@ -217,6 +223,7 @@ class UpdaterConfig:
         self.cloud_build = CloudBuildConfig(raw.get("cloud_build", {}), self.database.project_id)
         self.llm = LLMConfig(raw.get("llm", {}), self.database.project_id)
         self.policy = PolicyConfig(raw.get("policy", {}))
+        self.qualification = QualificationConfig(raw.get("qualification", {}))
         self.server = ServerConfig(raw.get("server", {}))
 
         self.github_token: Optional[str] = _resolve_github_token(self.database.project_id)

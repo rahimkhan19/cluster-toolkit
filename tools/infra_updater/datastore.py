@@ -53,7 +53,7 @@ def _now() -> str:
 
 # Package fields owned by the seed registry. On a non-reset seed only these are refreshed on
 # existing packages; runtime state (status, snooze/block, selections, versions) is preserved.
-SEED_REGISTRY_FIELDS = ("name", "source_url", "upstream_type", "blueprints")
+SEED_REGISTRY_FIELDS = ("name", "source_url", "upstream_type", "source_options", "blueprints")
 
 
 def merge_seed_package(existing: Optional[Dict[str, Any]], seed_pkg: Dict[str, Any]) -> Dict[str, Any]:
