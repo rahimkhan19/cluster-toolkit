@@ -119,21 +119,6 @@ class BaseDataStore(abc.ABC):
             bp["enabled"] = bp.get("instance_id") not in disabled
 
     # Blueprints
-    def get_blueprints_for_package(self, package_id: str) -> List[Dict[str, Any]]:
-        pkg = self.get_package(package_id)
-        return copy.deepcopy(pkg.get("blueprints", [])) if pkg else []
-
-    def list_all_blueprints(self) -> List[Dict[str, Any]]:
-        all_bps = []
-        for pkg in self.list_packages():
-            pid = pkg.get("package_id")
-            for bp in pkg.get("blueprints", []):
-                bp_copy = copy.deepcopy(bp)
-                bp_copy["package_id"] = pid
-                bp_copy["package_name"] = pkg.get("name", pid)
-                all_bps.append(bp_copy)
-        return all_bps
-
     def update_blueprint_selection(
         self,
         package_id: str,

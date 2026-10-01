@@ -14,11 +14,11 @@
     <!-- Top Navigation Header -->
     <header class="top-header">
       <div class="brand-section">
-        <div style="display: flex; align-items: center; gap: 8px;">
+        <div class="brand-row">
           <span class="logo-badge">CLUSTER TOOLKIT</span>
-          <span class="repo-badge" id="repo-badge" style="font-family: 'JetBrains Mono', monospace; font-size: 11px; padding: 2px 8px; border-radius: 4px; background: rgba(59, 130, 246, 0.12); color: #60a5fa; border: 1px solid rgba(59, 130, 246, 0.3);">
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align: -2px; margin-right: 4px;"><path d="M9 19c-5 1.5-5-2.5-7-3m14 6v-3.87a3.37 3.37 0 0 0-.94-2.61c3.14-.35 6.44-1.54 6.44-7A5.44 5.44 0 0 0 20 4.77 5.07 5.07 0 0 0 19.91 1S18.73.65 16 2.48a13.38 13.38 0 0 0-7 0C6.27.65 5.09 1 5.09 1A5.07 5.07 0 0 0 5 4.77a5.44 5.44 0 0 0-1.5 3.78c0 5.42 3.3 6.61 6.44 7A3.37 3.37 0 0 0 9 18.13V22"/></svg>
-            <span id="repo-badge-text">rahimkhan19/cluster-toolkit (develop)</span>
+          <span class="repo-badge" id="repo-badge">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 19c-5 1.5-5-2.5-7-3m14 6v-3.87a3.37 3.37 0 0 0-.94-2.61c3.14-.35 6.44-1.54 6.44-7A5.44 5.44 0 0 0 20 4.77 5.07 5.07 0 0 0 19.91 1S18.73.65 16 2.48a13.38 13.38 0 0 0-7 0C6.27.65 5.09 1 5.09 1A5.07 5.07 0 0 0 5 4.77a5.44 5.44 0 0 0-1.5 3.78c0 5.42 3.3 6.61 6.44 7A3.37 3.37 0 0 0 9 18.13V22"/></svg>
+            <span id="repo-badge-text">-</span>
           </span>
         </div>
         <h1 class="brand-title">Automated Dependency Management</h1>
@@ -30,15 +30,15 @@
           <span class="status-dot" id="status-dot"></span>
           <span id="status-text">System Idle</span>
         </div>
-        <button class="btn btn-secondary" id="btn-reset-top" onclick="triggerAction('reset')" title="Revert workspace modifications and reset state store">
+        <button class="btn btn-secondary" onclick="triggerAction('reset')" title="Revert workspace modifications and reset state store">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg>
           Reset Baseline
         </button>
-        <button class="btn btn-secondary" id="btn-check-top" onclick="triggerAction('check_all')" title="Discover and qualify upstream releases">
+        <button class="btn btn-secondary" onclick="triggerAction('check_all')" title="Discover and qualify upstream releases">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
           Check for Updates
         </button>
-        <button class="btn btn-primary" id="btn-e2e-top" onclick="triggerAction('end_to_end')" title="Run discovery, qualification, and blueprint updates end-to-end">
+        <button class="btn btn-primary" onclick="triggerAction('end_to_end')" title="Run discovery, qualification, and blueprint updates end-to-end">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/></svg>
           Run Full Pipeline
         </button>
@@ -52,12 +52,12 @@
         <div class="metric-card">
           <div class="metric-label">Monitored Dependencies</div>
           <div class="metric-value" id="metric-packages">-</div>
-          <div class="metric-sub">Canonical packages tracked</div>
+          <div class="metric-sub">Packages defined in packages.yaml</div>
         </div>
         <div class="metric-card">
           <div class="metric-label">Blueprint Targets</div>
           <div class="metric-value" id="metric-instances">-</div>
-          <div class="metric-sub">Variable bindings synchronized</div>
+          <div class="metric-sub">Blueprint pins discovered</div>
         </div>
         <div class="metric-card">
           <div class="metric-label">Policy Rules</div>
@@ -70,37 +70,21 @@
           <div class="metric-sub" id="metric-candidates-sub">Qualified &amp; ready for review</div>
         </div>
       </section>
-      <script>
-        try {
-          const _cached = localStorage.getItem('infra_updater_stats');
-          if (_cached) {
-            const _s = JSON.parse(_cached);
-            if (_s.total_packages !== undefined) document.getElementById('metric-packages').textContent = _s.total_packages;
-            if (_s.total_instances !== undefined) document.getElementById('metric-instances').textContent = _s.total_instances;
-            if (_s.total_rules !== undefined) document.getElementById('metric-rules').textContent = _s.total_rules;
-            if (_s.pending_updates !== undefined) {
-              document.getElementById('metric-candidates').textContent = _s.pending_updates;
-              const _ce = document.getElementById('counter-candidates');
-              if (_ce) _ce.textContent = _s.pending_updates;
-            }
-          }
-        } catch (e) {}
-      </script>
 
       <!-- Tabs Navigation -->
       <nav class="tabs-header">
-        <button class="tab-btn active" onclick="switchTab('tab-candidates', this)">
+        <button class="tab-btn active" data-tab="tab-candidates" onclick="switchTab('tab-candidates')">
           Available Updates
           <span class="tab-counter" id="counter-candidates">-</span>
         </button>
-        <button class="tab-btn" onclick="switchTab('tab-packages', this)">Dependency Registry</button>
-        <button class="tab-btn" onclick="switchTab('tab-instances', this)">Blueprint Instances</button>
-        <button class="tab-btn" onclick="switchTab('tab-rules', this)">Policy Rules</button>
-        <button class="tab-btn" onclick="switchTab('tab-diff', this)">
+        <button class="tab-btn" data-tab="tab-packages" onclick="switchTab('tab-packages')">Dependency Registry</button>
+        <button class="tab-btn" data-tab="tab-instances" onclick="switchTab('tab-instances')">Blueprint Instances</button>
+        <button class="tab-btn" data-tab="tab-rules" onclick="switchTab('tab-rules')">Policy Rules</button>
+        <button class="tab-btn" data-tab="tab-diff" onclick="switchTab('tab-diff')">
           Workspace Changes
-          <span class="tab-dot" id="diff-dot" style="display: none;"></span>
+          <span class="tab-dot" id="diff-dot" hidden></span>
         </button>
-        <button class="tab-btn" onclick="switchTab('tab-console', this)">Pipeline Console</button>
+        <button class="tab-btn" data-tab="tab-console" onclick="switchTab('tab-console')">Pipeline Console</button>
       </nav>
 
       <!-- TAB 1: Available Updates (Primary View) -->
@@ -109,19 +93,17 @@
           <div class="card-header">
             <div>
               <div class="card-title">Qualified Candidate Updates</div>
-              <div class="card-subtitle">Production GA releases verified against blueprint OS and kernel compatibility matrices</div>
+              <div class="card-subtitle">Newer upstream releases that passed the qualification gates (GA, policy rules, liveness)</div>
             </div>
             <button class="btn btn-secondary" onclick="triggerAction('check_all')">
               <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
               Check for Updates
             </button>
           </div>
-          <div style="padding: 20px;">
+          <div class="card-body">
             <div class="candidate-grid" id="candidates-container">
               <div class="empty-state">
-                <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-                <div style="font-weight: 500; margin-top: 8px;">No pending updates qualified</div>
-                <div style="font-size: 12px; color: var(--text-muted); margin-top: 4px;">Click "Check for Updates" to scan upstream releases and evaluate compatibility.</div>
+                <div class="empty-title">Loading…</div>
               </div>
             </div>
           </div>
@@ -134,23 +116,21 @@
           <div class="card-header">
             <div>
               <div class="card-title">Monitored Packages</div>
-              <div class="card-subtitle">Canonical packages tracked across repository blueprints (table: <code>packages</code>)</div>
+              <div class="card-subtitle">Packages defined in <code>packages.yaml</code> and their qualification state</div>
             </div>
           </div>
           <div class="table-responsive">
             <table class="data-table">
               <thead>
                 <tr>
-                  <th>Package ID</th>
-                  <th>Name</th>
+                  <th>Package</th>
                   <th>Current Version</th>
                   <th>Latest Upstream</th>
-                  <th>Source Type</th>
                   <th>Status</th>
                   <th>Blueprints</th>
-                  <th>Qualification Summary &amp; Rationale</th>
+                  <th>Qualification Summary</th>
                   <th>Upstream Source</th>
-                  <th style="text-align: right; min-width: 220px;">Actions</th>
+                  <th class="actions-header">Actions</th>
                 </tr>
               </thead>
               <tbody id="packages-table-body"></tbody>
@@ -191,7 +171,7 @@
           <div class="card-header">
             <div>
               <div class="card-title">Active Policy Constraints</div>
-              <div class="card-subtitle">Learned rules enforced upfront before testing (table: <code>learned_rules</code>)</div>
+              <div class="card-subtitle">Learned rules enforced before testing (collection: <code>learned_rules</code>)</div>
             </div>
             <button class="btn btn-secondary" onclick="triggerAction('test_rule_blocking')">Run Policy Evaluation</button>
           </div>
@@ -217,10 +197,7 @@
       <section id="tab-diff" class="tab-panel">
         <div class="diff-container">
           <div class="diff-header">
-            <div style="display: flex; align-items: center; gap: 10px;">
-              <span style="font-weight: 600; color: var(--text-primary);">MODIFIED BLUEPRINT DIFF</span>
-              <span class="badge badge-green">Syntax Validated</span>
-            </div>
+            <span class="diff-title">MODIFIED BLUEPRINT DIFF</span>
             <button class="btn btn-danger" onclick="triggerAction('reset')">Revert Workspace Changes</button>
           </div>
           <div class="diff-body" id="diff-body">No uncommitted blueprint modifications in workspace.</div>
@@ -233,7 +210,7 @@
           <!-- Action Control Sidebar -->
           <div class="controls-sidebar">
             <div class="sidebar-title">Pipeline Actions</div>
-            
+
             <button class="btn btn-primary" onclick="triggerAction('end_to_end')">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/></svg>
               Run Full Pipeline
@@ -249,14 +226,14 @@
               Policy Rule Evaluation
             </button>
 
-            <hr style="border: 0; border-top: 1px solid var(--border-color); margin: 6px 0;">
+            <hr class="sidebar-divider">
 
             <div class="sidebar-title">Orchestrator Actions</div>
             <div id="dynamic-apply-buttons" class="sidebar-buttons-container">
-              <span style="font-size: 11px; color: var(--text-muted);">Scanning for candidates...</span>
+              <span class="small-muted">Scanning for candidates...</span>
             </div>
 
-            <hr style="border: 0; border-top: 1px solid var(--border-color); margin: 6px 0;">
+            <hr class="sidebar-divider">
 
             <button class="btn btn-danger" onclick="triggerAction('reset')">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg>
@@ -268,7 +245,7 @@
           <div class="terminal-box">
             <div class="terminal-header">
               <span>PIPELINE EXECUTION LOG</span>
-              <button class="btn btn-secondary" style="padding: 2px 8px; font-size: 11px;" onclick="clearConsole()">Clear</button>
+              <button class="btn btn-secondary btn-xs" data-nobusy onclick="clearConsole()">Clear</button>
             </div>
             <div class="terminal-body" id="terminal-body">Click "Run Full Pipeline" or any action on the left to start execution...</div>
           </div>
@@ -278,8 +255,8 @@
   </div>
 
   <!-- Associated Blueprints Modal -->
-  <div id="blueprint-modal" class="modal-overlay" onclick="closeBlueprintModal(event)">
-    <div class="modal-card" onclick="event.stopPropagation()">
+  <div id="blueprint-modal" class="modal-overlay" onclick="if (event.target === this) closeModal('blueprint-modal')">
+    <div class="modal-card">
       <div class="modal-header">
         <div class="modal-title-group">
           <div class="modal-title">
@@ -294,7 +271,7 @@
           </div>
           <div class="modal-subtitle" id="modal-package-subtitle">Blueprint instances tracked across Cluster Toolkit</div>
         </div>
-        <button class="modal-close-btn" onclick="closeBlueprintModal()" title="Close (Esc)">✕</button>
+        <button class="modal-close-btn" onclick="closeModal('blueprint-modal')" title="Close (Esc)">✕</button>
       </div>
       <div class="modal-selection-bar" id="modal-selection-bar">
         <div class="selection-status-box">
@@ -305,29 +282,27 @@
           <div class="selection-status-hint">Deselected blueprints are remembered and excluded from PR creation &amp; testing.</div>
         </div>
         <div class="selection-actions">
-          <button class="btn btn-secondary btn-sm" id="btn-modal-select-all" onclick="bulkToggleModalBlueprints(true)" title="Select all blueprints for this package">
+          <button class="btn btn-secondary btn-sm" onclick="bulkToggleModalBlueprints(true)" title="Select all blueprints for this package">
             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>
             <span>Select All</span>
           </button>
-          <button class="btn btn-secondary btn-sm" id="btn-modal-deselect-all" onclick="bulkToggleModalBlueprints(false)" title="Deselect all blueprints for this package">
+          <button class="btn btn-secondary btn-sm" onclick="bulkToggleModalBlueprints(false)" title="Deselect all blueprints for this package">
             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
             <span>Deselect All</span>
           </button>
         </div>
       </div>
-      <div class="modal-body" id="modal-blueprint-list">
-        <!-- Blueprint cards injected by JavaScript -->
-      </div>
+      <div class="modal-body" id="modal-blueprint-list"></div>
       <div class="modal-footer">
-        <span id="modal-instance-count" style="font-size: 12px; color: var(--text-muted);"></span>
-        <button class="btn btn-secondary" onclick="closeBlueprintModal()">Done</button>
+        <span id="modal-instance-count" class="small-muted"></span>
+        <button class="btn btn-secondary" data-nobusy onclick="closeModal('blueprint-modal')">Done</button>
       </div>
     </div>
   </div>
 
   <!-- Snooze Update Modal -->
-  <div id="snooze-modal" class="modal-overlay" onclick="closeSnoozeModal(event)">
-    <div class="modal-card" style="max-width: 500px;" onclick="event.stopPropagation()">
+  <div id="snooze-modal" class="modal-overlay" onclick="if (event.target === this) closeModal('snooze-modal')">
+    <div class="modal-card modal-card-narrow">
       <div class="modal-header">
         <div class="modal-title-group">
           <div class="modal-title">
@@ -335,28 +310,28 @@
               <circle cx="12" cy="12" r="10"/>
               <polyline points="12 6 12 12 16 14"/>
             </svg>
-            <span id="snooze-modal-title">Snooze Module Update</span>
+            <span>Snooze Module Update</span>
           </div>
-          <div class="modal-subtitle" id="snooze-modal-subtitle">Pause automatic PR creation for this version</div>
+          <div class="modal-subtitle">Pause automatic PR creation for this version</div>
         </div>
-        <button class="modal-close-btn" onclick="closeSnoozeModal()" title="Close (Esc)">✕</button>
+        <button class="modal-close-btn" onclick="closeModal('snooze-modal')" title="Close (Esc)">✕</button>
       </div>
-      <div class="modal-body" style="padding: 24px;">
+      <div class="modal-body snooze-body">
         <input type="hidden" id="snooze-package-id" value="">
         <input type="hidden" id="snooze-version-val" value="">
 
-        <div style="margin-bottom: 20px;">
-          <div style="font-size: 13px; color: var(--text-muted); margin-bottom: 6px;">Target Package &amp; Version:</div>
-          <div style="display: flex; align-items: center; gap: 8px;">
-            <span class="code-pill" id="snooze-display-pkg" style="font-size: 13px; font-weight: 600; color: var(--accent-blue);"></span>
-            <span style="color: var(--text-muted);">&bull;</span>
-            <span class="code-pill version-target" id="snooze-display-ver" style="font-size: 13px;"></span>
+        <div class="form-group">
+          <div class="form-hint">Target Package &amp; Version:</div>
+          <div class="flex-row">
+            <span class="code-pill snooze-pkg" id="snooze-display-pkg"></span>
+            <span class="text-muted">&bull;</span>
+            <span class="code-pill version-target" id="snooze-display-ver"></span>
           </div>
         </div>
 
-        <div style="margin-bottom: 20px;">
-          <label for="snooze-days-select" style="display: block; font-size: 13px; font-weight: 600; margin-bottom: 8px; color: var(--text-primary);">Snooze Duration</label>
-          <select id="snooze-days-select" style="width: 100%; padding: 10px 14px; background: var(--bg-hover); color: var(--text-primary); border: 1px solid var(--border-color); border-radius: 8px; font-size: 14px; outline: none; cursor: pointer;">
+        <div class="form-group">
+          <label for="snooze-days-select" class="form-label">Snooze Duration</label>
+          <select id="snooze-days-select" class="form-select">
             <option value="7">7 Days</option>
             <option value="14">14 Days</option>
             <option value="30" selected>30 Days</option>
@@ -365,20 +340,20 @@
           </select>
         </div>
 
-        <div style="padding: 12px 16px; background: rgba(245, 158, 11, 0.1); border: 1px solid rgba(245, 158, 11, 0.25); border-radius: 8px; font-size: 12px; line-height: 1.5; color: var(--accent-amber);">
+        <div class="notice-amber">
           <strong>Snooze Policy:</strong> When updates run, no PR will be created if upstream has the same version. If a <em>newer</em> version is released upstream, the snooze will automatically wake up and qualify the new release.
         </div>
       </div>
       <div class="modal-footer">
-        <button class="btn btn-secondary" onclick="closeSnoozeModal()">Cancel</button>
-        <button class="btn btn-primary" onclick="submitSnooze()" style="background: var(--accent-amber); border-color: var(--accent-amber); color: #000; font-weight: 600;">Confirm Snooze</button>
+        <button class="btn btn-secondary" data-nobusy onclick="closeModal('snooze-modal')">Cancel</button>
+        <button class="btn btn-warning" onclick="submitSnooze()">Confirm Snooze</button>
       </div>
     </div>
   </div>
 
   <!-- Multi-Blueprint Integration Test Results Modal -->
-  <div id="test-results-modal" class="modal-overlay" onclick="closeTestResultsModal(event)">
-    <div class="modal-card test-modal-card" onclick="event.stopPropagation()">
+  <div id="test-results-modal" class="modal-overlay" onclick="if (event.target === this) closeModal('test-results-modal')">
+    <div class="modal-card test-modal-card">
       <div class="modal-header">
         <div class="modal-title-group">
           <div class="modal-title">
@@ -389,42 +364,50 @@
           </div>
           <div class="modal-subtitle" id="test-modal-subtitle">Cloud Build validation matrix across associated blueprints</div>
         </div>
-        <button class="modal-close-btn" onclick="closeTestResultsModal()" title="Close (Esc)">✕</button>
+        <button class="modal-close-btn" onclick="closeModal('test-results-modal')" title="Close (Esc)">✕</button>
       </div>
 
       <!-- KPI Bar with Summary Chips -->
-      <div class="test-kpi-bar" id="test-modal-kpi-bar">
+      <div class="test-kpi-bar">
         <div class="test-kpi-group">
           <span class="test-chip-pill" id="test-chip-summary">0/0 Passed</span>
           <span class="test-chip-stat chip-stat-passed" id="test-chip-passed">✓ 0 Passed</span>
           <span class="test-chip-stat chip-stat-failed" id="test-chip-failed">✗ 0 Failed</span>
           <span class="test-chip-stat chip-stat-running" id="test-chip-running">⟳ 0 Running</span>
         </div>
-        <div class="test-kpi-links" id="test-modal-pr-link-box">
-          <!-- Dynamic PR link injected here -->
-        </div>
+        <div class="test-kpi-links" id="test-modal-pr-link-box"></div>
       </div>
 
       <!-- Test Matrix List -->
-      <div class="modal-body test-modal-body" id="test-modal-list">
-        <!-- Rendered test items injected by JavaScript -->
-      </div>
+      <div class="modal-body test-modal-body" id="test-modal-list"></div>
 
       <div class="modal-footer">
-        <div class="test-modal-footer-info" id="test-modal-project-info">
+        <div class="test-modal-footer-info">
           <span>Target Project: <code class="code-pill" id="test-modal-project-id">-</code></span>
         </div>
-        <div style="display: flex; gap: 8px;">
-          <button class="btn btn-secondary" id="test-modal-rerun-btn" onclick="rerunTestsFromModal()" style="display: inline-flex; align-items: center; gap: 6px;">
+        <div class="modal-footer-actions">
+          <button class="btn btn-secondary" onclick="rerunTestsFromModal()">
             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
             <span>Re-run Tests</span>
           </button>
-          <button class="btn btn-secondary" onclick="closeTestResultsModal()">Close</button>
+          <button class="btn btn-secondary" data-nobusy onclick="closeModal('test-results-modal')">Close</button>
         </div>
       </div>
     </div>
   </div>
 
-  <script src="app.js?v=2026093002"></script>
+  <script>
+    // Restore the last known counters instantly; app.js refreshes them on its first poll.
+    try {
+      const s = JSON.parse(localStorage.getItem('infra_updater_stats') || '{}');
+      const set = (id, v) => { if (v !== undefined && v !== null) document.getElementById(id).textContent = v; };
+      set('metric-packages', s.total_packages);
+      set('metric-instances', s.total_instances);
+      set('metric-rules', s.total_rules);
+      set('metric-candidates', s.pending_updates);
+      set('counter-candidates', s.pending_updates);
+    } catch (_) { /* no cached counters */ }
+  </script>
+  <script src="app.js"></script>
 </body>
 </html>

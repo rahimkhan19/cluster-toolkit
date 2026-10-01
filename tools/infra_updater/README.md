@@ -1,109 +1,79 @@
 # Automated Driver & Infrastructure Updater
-**Bug Tracking:** [b/562019559](https://b.corp.google.com/issues/562019559)  
-**Location:** `tools/infra_updater/`
 
-An automated driver and infrastructure update management system for Cluster Toolkit, combining **sub-millisecond deterministic checks** with **Gemini LLM semantic triage**.
+**Bug:** [b/562019559](https://b.corp.google.com/issues/562019559) · **Location:** `tools/infra_updater/`
 
----
+Keeps the driver, toolkit and image versions pinned in Cluster Toolkit blueprints up to date. For each
+package it finds the newest qualified upstream release, rewrites every blueprint that pins the package,
+opens a pull request, runs the blueprints' Cloud Build integration tests, and tracks the PR until it
+merges. A web dashboard shows the state and drives every step.
 
-## 1. Architecture: Hybrid Deterministic + LLM Pipeline
+See [END_TO_END_FLOW.md](END_TO_END_FLOW.md) for the detailed flow.
 
-```
-                +------------------------------------------------+
-                |          Canonical Package Registry            |
-                |               (packages table)                 |
-                +-----------------------+------------------------+
-                                        |
-                        [Source Qualification Agent]
-                                        |
-            +---------------------------+---------------------------+
-            | Upfront Learned Rule Check| Gemini LLM Candidate      |
-            | (< 1ms SemVer gatekeeper) | Extraction & GA Filtering |
-            +---------------------------+---------------------------+
-                                        |
-            +---------------------------+---------------------------+
-            | HTTP HEAD Liveness Check  | Gemini LLM Semantic       |
-            | (Verifies HTTP 200 OK)    | Changelog & Deprecation   |
-            +---------------------------+---------------------------+
-                                        |
-                                        v
-                        +-------------------------------+
-                        |   Qualified Candidate Queue   |
-                        |   (candidate_updates table)   |
-                        +---------------+---------------+
-                                        |
-                                        v
-                          [Atomic Code Modifier]
-                                        |
-            +---------------------------+---------------------------+
-            | Comment-Preserving AST    | Synchronized Coupled Vars |
-            | Surgical YAML Replacement | (e.g. installer URL+file) |
-            +---------------------------+---------------------------+
-                                        |
-                                        v
-                    [Local YAML Validation & git diff]
-```
+## How it works
 
----
+1. **Registry.** [`packages.yaml`](packages.yaml) is the only package-specific input. Each package
+   declares its upstream source (`upstream.type` / `upstream.url`), fetcher options, and **pins**:
+   regexes whose named groups (`version`, `major_minor`, `url`, `filename`, `image`) locate the
+   version in blueprint text.
+2. **Discovery.** Every check scans `examples/**` and `community/examples/**` in a clone of the
+   target repository (`target_repo/`) with those pins. Each match is a blueprint instance that records
+   its own pinned version. A package's current version is the **oldest** version across its selected
+   blueprints; the UI flags packages whose blueprints disagree ("⚠ out of sync").
+3. **Qualification** (`--check-all`, packages in parallel). A registered fetcher lists upstream
+   releases; a deterministic prefilter keeps newer, non-pre-release versions; Gemini picks the
+   release with one shared prompt (`prompts/select_release.txt`), falling back to a deterministic pick
+   tagged "not LLM-verified" if the LLM is unavailable. Gates: newer → GA → snooze/block policy →
+   learned rules → no open PR for it → artifact URL is live. A passing release becomes an
+   `UPDATE_FOUND` candidate.
+4. **Apply** (`--apply <package>`). Branches off the base branch, rewrites every pin in the selected
+   blueprints (each image keeps its own variant), validates the YAML, commits, pushes, opens a PR, and
+   approves the PR's Cloud Build test builds (mapped from `tools/cloud-build/daily-tests/tests/*.yml`,
+   plus `test_overrides` in `packages.yaml`).
+5. **Tracking.** The dashboard server's background poller syncs PR states (merged → `UP_TO_DATE`,
+   closed → back to `UPDATE_FOUND`) and Cloud Build results (tests can run for about a day).
 
-## 2. Key Modules
+State lives in Cloud Firestore (or a local JSON file, `database.provider: json`).
 
-1. **`source_agent.py`**:
-   - **Gemini LLM Candidate Extraction & GA Stability Filter**: Discovers upstream releases and evaluates tags/channel metadata to confirm production GA status.
-   - **Sub-Millisecond Upfront Rule Checker**: Evaluates policy `learned_rules` in `< 1ms` (~0.2ms) before making expensive network calls.
-   - **HTTP HEAD Liveness Check**: Validates that candidate artifacts exist and return HTTP 200.
-2. **`code_modifier.py`**:
-   - Surgical, comment-preserving YAML modifier.
-   - Coupled variable synchronization (e.g. `cuda_installer_url` + `cuda_installer_file`).
-   - Signature keyword filtering to protect generic variable names (`package_url`).
-   - Local YAML AST validation (`yaml.safe_load`).
-3. **`init_db.py`**:
-   - Initializes canonical JSON state store (`updater_state.json`) with seeded package registry, blueprint instances, and learned rules.
-4. **`datastore.py`**:
-   - Thread-safe, atomic transactional JSON datastore managing live package states, candidates, learned rules, and audit logs.
-4. **`run_updater.py`** (alias: `main.py`):
-   - Master CLI runner with rich colored terminal output and comprehensive qualification flags.
-5. **`server.py`**:
-   - Lightweight web server hosting an interactive dashboard (on port 8080 by default) for live qualification, atomic application, diff review, and log streaming.
+## Modules
 
----
+| File | Role |
+| :--- | :--- |
+| `packages.yaml`, `registry.py` | Package registry, blueprint discovery, pin-based rewrite |
+| `fetchers.py`, `selector.py`, `prompts/` | Upstream release listing per source type; release selection |
+| `source_agent.py` | Qualification gates and candidate creation |
+| `code_modifier.py` | Applies a candidate: rewrite, commit, push, PR, tests |
+| `repo_manager.py`, `http_client.py` | Git workspace and GitHub API |
+| `test_manager.py` | Blueprint → test mapping, Cloud Build approval and polling |
+| `datastore.py`, `init_db.py` | Firestore / JSON state; seeding from the registry and discovery |
+| `statuses.py`, `policy.py`, `versions.py` | Status vocabulary, snooze/block, version helpers |
+| `config.py`, `config.yaml` | Settings (environment variables override `config.yaml`) |
+| `run_updater.py` | CLI |
+| `server.py`, `ui/` | Dashboard server, REST API and background poller |
 
-## 3. Quickstart CLI Commands
+## Adding a package
 
-From the repository root (`/usr/local/google/home/rahimkh/Desktop/Projects/cluster-toolkit`):
+Add an entry to `packages.yaml` with an `upstream` type that `fetchers.py` supports
+(`github_release`, `apt_repository`, `docker_hub`, `archive_scraper`, `raw_manifest`, `mft_api`) and
+one or more pins. Run `python3 init_db.py --refresh` (or any check); the blueprints that match the pins
+are discovered automatically. No code change is needed.
 
-### A. Run Source Qualification
+## Usage
+
+Run from `tools/infra_updater/`. The GitHub token is read from `GITHUB_TOKEN` (or Secret Manager
+secret `infra-updater-github-token`); Firestore and Vertex AI use Application Default Credentials.
+
 ```bash
-python3 tools/infra_updater/run_updater.py --check-all
-```
-*Queries upstream release archives, runs LLM candidate extraction and GA stability filtering, checks learned rules (<1ms), verifies HTTP 200, and records qualified candidates in updater_state.json.*
-
-### B. Launch Web UI Dashboard
-```bash
-python3 tools/infra_updater/server.py --port 8080
-```
-*Opens an interactive visual dashboard at `http://localhost:8080` showing package registries, blueprint instances, learned rules, qualified candidates, and real-time execution logs.*
-
-### C. Demonstrate < 1ms Upfront Rule Blocking
-```bash
-python3 tools/infra_updater/run_updater.py --test-rule-blocking
-```
-*Demonstrates sub-millisecond rule evaluation blocking known faulty versions (e.g. CUDA 13.1.0 or GVE 1.5.0) in ~0.2ms before any network or file operations.*
-
-### D. Apply Atomic Blueprint Updates & View Git Diff
-```bash
-# Update NVIDIA CUDA Toolkit (x86_64) across a3ultra and a4high blueprints:
-python3 tools/infra_updater/run_updater.py --apply nvidia-cuda-x86
-
-# Update Google Virtual Ethernet driver across image builder and a3mega blueprints:
-python3 tools/infra_updater/run_updater.py --apply gve-dkms
+python3 server.py --port 8080             # dashboard at http://localhost:8080
+python3 run_updater.py --check-all        # qualify every package
+python3 run_updater.py --apply gve-dkms   # apply a candidate: branch, PR, tests
+python3 run_updater.py --test gve-dkms    # re-run the tests of an open PR
+python3 run_updater.py --snooze spack --days 14   # also --block / --unblock
+python3 run_updater.py --sync-prs         # sync PR states once (the server does this continuously)
+python3 run_updater.py --end-to-end       # check, then apply every candidate
+python3 run_updater.py --show-config      # also --show-tables, --rules
+python3 init_db.py --refresh              # re-discover blueprints, keep runtime state
+python3 run_updater.py --reset            # reset workspace and state to the baseline
 ```
 
-### E. Preview State Entities or Reset
-```bash
-# Preview all DataStore entities:
-python3 tools/infra_updater/run_updater.py --show-tables
-
-# Reset git files and state store:
-python3 tools/infra_updater/run_updater.py --reset
-```
+`app.yaml` (App Engine) and `Dockerfile` (Cloud Run) deploy the dashboard; keep exactly one
+always-on instance so the background poller keeps running.

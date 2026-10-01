@@ -21,7 +21,9 @@ and runs one background poller that syncs PR statuses and Cloud Build test resul
 
 import argparse
 import collections
+import hashlib
 from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
+import itertools
 import json
 import os
 import re
@@ -30,6 +32,7 @@ import subprocess
 import sys
 import threading
 import time
+from urllib.parse import parse_qs, urlsplit
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 if BASE_DIR not in sys.path:
@@ -38,12 +41,24 @@ from config import get_config
 from datastore import get_datastore
 import policy
 from repo_manager import RepoManager
+import statuses
 from statuses import CandidateStatus, PackageStatus
 
 CONFIG = get_config()
 REPO_MANAGER = RepoManager(CONFIG)
 UI_DIR = os.path.join(BASE_DIR, "ui")
 ANSI_RE = re.compile(r'\033\[[0-9;]*m')
+
+# Status vocabulary served to the UI, so it never hardcodes status strings.
+STATUSES = {
+    "package": {s.name: s.value for s in statuses.PackageStatus},
+    "candidate": {s.name: s.value for s in statuses.CandidateStatus},
+    "test": {s.name: s.value for s in statuses.TestStatus},
+    "active_candidate": sorted(statuses.ACTIVE_CANDIDATE_STATUSES),
+    "policy": sorted(statuses.POLICY_STATUSES),
+    "test_failed": sorted(statuses.TEST_FAILED_STATUSES),
+    "test_terminal": sorted(statuses.TEST_TERMINAL_STATUSES),
+}
 
 
 class LogStreamBuffer:
@@ -52,6 +67,8 @@ class LogStreamBuffer:
     def __init__(self, max_lines=1000):
         self.lock = threading.Lock()
         self.lines = collections.deque(maxlen=max_lines)
+        self.total = 0   # lines written by the current run (the cursor clients poll with)
+        self.run_id = 0
         self.is_running = False
         self.current_action = "IDLE"
         self.last_status = "IDLE"
@@ -59,10 +76,23 @@ class LogStreamBuffer:
     def write_line(self, line):
         with self.lock:
             self.lines.append(line)
+            self.total += 1
 
-    def get_logs(self):
+    def read_since(self, run_id: int, offset: int) -> dict:
+        """Lines after the client's cursor; the whole buffer if the cursor is stale (new run / trimmed)."""
         with self.lock:
-            return "".join(self.lines)
+            first = self.total - len(self.lines)
+            reset = run_id != self.run_id or not first <= offset <= self.total
+            start = 0 if reset else offset - first
+            return {
+                "run_id": self.run_id,
+                "next": self.total,
+                "reset": reset,
+                "logs": "".join(itertools.islice(self.lines, start, None)),
+                "is_running": self.is_running,
+                "current_action": self.current_action,
+                "last_status": self.last_status,
+            }
 
     def try_start(self, action_name) -> bool:
         """Atomically claims the single action slot."""
@@ -72,6 +102,8 @@ class LogStreamBuffer:
             self.is_running = True
             self.current_action = action_name
             self.lines.clear()
+            self.total = 0
+            self.run_id += 1
             return True
 
     def finish(self, status):
@@ -204,25 +236,34 @@ class DashboardHandler(SimpleHTTPRequestHandler):
         self.send_header("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0")
         super().end_headers()
 
-    def _send_json(self, code, payload):
-        body = json.dumps(payload).encode("utf-8")
+    def _send_json(self, code, payload, etag=False):
+        body = json.dumps(payload, sort_keys=True, default=str).encode("utf-8")
+        tag = f'"{hashlib.sha1(body).hexdigest()}"' if etag else None
+        if tag and self.headers.get("If-None-Match") == tag:
+            self.send_response(304)
+            self.send_header("ETag", tag)
+            self.end_headers()
+            return
         self.send_response(code)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
+        if tag:
+            self.send_header("ETag", tag)
         self.end_headers()
         self.wfile.write(body)
 
     def do_GET(self):
-        if self.path == "/api/state":
+        url = urlsplit(self.path)
+        if url.path == "/api/state":
             self.handle_get_state()
-        elif self.path.startswith("/api/logs"):
-            self._send_json(200, {
-                "logs": GLOBAL_BUFFER.get_logs(),
-                "is_running": GLOBAL_BUFFER.is_running,
-                "current_action": GLOBAL_BUFFER.current_action,
-                "last_status": GLOBAL_BUFFER.last_status
-            })
-        elif self.path.startswith("/api/diff"):
+        elif url.path == "/api/logs":
+            q = parse_qs(url.query)
+            try:
+                run_id, offset = int(q.get("run", ["-1"])[0]), int(q.get("offset", ["0"])[0])
+            except ValueError:
+                run_id, offset = -1, 0
+            self._send_json(200, GLOBAL_BUFFER.read_since(run_id, offset))
+        elif url.path == "/api/diff":
             self._send_json(200, {"diff": REPO_MANAGER.get_diff()})
         else:
             super().do_GET()
@@ -236,8 +277,7 @@ class DashboardHandler(SimpleHTTPRequestHandler):
     def handle_get_state(self):
         try:
             store = get_datastore()
-            packages = store.list_packages()
-            instances = store.list_all_blueprints()
+            packages = store.list_packages()  # blueprint instances are embedded; the UI indexes them
             rules = store.list_rules()
             candidates = store.list_candidates()
 
@@ -248,13 +288,13 @@ class DashboardHandler(SimpleHTTPRequestHandler):
 
             self._send_json(200, {
                 "packages": packages,
-                "instances": instances,
                 "rules": rules,
                 "candidates": candidates,
                 "has_modifications": bool(get_cached_git_diff_stat()),
                 "is_running": GLOBAL_BUFFER.is_running,
                 "current_action": GLOBAL_BUFFER.current_action,
                 "last_status": GLOBAL_BUFFER.last_status,
+                "statuses": STATUSES,
                 "config": {
                     "project_id": CONFIG.database.project_id,
                     "cloud_build_project_id": CONFIG.cloud_build.project_id,
@@ -268,14 +308,14 @@ class DashboardHandler(SimpleHTTPRequestHandler):
                 },
                 "stats": {
                     "total_packages": len(packages),
-                    "total_instances": len(instances),
+                    "total_instances": sum(len(p.get("blueprints", [])) for p in packages),
                     "total_rules": len(rules),
                     "pending_updates": sum(1 for c in candidates if c.get("status") == CandidateStatus.UPDATE_FOUND),
                     "ready_updates": sum(1 for c in candidates if c.get("status") == CandidateStatus.READY_FOR_REVIEW),
                     "snoozed_packages": _count_pkgs(PackageStatus.SNOOZED, CandidateStatus.SNOOZED, "snoozed_version"),
                     "blocked_packages": _count_pkgs(PackageStatus.BLOCKED, CandidateStatus.BLOCKED, "blocked_version"),
                 }
-            })
+            }, etag=True)
         except Exception as e:
             import traceback
             traceback.print_exc()

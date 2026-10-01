@@ -23,6 +23,7 @@ in a blocking loop from the CLI or by the dashboard server's background poller.
 
 import datetime
 import glob
+from concurrent.futures import ThreadPoolExecutor
 import os
 import time
 from typing import Any, Dict, List, Optional, Tuple
@@ -38,7 +39,6 @@ CLOUD_BUILD_API = "https://cloudbuild.googleapis.com/v1"
 BUILD_SUCCESS = ("SUCCESS",)
 BUILD_FAILED = ("FAILURE", "INTERNAL_ERROR", "TIMEOUT", "CANCELLED", "EXPIRED")
 
-# Known special case mappings for blueprints to test names
 def _now_iso() -> str:
     return datetime.datetime.now(datetime.timezone.utc).isoformat()
 
@@ -93,15 +93,11 @@ def record_test_results(store, candidate_id: str, package_id: str, tests: List[D
     else:
         qual_summary = f"Tests in progress on {pr_ref}: {summary_text}"
 
-    primary = next((t for t in tests if t.get("build_url")), tests[0] if tests else {})
     store.update_candidate(candidate_id, {
         "status": overall_workflow,
         "test_status": overall_test,
         "tests": tests,
         "tests_summary": summary_text,
-        "test_name": primary.get("test_name"),
-        "build_id": primary.get("build_id"),
-        "build_url": primary.get("build_url"),
     })
     store.update_package(package_id, {
         "status": overall_workflow,
@@ -301,10 +297,14 @@ class TestManager:
         head_sha: Optional[str] = None,
         rerun_finished: bool = False,
     ) -> List[Dict[str, Any]]:
-        """Approves (or re-runs) all integration tests associated with a PR. Returns test records."""
+        """Approves (or re-runs) all integration tests of a PR concurrently. Returns test records."""
+        self._get_session()  # create the shared session before the worker threads use it
+        with ThreadPoolExecutor(max_workers=min(8, len(test_infos) or 1)) as pool:
+            responses = list(pool.map(
+                lambda t: self.trigger_test_for_pr(pr_number, t, head_sha=head_sha, rerun_finished=rerun_finished),
+                test_infos))
         results = []
-        for t_info in test_infos:
-            res = self.trigger_test_for_pr(pr_number, t_info, head_sha=head_sha, rerun_finished=rerun_finished)
+        for t_info, res in zip(test_infos, responses):
             results.append({
                 "test_name": t_info["test_name"],
                 "trigger_name": self._trigger_name(t_info),

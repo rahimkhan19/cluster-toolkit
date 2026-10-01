@@ -201,7 +201,6 @@ class SourceQualificationAgent:
             "checksum": sel.get("sha256"),
             "selection_method": sel["method"],
             "pr_url": None,
-            "build_url": None,
             "status": CandidateStatus.UPDATE_FOUND,
             "summary": cand_summary,
             "created_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),

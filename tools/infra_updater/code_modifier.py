@@ -78,11 +78,12 @@ class OrchestratorAgent:
         cand_version = cand["version"]
         cand_url = cand.get("download_url", "")
 
-        hold = policy_hold(self.store.get_package(package_id) or {}, cand_version)
+        pkg = self.store.get_package(package_id) or {}
+        hold = policy_hold(pkg, cand_version)
         if hold:
             return {"status": hold[0], "message": f"'{package_id}': {hold[1]} PR creation skipped."}
 
-        instances = self.store.get_blueprints_for_package(package_id)
+        instances = pkg.get("blueprints", [])
         if not instances:
             return {"status": "ERROR", "message": f"No blueprint instances registered for package '{package_id}'."}
         selected_instances = [inst for inst in instances if inst.get("enabled", True)]
@@ -159,7 +160,6 @@ class OrchestratorAgent:
         if not pushed:
             return {"status": "ERROR", "message": f"Git push failed for branch '{branch_name}' on package '{package_id}'."}
 
-        pkg = self.store.get_package(package_id) or {}
         current_blueprint_ver = pkg.get("current_version")
 
         pr_url = pr_number = None
@@ -252,8 +252,8 @@ class OrchestratorAgent:
             return {"status": "ERROR", "message": "Candidate does not have an active PR."}
 
         package_id = cand["package_id"]
-        bp_paths = [i["blueprint_path"] for i in self.store.get_blueprints_for_package(package_id)
-                    if i.get("enabled", True) and i.get("blueprint_path")]
+        pkg = self.store.get_package(package_id) or {}
+        bp_paths = [i["blueprint_path"] for i in pkg.get("blueprints", []) if i.get("enabled", True) and i.get("blueprint_path")]
         if not bp_paths:
             return {"status": "ERROR", "message": f"No active/selected blueprints found for package '{package_id}'."}
 

@@ -37,6 +37,9 @@ from statuses import (
     POLICY_STATUSES, PR_TRACKED_CANDIDATE_STATUSES, CandidateStatus, PackageStatus, derive_package_status,
 )
 
+# Workspaces already fetched by this process: every CLI run syncs once, however many RepoManagers it creates.
+_SYNCED_WORKSPACES = set()
+
 
 class RepoManager:
     """Manages cloning, syncing, branching, committing, pushing, and PR creation for target repos."""
@@ -95,37 +98,32 @@ class RepoManager:
 
     def ensure_workspace(self, force_clean: bool = True) -> str:
         """
-        Ensures the target repository is cloned and synced to the latest base_branch.
-        Creates workspace_dir if needed and fetches/resets to origin/base_branch.
+        Ensures the target repository is cloned and on the latest base_branch. Remotes are
+        configured and fetched once per process; force_clean resets to origin/base_branch every call.
         """
-        parent = os.path.dirname(self.workspace_dir)
-        os.makedirs(parent, exist_ok=True)
-
         if not os.path.exists(os.path.join(self.workspace_dir, ".git")):
+            parent = os.path.dirname(self.workspace_dir)
+            os.makedirs(parent, exist_ok=True)
             print(f"[RepoManager] Cloning target repository '{self.repo_url}' (branch: {self.base_branch}) into {self.workspace_dir}...", flush=True)
-            self._run_git(
-                ["clone", "--branch", self.base_branch, "--single-branch", self.repo_url, self.workspace_dir],
-                cwd=parent,
-            )
-        else:
+            self._run_git(["clone", "--filter=blob:none", "--branch", self.base_branch, "--single-branch",
+                           self.repo_url, self.workspace_dir], cwd=parent)
+        elif self.workspace_dir not in _SYNCED_WORKSPACES:
             print(f"[RepoManager] Syncing workspace with latest origin/{self.base_branch}...", flush=True)
             self._run_git(["remote", "set-url", "origin", self.repo_url], check=False)
             self._run_git(["fetch", "origin", self.base_branch])
-            if force_clean:
-                self._run_git(["checkout", "-f", self.base_branch])
-                self._run_git(["reset", "--hard", f"origin/{self.base_branch}"])
-                self._run_git(["clean", "-fd"])
 
-        self._run_git(["config", "user.name", self.author_name], check=False)
-        self._run_git(["config", "user.email", self.author_email], check=False)
+        if self.workspace_dir not in _SYNCED_WORKSPACES:
+            # Configure the fork remote (plain URL; auth comes from _git_env) when a fork is configured.
+            if self.config.repository.is_fork:
+                remotes = self._run_git(["remote"], check=False).stdout.split()
+                verb = "set-url" if "fork" in remotes else "add"
+                self._run_git(["remote", verb, "fork", self.fork_url], check=False)
+                self._run_git(["fetch", "fork", self.base_branch], check=False)
+            _SYNCED_WORKSPACES.add(self.workspace_dir)
 
-        # Configure fork remote (plain URL; auth comes from _git_env) when a fork is configured.
-        if self.config.repository.is_fork:
-            remotes = self._run_git(["remote"], check=False).stdout.split()
-            verb = "set-url" if "fork" in remotes else "add"
-            self._run_git(["remote", verb, "fork", self.fork_url], check=False)
-            self._run_git(["fetch", "fork", self.base_branch], check=False)
-
+        if force_clean:
+            self._run_git(["checkout", "-f", "-B", self.base_branch, f"origin/{self.base_branch}"])
+            self._run_git(["clean", "-fd"])
         return self.workspace_dir
 
     def prepare_update_branch(self, package_id: str, target_version: str) -> str:
