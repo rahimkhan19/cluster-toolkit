@@ -15,16 +15,15 @@
 
 """
 Orchestrator (code modifier) for the Cluster Toolkit Infrastructure Updater.
-Performs surgical, comment-preserving updates on target blueprints, synchronizes
-coupled variables, validates YAML syntax, and opens a PR with integration tests.
-All coupling rules and line signature keywords are loaded from the DataStore.
+Rewrites the package's pinned versions in the selected blueprints (pins from packages.yaml),
+validates YAML syntax, and opens a PR with integration tests.
 """
 
 import difflib
 import os
 import re
 import sys
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 import yaml
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -32,54 +31,10 @@ if BASE_DIR not in sys.path:
     sys.path.insert(0, BASE_DIR)
 from config import get_config
 from datastore import BaseDataStore, get_datastore
-from fetchers import variant_image_ref
 from policy import policy_hold
+from registry import load_registry, render_values, rewrite
 from repo_manager import RepoManager
 from statuses import APPLICABLE_CANDIDATE_STATUSES, CandidateStatus, PackageStatus, TestStatus
-
-_VERSION_RE = r'v?[0-9]+(?:\.[0-9]+)+(?:-[a-zA-Z0-9._]+)?'
-# repo[:port]/path:tag where the repository part has a letter (so '1:4.7.0-1' is not an image).
-_IMAGE_REF_RE = re.compile(r'^(?=[^:]*[a-z])[a-z0-9][\w./-]*:v?[0-9][\w.-]*$')
-
-
-def _match_v_prefix(reference: str, value: str) -> str:
-    """Adds or strips a leading 'v' on value so it matches the reference's style."""
-    if re.match(r'^[vV][0-9]', reference) and re.match(r'^[0-9]', value):
-        return f"v{value}"
-    if re.match(r'^[0-9]', reference) and re.match(r'^[vV][0-9]', value):
-        return value[1:]
-    return value
-
-
-def _is_url(value: str) -> bool:
-    return value.startswith(("http://", "https://"))
-
-
-def _format_like(old_val: str, new_val: str) -> str:
-    """
-    Shapes new_val after old_val:
-    - URL with a /<version>/ path segment + bare version -> swap only that segment
-    - image reference + bare tag -> move to the new version, keeping the reference's own
-      variant (e.g. -runtime-ubuntu20.04); the old value is kept if no such variant exists
-    - otherwise keep the old value's v-prefix style
-    """
-    if _IMAGE_REF_RE.match(old_val) and not _is_url(old_val) and "/" not in new_val and ":" not in new_val:
-        ref = variant_image_ref(old_val, new_val)
-        if not ref:
-            print(f"[WARN] No '{new_val.split('-')[0]}' variant of {old_val} found; left unchanged.")
-        return ref or old_val
-    if _is_url(old_val) and not _is_url(new_val):
-        m = re.search(rf'/({_VERSION_RE})/', old_val)
-        if m:
-            return old_val.replace(f"/{m.group(1)}/", f"/{_match_v_prefix(m.group(1), new_val)}/")
-        return new_val
-    if ":" in old_val and ":" not in new_val and not _is_url(new_val):  # e.g. epoch '1:4.6.1-1' + '4.7.0-1'
-        m = re.search(rf':({_VERSION_RE})$', old_val)
-        if m:
-            return old_val[:m.start(1)] + _match_v_prefix(m.group(1), new_val)
-        return new_val
-    return _match_v_prefix(old_val, new_val)
-
 
 class OrchestratorAgent:
     """
@@ -94,126 +49,12 @@ class OrchestratorAgent:
         self.repo_manager = RepoManager(self.config)
         self.repo_root = repo_root or self.repo_manager.workspace_dir
 
-    def _get_yaml_context(self, lines: List[str], line_idx: int) -> str:
-        """Extracts parent block keys and immediate sibling metadata for contextual variable replacement."""
-        current_indent = len(lines[line_idx]) - len(lines[line_idx].lstrip(" \t"))
-        context_tokens = [lines[line_idx].strip()]
-        running_indent = current_indent
-        for j in range(line_idx - 1, -1, -1):
-            l = lines[j]
-            stripped = l.strip()
-            if not stripped or stripped.startswith("#"):
-                continue
-            indent = len(l) - len(l.lstrip(" \t"))
-            if indent < running_indent:
-                context_tokens.append(stripped)
-                running_indent = indent
-                if running_indent == 0:
-                    break
-            elif indent == running_indent and any(stripped.startswith(k) for k in ["id:", "- id:", "name:"]):
-                context_tokens.append(stripped)
-
-        for j in range(max(0, line_idx - 5), min(len(lines), line_idx + 6)):
-            l = lines[j].strip()
-            if any(l.startswith(k) for k in ["id:", "- id:", "name:", "source:", "image:", "command:"]):
-                context_tokens.append(l)
-
-        return " ".join(context_tokens).lower()
-
-    def _replace_variable_in_text(
-        self, text: str, var_name: str, new_val: str, signature_keywords: Optional[List[str]] = None
-    ) -> Tuple[str, bool, str, str]:
-        """
-        Replaces the value of every `var_name: value` line (filtered by signature keywords when
-        given). Preserves indentation, quote style, trailing `# comments`, and line endings.
-        Returns: (new_text, changed, old_val, applied_val) for the first matching line.
-        """
-        pattern = re.compile(
-            rf'^(?P<prefix>[ \t]*{re.escape(var_name)}:[ \t]*)'
-            rf'(?:(?P<q>["\'])(?P<qval>.*?)(?P=q)|(?P<val>\S(?:.*?\S)?))'
-            rf'(?P<suffix>(?:[ \t]+#.*)?[ \t]*)$'
-        )
-        lines = text.splitlines(keepends=True)
-        changed = False
-        old_val = ""
-        applied_val = new_val
-
-        for i, line in enumerate(lines):
-            body = line.rstrip("\r\n")
-            m = pattern.match(body)
-            if not m:
-                continue
-            if signature_keywords:
-                ctx = self._get_yaml_context(lines, i)
-                if not any(k.lower() in ctx for k in signature_keywords):
-                    continue
-
-            quote = m.group("q") or ""
-            current = m.group("qval") if quote else m.group("val")
-            target = _format_like(current, new_val)
-            if not old_val:
-                old_val, applied_val = current, target
-            new_line = f"{m.group('prefix')}{quote}{target}{quote}{m.group('suffix')}{line[len(body):]}"
-            if new_line != line:
-                lines[i] = new_line
-                changed = True
-
-        return ("".join(lines), changed, old_val, applied_val)
-
     def _select_candidate(self, package_id: str, candidate_id: Optional[str]) -> Optional[Dict[str, Any]]:
         if candidate_id:
             return self.store.get_candidate(candidate_id)
         # list_candidates is newest-first
         return next((c for c in self.store.list_candidates(package_id=package_id)
                      if c.get("status") in APPLICABLE_CANDIDATE_STATUSES), None)
-
-    @staticmethod
-    def _script_fallbacks(package_id: str, var_name: str, content: str, version: str, url: str) -> Optional[Tuple[str, str, str]]:
-        """
-        Package-specific in-script replacements for artifacts referenced inside shell
-        commands rather than a dedicated YAML variable. Returns (new_content, old_val, new_val).
-        (Phase 4 replaces these with declarative registry rules.)
-        """
-        vn = var_name.lower()
-        if "mft" in vn:
-            m_old = re.search(r'mft-([0-9.\-]+)-aarch64-deb', content)
-            new_base = f"mft-{version}-aarch64-deb"
-            out = re.sub(r'https://www\.mellanox\.com/downloads/MFT/mft-[0-9.\-]+-aarch64-deb\.tgz', url, content)
-            out = re.sub(r'mft-[0-9.\-]+-aarch64-deb', new_base, out)
-            return (out, m_old.group(1) if m_old else "", version) if out != content else None
-
-        if package_id == "miniforge" or "miniforge" in vn:
-            m_old = re.search(r'Miniforge3-([0-9.\-]+)-Linux-x86_64\.sh', content)
-            out = re.sub(
-                r'https://github\.com/conda-forge/miniforge/releases/download/[0-9.\-]+/Miniforge3-[0-9.\-]+-Linux-x86_64\.sh',
-                f'https://github.com/conda-forge/miniforge/releases/download/{version}/Miniforge3-{version}-Linux-x86_64.sh',
-                content
-            )
-            out = re.sub(r'Miniforge3-[0-9.\-]+-Linux-x86_64\.sh', f'Miniforge3-{version}-Linux-x86_64.sh', out)
-            return (out, m_old.group(1) if m_old else "", version) if out != content else None
-
-        if package_id == "nvidia-dcgm" or "dcgm" in vn or "nvidia_packages" in vn:
-            target = version if version.startswith("1:") else f"1:{version}"
-            m_old = re.search(r'datacenter-gpu-manager-4-[a-z0-9]+=([0-9.\-:]+)', content)
-            out = re.sub(r'(datacenter-gpu-manager-4-[a-z0-9]+=)[0-9.\-:]+', rf'\g<1>{target}', content)
-            return (out, m_old.group(1) if m_old else "", target) if out != content else None
-
-        if package_id == "openmpi" or "openmpi" in vn:
-            clean = version.lstrip("v")
-            parts = clean.split(".")
-            maj_min = f"v{parts[0]}.{parts[1]}" if len(parts) >= 2 else f"v{clean}"
-            m_old = re.search(r'openmpi-([0-9.]+)\.tar\.bz2', content)
-            out = re.sub(
-                r'https://download\.open-mpi\.org/release/open-mpi/v[0-9.]+/openmpi-[0-9.]+\.tar\.bz2',
-                f'https://download.open-mpi.org/release/open-mpi/{maj_min}/openmpi-{clean}.tar.bz2',
-                content
-            )
-            out = re.sub(r'(openmpi-)[0-9.]+(\.tar\.bz2)', rf'\g<1>{clean}\g<2>', out)
-            out = re.sub(r'(cd openmpi-)[0-9.]+', rf'\g<1>{clean}', out)
-            out = re.sub(r'(\s+openmpi-)[0-9.]+(\s*)$', rf'\g<1>{clean}\g<2>', out, flags=re.MULTILINE)
-            return (out, m_old.group(1) if m_old else "", clean) if out != content else None
-
-        return None
 
     def apply_update(
         self,
@@ -236,7 +77,6 @@ class OrchestratorAgent:
         cand_id = cand["candidate_id"]
         cand_version = cand["version"]
         cand_url = cand.get("download_url", "")
-        filename = os.path.basename(cand_url)
 
         hold = policy_hold(self.store.get_package(package_id) or {}, cand_version)
         if hold:
@@ -255,68 +95,35 @@ class OrchestratorAgent:
 
         branch_name = self.repo_manager.prepare_update_branch(package_id, cand_version)
 
-        # Compute all edits in memory first (several instances may share a file).
+        # Rewrite every pin of the package in each selected blueprint (packages.yaml / registry.rewrite).
+        pkg_def = load_registry().packages.get(package_id)
+        if not pkg_def:
+            return {"status": "ERROR", "message": f"Package '{package_id}' is not defined in packages.yaml."}
+        values = render_values(cand_version, cand_url)
         file_contents: Dict[str, Dict[str, str]] = {}  # rel_path -> {"orig", "new"}
         modified_files = []
 
-        for inst in selected_instances:
-            rel_path = inst.get("blueprint_path")
-            var_name = inst.get("variable_name")
-            sig_keywords = inst.get("signature_keywords") or []
-            if not rel_path or not var_name:
+        for rel_path in dict.fromkeys(inst["blueprint_path"] for inst in selected_instances if inst.get("blueprint_path")):
+            if self.config.repository.is_fork:
+                # Fork branches start from fork/base; take the blueprint from upstream base.
+                self.repo_manager._run_git(["checkout", f"origin/{self.repo_manager.base_branch}", "--", rel_path], check=False)
+            abs_path = os.path.join(self.repo_root, rel_path)
+            if not os.path.exists(abs_path):
+                print(f"[WARN] Blueprint file not found: {abs_path}")
                 continue
-
-            if rel_path not in file_contents:
-                if self.config.repository.is_fork:
-                    # Fork branches start from fork/base; take the blueprint from upstream base.
-                    self.repo_manager._run_git(["checkout", f"origin/{self.repo_manager.base_branch}", "--", rel_path], check=False)
-                abs_path = os.path.join(self.repo_root, rel_path)
-                if not os.path.exists(abs_path):
-                    print(f"[WARN] Blueprint file not found: {abs_path}")
-                    continue
-                with open(abs_path, "r", encoding="utf-8", newline="") as f:
-                    orig = f.read()
-                file_contents[rel_path] = {"orig": orig, "new": orig}
-            before = file_contents[rel_path]["new"]
-
-            # Primary replacement value based on variable type
-            primary_val = cand_url if "url" in var_name.lower() else cand_version
-            if package_id == "cmake" or "cmake" in var_name.lower():
-                parts = cand_version.lstrip("v").split(".")
-                maj_min = f"v{parts[0]}.{parts[1]}" if len(parts) >= 2 else f"v{cand_version}"
-                filename = f"cmake-{cand_version.lstrip('v')}-linux-x86_64.sh"
-                primary_val = f"https://cmake.org/files/{maj_min}/{filename}"
-
-            new_content, primary_changed, old_primary_val, actual_primary_val = self._replace_variable_in_text(
-                before, var_name, primary_val, signature_keywords=sig_keywords
-            )
-            if not primary_changed:
-                fb = self._script_fallbacks(package_id, var_name, before, cand_version, cand_url)
-                if fb:
-                    new_content, old_primary_val, actual_primary_val = fb
-                    primary_changed = True
-
-            coupled_changes = []
-            for coupled in inst.get("coupled_vars") or []:
-                c_var_name = coupled.get("variable_name")
-                c_val = coupled.get("pattern", "{filename}").format(filename=filename, version=cand_version)
-                new_content, c_changed, old_c_val, actual_c_val = self._replace_variable_in_text(
-                    new_content, c_var_name, c_val, signature_keywords=sig_keywords
-                )
-                if c_changed:
-                    coupled_changes.append({"variable": c_var_name, "old_value": old_c_val, "new_value": actual_c_val})
-
-            if new_content == before:
-                continue
-            file_contents[rel_path]["new"] = new_content
-            modified_files.append({
-                "instance_id": inst.get("instance_id"),
-                "file_path": rel_path,
-                "primary_variable": var_name,
-                "old_value": old_primary_val,
-                "new_value": actual_primary_val if primary_changed else primary_val,
-                "coupled_changes": coupled_changes
-            })
+            with open(abs_path, "r", encoding="utf-8", newline="") as f:
+                orig = f.read()
+            new, changes = rewrite(orig, pkg_def, values)
+            file_contents[rel_path] = {"orig": orig, "new": new}
+            if new != orig:
+                modified_files.append({
+                    "instance_id": rel_path,
+                    "file_path": rel_path,
+                    "primary_variable": changes[0]["variable"],
+                    "old_value": changes[0]["old_value"],
+                    "new_value": changes[0]["new_value"],
+                    "changes": changes,
+                })
 
         changed_files = {p: c for p, c in file_contents.items() if c["new"] != c["orig"]}
         if not changed_files:

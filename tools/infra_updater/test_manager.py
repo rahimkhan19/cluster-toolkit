@@ -29,6 +29,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import yaml
 
 from config import get_config, BASE_DIR
+from registry import load_registry
 from statuses import TEST_FAILED_STATUSES, TEST_TERMINAL_STATUSES, CandidateStatus, TestStatus
 
 CLOUD_BUILD_API = "https://cloudbuild.googleapis.com/v1"
@@ -38,36 +39,6 @@ BUILD_SUCCESS = ("SUCCESS",)
 BUILD_FAILED = ("FAILURE", "INTERNAL_ERROR", "TIMEOUT", "CANCELLED", "EXPIRED")
 
 # Known special case mappings for blueprints to test names
-SPECIAL_BLUEPRINT_TESTS = {
-    "examples/storage-slurm.yaml": "slurm-storage",
-    "storage-slurm.yaml": "slurm-storage",
-    "examples/batch-mpi.yaml": "batch-mpi",
-    "batch-mpi.yaml": "batch-mpi",
-    "examples/ml-slurm.yaml": "ml-slurm",
-    "ml-slurm.yaml": "ml-slurm",
-    "examples/ml-slurm-g4.yaml": "ml-g4-onspot-slurm",
-    "ml-slurm-g4.yaml": "ml-g4-onspot-slurm",
-    "examples/machine-learning/a4x-highgpu-4g/a4x-vm.yaml": "ml-a4x-highgpu-slurm",
-    "a4x-vm.yaml": "ml-a4x-highgpu-slurm",
-    "examples/machine-learning/a4x-maxgpu-4g-metal/a4xmax-bm-slurm-blueprint.yaml": "gke-a4x-max-bm",
-    "a4xmax-bm-slurm-blueprint.yaml": "gke-a4x-max-bm",
-    "examples/machine-learning/a3-megagpu-8g/a3mega-slurm-blueprint.yaml": "ml-a3-megagpu-onspot-slurm-ubuntu",
-    "a3mega-slurm-blueprint.yaml": "ml-a3-megagpu-onspot-slurm-ubuntu",
-    "examples/machine-learning/a3-megagpu-8g/a3mega-slurm-gcsfuse-lssd-blueprint.yaml": "ml-a3-megagpu-onspot-slurm-ubuntu",
-    "a3mega-slurm-gcsfuse-lssd-blueprint.yaml": "ml-a3-megagpu-onspot-slurm-ubuntu",
-    "examples/machine-learning/build-service-images/a3m/blueprint.yaml": "ml-a3-megagpu-onspot-slurm-ubuntu",
-    "examples/machine-learning/build-service-images/shared.yaml": "hpc-build-slurm-image",
-    "shared.yaml": "hpc-build-slurm-image",
-    "examples/gke-consumption-options/dws-flex-start-compact-placement/gke-h4d/gke-h4d.yaml": "gke-h4d-onspot",
-    "tools/cloud-build/daily-tests/blueprints/e2e.yaml": "e2e",
-    "e2e.yaml": "e2e",
-    "tools/cloud-build/daily-tests/blueprints/crd-default.yaml": "chrome-remote-desktop",
-    "crd-default.yaml": "chrome-remote-desktop",
-    "tools/cloud-build/daily-tests/blueprints/crd-ubuntu.yaml": "chrome-remote-desktop-ubuntu",
-    "crd-ubuntu.yaml": "chrome-remote-desktop-ubuntu",
-}
-
-
 def _now_iso() -> str:
     return datetime.datetime.now(datetime.timezone.utc).isoformat()
 
@@ -202,32 +173,18 @@ class TestManager:
                 bp = y.get("blueprint_yaml") if isinstance(y, dict) else None
                 if bp:
                     cleaned = _clean_bp_path(bp)
-                    meta = _meta(os.path.basename(tf)[:-4], cleaned, tf)
-                    mapping[cleaned] = meta
-                    mapping[os.path.basename(cleaned)] = meta
+                    mapping[cleaned] = _meta(os.path.basename(tf)[:-4], cleaned, tf)
 
-        # Special case supplements (do not override discovered mappings)
-        for bp_path, test_name in SPECIAL_BLUEPRINT_TESTS.items():
-            meta = _meta(test_name, bp_path)
-            mapping.setdefault(bp_path, meta)
-            mapping.setdefault(os.path.basename(bp_path), meta)
+        # packages.yaml test_overrides cover blueprints no test file references (never override discovered ones).
+        for bp_path, test_name in load_registry().test_overrides.items():
+            mapping.setdefault(bp_path, _meta(test_name, bp_path))
 
         self._test_mapping_cache = mapping
         return mapping
 
     def resolve_test_for_blueprint(self, blueprint_path: str) -> Optional[Dict[str, Any]]:
         """Resolves test metadata for a given blueprint path or filename."""
-        mapping = self.get_blueprint_mapping()
-        cleaned = _clean_bp_path(blueprint_path)
-        if cleaned in mapping:
-            return mapping[cleaned]
-        base = os.path.basename(cleaned)
-        if base in mapping:
-            return mapping[base]
-        for k, v in mapping.items():
-            if cleaned.endswith(k) or k.endswith(cleaned):
-                return v
-        return None
+        return self.get_blueprint_mapping().get(_clean_bp_path(blueprint_path))
 
     def resolve_tests_for_blueprints(self, blueprint_paths: List[str]) -> List[Dict[str, Any]]:
         """Resolves a unique list of tests for multiple modified blueprints, linking each blueprint."""

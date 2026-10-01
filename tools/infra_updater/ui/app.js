@@ -451,6 +451,7 @@ function renderCandidates(candidates, packages) {
           <div class="version-item">
             <span class="version-label">Current:</span>
             <span class="code-pill">${escapeHtml(currVer)}</span>
+            ${outOfSyncBadge(c.package_id)}
           </div>
           <span class="version-arrow">→</span>
           <div class="version-item">
@@ -597,7 +598,7 @@ function renderPackageTableRow(p, { effectiveStatus, upstreamVersion, summary, c
     <tr>
       <td><span class="code-pill">${escapeHtml(p.package_id)}</span></td>
       <td><strong>${escapeHtml(p.name)}</strong></td>
-      <td><span class="code-pill" style="color: var(--accent-green-light)">${escapeHtml(p.current_version)}</span></td>
+      <td><span class="code-pill" style="color: var(--accent-green-light)">${escapeHtml(p.current_version)}</span>${outOfSyncBadge(p.package_id)}</td>
       <td>${upVerHtml}</td>
       <td><span class="code-pill" style="color: var(--accent-amber)">${escapeHtml(p.upstream_type || 'github_release')}</span></td>
       <td><span class="badge ${badgeClass}">${statusLabel}</span></td>
@@ -674,6 +675,22 @@ function renderPackages(packages, candidates) {
   tbody.innerHTML = rows.join('');
 }
 
+// Blueprints of a package pinned at different versions (selected blueprints only).
+function versionSpread(packageId) {
+  const insts = (latestInstances || []).filter(i => i.package_id === packageId && i.enabled !== false && i.current_version);
+  const counts = {};
+  insts.forEach(i => { counts[i.current_version] = (counts[i.current_version] || 0) + 1; });
+  const entries = Object.entries(counts).sort((a, b) => b[1] - a[1]);
+  return { outOfSync: entries.length > 1, label: entries.map(([v, n]) => `${n} × ${v}`).join(', ') };
+}
+
+function outOfSyncBadge(packageId) {
+  const spread = versionSpread(packageId);
+  return spread.outOfSync
+    ? `<span class="badge badge-amber out-of-sync-badge" title="Blueprints pin different versions: ${escapeHtml(spread.label)}">⚠ out of sync</span>`
+    : '';
+}
+
 function renderInstances(instances) {
   const tbody = document.getElementById('instances-table-body');
   if (!tbody) return;
@@ -683,15 +700,10 @@ function renderInstances(instances) {
     return;
   }
   tbody.innerHTML = list.map(inst => {
-    let coupled = [];
-    if (Array.isArray(inst.coupled_vars)) {
-      coupled = inst.coupled_vars;
-    } else if (typeof inst.coupled_vars === 'string') {
-      try { coupled = JSON.parse(inst.coupled_vars); } catch(e) { coupled = []; }
-    }
-    const coupledDesc = coupled.length > 0 
-      ? coupled.map(c => `<span class="code-pill" style="color: var(--accent-amber)">${escapeHtml(c.variable_name || '')} (${escapeHtml(c.pattern || '{filename}')})</span>`).join(', ')
-      : '<span style="color: var(--text-muted)">Direct</span>';
+    const coupled = Array.isArray(inst.coupled_vars) ? inst.coupled_vars : [];
+    const coupledDesc = coupled.length > 0
+      ? coupled.map(c => `<span class="code-pill" style="color: var(--accent-amber)">${escapeHtml(c.variable_name || '')}</span>`).join(', ')
+      : '<span style="color: var(--text-muted)">-</span>';
     const statusBadge = inst.enabled !== false
       ? `<span class="badge badge-green" style="font-size: 10px; margin-left: 6px;">Active</span>`
       : `<span class="badge badge-gray" style="font-size: 10px; margin-left: 6px; color: var(--text-muted); border-color: rgba(255,255,255,0.1);">Deselected</span>`;
@@ -700,14 +712,14 @@ function renderInstances(instances) {
       <tr>
         <td>
           <div style="display: flex; align-items: center; gap: 4px;">
-            <span class="code-pill">${escapeHtml(inst.instance_id)}</span>
+            <span style="font-family: var(--font-mono); font-size: 12px; color: var(--text-secondary);">${escapeHtml(inst.blueprint_path)}</span>
             ${statusBadge}
           </div>
         </td>
         <td><span class="code-pill">${escapeHtml(inst.package_id)}</span></td>
+        <td><span class="code-pill" style="color: var(--accent-green-light)">${escapeHtml(inst.current_version || '-')}</span></td>
         <td><span class="code-pill" style="color: #58a6ff">${escapeHtml(inst.variable_name)}</span></td>
         <td>${coupledDesc}</td>
-        <td><span style="font-family: var(--font-mono); font-size: 12px; color: var(--text-secondary);">${escapeHtml(inst.blueprint_path)}</span></td>
       </tr>
     `;
   }).join('');
@@ -864,7 +876,7 @@ function openBlueprintModal(packageId) {
     titleEl.textContent = `Associated Blueprints: ${pkg.package_id}`;
   }
   if (subtitleEl) {
-    subtitleEl.innerHTML = `<strong>${escapeHtml(pkg.name || pkg.package_id)}</strong> &bull; Current version: <code class="code-pill">${escapeHtml(pkg.current_version || '-')}</code>`;
+    subtitleEl.innerHTML = `<strong>${escapeHtml(pkg.name || pkg.package_id)}</strong> &bull; Current version: <code class="code-pill">${escapeHtml(pkg.current_version || '-')}</code> ${outOfSyncBadge(packageId)}`;
   }
   if (selBar) {
     selBar.style.display = totalCount > 0 ? 'flex' : 'none';
@@ -888,13 +900,12 @@ function openBlueprintModal(packageId) {
           <div class="coupled-box">
             <div class="coupled-title">
               <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>
-              Coupled Sibling Variables (Atomic Synchronization)
+              Also Updated (same pinned version)
             </div>
             <div class="coupled-list">
               ${coupled.map(c => `
                 <div class="coupled-item">
                   <span class="code-pill var-pill">${escapeHtml(c.variable_name)}</span>
-                  <span class="coupled-pattern">Pattern: <code>${escapeHtml(c.pattern || '{filename}')}</code></span>
                 </div>
               `).join('')}
             </div>
@@ -903,8 +914,8 @@ function openBlueprintModal(packageId) {
       } else {
         coupledHtml = `
           <div class="detail-row">
-            <span class="detail-label">Coupled Vars:</span>
-            <span style="color: var(--text-muted); font-size: 12px;">None (Standalone variable)</span>
+            <span class="detail-label">Also Updated:</span>
+            <span style="color: var(--text-muted); font-size: 12px;">-</span>
           </div>
         `;
       }
@@ -958,8 +969,8 @@ function openBlueprintModal(packageId) {
           </div>
           <div class="blueprint-card-details">
             <div class="detail-row">
-              <span class="detail-label">Instance ID:</span>
-              <span class="code-pill">${escapeHtml(inst.instance_id)}</span>
+              <span class="detail-label">Pinned Version:</span>
+              <span class="code-pill">${escapeHtml(inst.current_version || '-')}</span>
             </div>
             <div class="detail-row">
               <span class="detail-label">Target Variable:</span>

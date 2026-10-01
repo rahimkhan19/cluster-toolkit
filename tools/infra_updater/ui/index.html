@@ -165,18 +165,18 @@
           <div class="card-header">
             <div>
               <div class="card-title">Tracked Blueprint Instances</div>
-              <div class="card-subtitle">Blueprint variable bindings and coupled sibling synchronizations (table: <code>blueprint_instances</code>)</div>
+              <div class="card-subtitle">Blueprints pinning each package, discovered from the <code>packages.yaml</code> pins on every check</div>
             </div>
           </div>
           <div class="table-responsive">
             <table class="data-table">
               <thead>
                 <tr>
-                  <th>Instance ID</th>
+                  <th>Blueprint File</th>
                   <th>Package ID</th>
-                  <th>Primary Variable</th>
-                  <th>Coupled Variable Rules</th>
-                  <th>Target Blueprint File</th>
+                  <th>Pinned Version</th>
+                  <th>Variable</th>
+                  <th>Also Updated</th>
                 </tr>
               </thead>
               <tbody id="instances-table-body"></tbody>

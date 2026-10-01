@@ -1,0 +1,153 @@
+# Package registry for the Cluster Toolkit Automated Infrastructure Updater.
+#
+# Single source of truth for everything package-specific. Blueprint instances and each package's
+# current version are discovered from the target repository (see registry.py); nothing here
+# needs editing when blueprints change.
+#
+# Per package:
+#   upstream.type / upstream.url   fetcher (fetchers.py) and its source
+#   source_options                 fetcher options (asset_pattern, apt_package, arch, flavor, selector, prompt_hints)
+#   pins                           regexes that locate the package's version in blueprint text. Named groups
+#                                  are rewritten on apply: version, major_minor, url, filename, image.
+#                                  A group nested inside another rewritten group is only read (e.g. version in url).
+#   include / exclude              optional glob filters on blueprint paths
+
+discovery:
+  roots:
+    - examples/**/*.yaml
+    - community/examples/**/*.yaml
+
+packages:
+  - id: nvidia-cuda-x86
+    name: NVIDIA CUDA Toolkit (x86_64)
+    upstream: {type: archive_scraper, url: https://developer.nvidia.com/cuda-downloads}
+    source_options:
+      asset_pattern: '/cuda_[\d.]+(?:_[\d.]+)?_linux\.run$'
+    pins:
+      - '(?P<url>https://developer\.download\.nvidia\.com/compute/cuda/(?P<version>\d+(?:\.\d+)+)/local_installers/cuda_[\d.]+(?:_[\d.]+)?_linux\.run)'
+      - '/tmp/(?P<filename>cuda_[\d.]+(?:_[\d.]+)?_linux\.run)'
+
+  - id: nvidia-cuda-arm64
+    name: NVIDIA CUDA Toolkit (ARM64 SBSA)
+    upstream: {type: archive_scraper, url: https://developer.nvidia.com/cuda-downloads}
+    source_options:
+      asset_pattern: '/cuda_[\d.]+(?:_[\d.]+)?_linux_sbsa\.run$'
+    pins:
+      - '(?P<url>https://developer\.download\.nvidia\.com/compute/cuda/(?P<version>\d+(?:\.\d+)+)/local_installers/cuda_[\d.]+(?:_[\d.]+)?_linux_sbsa\.run)'
+      - '/tmp/(?P<filename>cuda_[\d.]+(?:_[\d.]+)?_linux_sbsa\.run)'
+
+  - id: gve-dkms
+    name: Google Virtual Ethernet Kernel Driver
+    upstream: {type: github_release, url: https://github.com/GoogleCloudPlatform/compute-virtual-ethernet-linux}
+    source_options:
+      asset_pattern: '_all\.deb$'
+    pins:
+      - '(?P<url>https://github\.com/GoogleCloudPlatform/compute-virtual-ethernet-linux/releases/download/v(?P<version>\d+(?:\.\d+)+)/gve-dkms_[\d.]+_all\.deb)'
+
+  - id: mft
+    name: Mellanox Firmware Tools
+    upstream: {type: mft_api, url: https://network.nvidia.com/products/adapter-software/firmware-tools/}
+    source_options: {arch: aarch64, os: DEB based}
+    pins:
+      - 'mft-(?P<version>\d+(?:\.\d+)+-\d+)-aarch64-deb'
+
+  - id: nccl-tcpx
+    name: GPUDirect TCPX Network Plugin
+    upstream: {type: raw_manifest, url: https://raw.githubusercontent.com/GoogleCloudPlatform/container-engine-accelerators/master/gpudirect-tcpx/nccl-tcpx-installer.yaml}
+    pins:
+      - '^[ \t]*nccl_tcpx_version:[ \t]*["'']?(?P<version>v\d+(?:\.\d+)+)'
+
+  - id: nccl-tcpxo
+    name: GPUDirect TCPXO Network Plugin
+    upstream: {type: raw_manifest, url: https://raw.githubusercontent.com/GoogleCloudPlatform/container-engine-accelerators/master/gpudirect-tcpxo/nccl-tcpxo-installer.yaml}
+    pins:
+      - '^[ \t]*nccl_tcpxo_version:[ \t]*["'']?(?P<version>v\d+(?:\.\d+)+)'
+
+  - id: nccl-plugin
+    name: GPUDirect RDMA NCCL Plugin
+    upstream: {type: raw_manifest, url: https://raw.githubusercontent.com/GoogleCloudPlatform/container-engine-accelerators/master/gpudirect-rdma/nccl-rdma-installer-a4x.yaml}
+    pins:
+      - '^[ \t]*nccl_plugin_version:[ \t]*["'']?(?P<version>v\d+(?:\.\d+)+)'
+      # gke-* blueprints: the version inside the kubectl-apply gib: template_vars block
+      - '^[ \t]+gib:[ \t]*(?:#.*)?\n(?:[ \t]+(?![ \t]|version:).*\n){0,4}[ \t]+version:[ \t]*["'']?(?P<version>v\d+(?:\.\d+)+)'
+
+  - id: slurm-gcp
+    name: SchedMD Slurm on GCP Engine
+    upstream: {type: github_release, url: https://github.com/GoogleCloudPlatform/slurm-gcp}
+    pins:
+      - '^[ \t]*(?:build_slurm_from_git_ref|slurm_gcp_version):[ \t]*["'']?(?P<version>\d+\.\d+\.\d+)\b'
+
+  - id: nvidia-dcgm
+    name: NVIDIA Data Center GPU Manager
+    upstream: {type: apt_repository, url: https://developer.download.nvidia.com/compute/cuda/repos/}
+    source_options: {apt_package: datacenter-gpu-manager-4-core, distro: debian12, arch: x86_64}
+    pins:
+      - 'datacenter-gpu-manager-4-[a-z0-9]+=(?P<version>\d+:\d+(?:\.\d+)+-\d+)'
+
+  - id: mpi-operator
+    name: Kubeflow MPI Operator
+    upstream: {type: github_release, url: https://github.com/kubeflow/mpi-operator}
+    pins:
+      - 'kubeflow/mpi-operator/(?P<version>v\d+(?:\.\d+)+)/deploy/'
+
+  - id: spack
+    name: Spack HPC Package Manager
+    upstream: {type: github_release, url: https://github.com/spack/spack}
+    pins:
+      - '^[ \t]*spack_ref:[ \t]*["'']?(?P<version>v\d+(?:\.\d+)+)'
+
+  - id: openmpi
+    name: OpenMPI Library
+    upstream: {type: github_release, url: https://github.com/open-mpi/ompi}
+    pins:
+      - 'download\.open-mpi\.org/release/open-mpi/v(?P<major_minor>\d+\.\d+)/'
+      - 'openmpi-(?P<version>\d+(?:\.\d+)+)'
+
+  - id: nvidia-dra-driver
+    name: NVIDIA GPU DRA Driver for Kubernetes
+    upstream: {type: github_release, url: https://github.com/kubernetes-sigs/dra-driver-nvidia-gpu}
+    pins:
+      - '^[ \t]+nvidia_dra_driver:[ \t]*(?:#.*)?\n(?:[ \t]+(?![ \t]|version:).*\n){0,4}[ \t]+version:[ \t]*["'']?(?P<version>v\d+(?:\.\d+)+)'
+
+  - id: nvidia-cuda-image
+    name: NVIDIA CUDA Test Container Image
+    upstream: {type: docker_hub, url: https://hub.docker.com/v2/repositories/nvidia/cuda/tags}
+    source_options:
+      flavor: base-ubuntu24.04   # upstream tag flavor to track; each blueprint keeps its own variant on apply
+    pins:
+      - 'image:[ \t]*["'']?(?P<image>nvidia/cuda:(?P<version>\d+(?:\.\d+)+-[\w.-]*[\w]))'
+
+  - id: cmake
+    name: Kitware CMake Build System
+    upstream: {type: github_release, url: https://github.com/Kitware/CMake}
+    source_options:
+      asset_pattern: '-linux-x86_64\.sh$'
+    pins:
+      - 'cmake\.org/files/v(?P<major_minor>\d+\.\d+)/'
+      - 'cmake-(?P<version>\d+(?:\.\d+)+)-linux-x86_64\.sh'
+
+  - id: miniforge
+    name: Miniforge3 Conda Installer
+    upstream: {type: github_release, url: https://github.com/conda-forge/miniforge}
+    source_options:
+      asset_pattern: '^Miniforge3-.*-Linux-x86_64\.sh$'
+    pins:
+      - 'miniforge/releases/download/(?P<version>\d+(?:\.\d+)+-\d+)/'
+      - 'Miniforge3-(?P<version>\d+(?:\.\d+)+-\d+)-Linux-x86_64\.sh'
+
+# Integration tests for blueprints that no tools/cloud-build/daily-tests/tests/*.yml references directly.
+test_overrides:
+  examples/storage-slurm.yaml: slurm-storage
+  examples/batch-mpi.yaml: batch-mpi
+  examples/ml-slurm.yaml: ml-slurm
+  examples/ml-slurm-g4.yaml: ml-g4-onspot-slurm
+  examples/machine-learning/a4x-highgpu-4g/a4x-vm.yaml: ml-a4x-highgpu-slurm
+  examples/machine-learning/a4x-maxgpu-4g-metal/a4xmax-bm-slurm-blueprint.yaml: gke-a4x-max-bm
+  examples/machine-learning/a3-megagpu-8g/a3mega-slurm-blueprint.yaml: ml-a3-megagpu-onspot-slurm-ubuntu
+  examples/machine-learning/a3-megagpu-8g/a3mega-slurm-gcsfuse-lssd-blueprint.yaml: ml-a3-megagpu-onspot-slurm-ubuntu
+  examples/machine-learning/build-service-images/a3m/blueprint.yaml: ml-a3-megagpu-onspot-slurm-ubuntu
+  examples/machine-learning/build-service-images/shared.yaml: hpc-build-slurm-image
+  examples/gke-consumption-options/dws-flex-start-compact-placement/gke-h4d/gke-h4d.yaml: gke-h4d-onspot
+  tools/cloud-build/daily-tests/blueprints/e2e.yaml: e2e
+  tools/cloud-build/daily-tests/blueprints/crd-default.yaml: chrome-remote-desktop
+  tools/cloud-build/daily-tests/blueprints/crd-ubuntu.yaml: chrome-remote-desktop-ubuntu

@@ -59,3 +59,23 @@ def is_version_greater(v1: str, v2: Optional[str]) -> bool:
     except InvalidVersion:
         pass
     return c1 > c2
+
+
+def match_v_prefix(reference: str, value: str) -> str:
+    """Adds or strips a leading 'v' on value so it matches the reference's style (v1.2.3 vs 1.2.3)."""
+    if not reference or not value:
+        return value
+    if re.match(r'^[vV][0-9]', reference) and re.match(r'^[0-9]', value):
+        return f"v{value}"
+    if re.match(r'^[0-9]', reference) and re.match(r'^[vV][0-9]', value):
+        return value[1:]
+    return value
+
+
+def oldest_version(versions) -> Optional[str]:
+    """The lowest of the given version strings (None if there are none)."""
+    oldest = None
+    for v in versions:
+        if v and (oldest is None or is_version_greater(oldest, v)):
+            oldest = v
+    return oldest

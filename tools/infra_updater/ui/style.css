@@ -1430,3 +1430,9 @@ body {
   font-weight: 500;
 }
 
+.out-of-sync-badge {
+  margin-left: 6px;
+  font-size: 10px;
+  white-space: nowrap;
+  cursor: help;
+}

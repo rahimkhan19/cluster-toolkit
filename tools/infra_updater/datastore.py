@@ -38,6 +38,7 @@ import uuid
 from typing import Any, Dict, List, Optional
 
 from config import get_config
+from registry import package_current_version
 from statuses import ACTIVE_CANDIDATE_STATUSES, CandidateStatus
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -51,21 +52,33 @@ def _now() -> str:
     return datetime.datetime.now(datetime.timezone.utc).isoformat()
 
 
-# Package fields owned by the seed registry. On a non-reset seed only these are refreshed on
-# existing packages; runtime state (status, snooze/block, selections, versions) is preserved.
+# Package fields owned by packages.yaml + blueprint discovery. On a non-reset seed only these are
+# refreshed on existing packages; runtime state (status, snooze/block, candidates) is preserved.
 SEED_REGISTRY_FIELDS = ("name", "source_url", "upstream_type", "source_options", "blueprints")
 
 
+def registry_updates(existing: Dict[str, Any], seed_pkg: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Fields to write on an existing package: the registry fields, the blueprint deselections carried
+    over to the newly discovered instances (matched by id, or by blueprint path for legacy ids), and
+    the current version recomputed from the selected blueprints.
+    """
+    updates = {f: copy.deepcopy(seed_pkg[f]) for f in SEED_REGISTRY_FIELDS if f in seed_pkg}
+    new_ids = {b["instance_id"] for b in updates.get("blueprints", [])}
+    legacy_paths = {b.get("instance_id"): b.get("blueprint_path") for b in existing.get("blueprints", [])}
+    disabled = sorted({d if d in new_ids else legacy_paths.get(d) for d in existing.get("disabled_blueprints") or []}
+                      & new_ids)
+    updates["disabled_blueprints"] = disabled
+    updates["current_version"] = package_current_version(updates.get("blueprints", []), disabled) \
+        or existing.get("current_version") or "-"
+    return updates
+
+
 def merge_seed_package(existing: Optional[Dict[str, Any]], seed_pkg: Dict[str, Any]) -> Dict[str, Any]:
-    """Returns the package document to store: the seed for new packages, else existing + registry fields."""
+    """Returns the package document to store: the seed for new packages, else existing + registry updates."""
     if not existing:
         return copy.deepcopy(seed_pkg)
-    merged = copy.deepcopy(existing)
-    for field in SEED_REGISTRY_FIELDS:
-        if field in seed_pkg:
-            merged[field] = copy.deepcopy(seed_pkg[field])
-    BaseDataStore._normalize_package_blueprints(merged)
-    return merged
+    return {**copy.deepcopy(existing), **registry_updates(existing, seed_pkg)}
 
 
 def _exclude_set(exclude_status: Optional[Any]) -> set:
@@ -100,10 +113,10 @@ class BaseDataStore(abc.ABC):
     def _normalize_package_blueprints(pkg: Optional[Dict[str, Any]]) -> None:
         if not pkg:
             return
+        # disabled_blueprints is the single source of truth; "enabled" is derived on read.
         disabled = set(pkg.get("disabled_blueprints") or [])
         for bp in pkg.get("blueprints", []):
-            iid = bp.get("instance_id")
-            bp["enabled"] = (iid not in disabled) and bp.get("enabled", True)
+            bp["enabled"] = bp.get("instance_id") not in disabled
 
     # Blueprints
     def get_blueprints_for_package(self, package_id: str) -> List[Dict[str, Any]]:
@@ -118,7 +131,6 @@ class BaseDataStore(abc.ABC):
                 bp_copy = copy.deepcopy(bp)
                 bp_copy["package_id"] = pid
                 bp_copy["package_name"] = pkg.get("name", pid)
-                bp_copy["current_version"] = pkg.get("current_version", "")
                 all_bps.append(bp_copy)
         return all_bps
 
@@ -135,27 +147,18 @@ class BaseDataStore(abc.ABC):
 
         blueprints = copy.deepcopy(pkg.get("blueprints", []))
         disabled = set(pkg.get("disabled_blueprints") or [])
-
         if action == "select_all_blueprints":
             disabled.clear()
-            for bp in blueprints:
-                bp["enabled"] = True
         elif action == "deselect_all_blueprints":
             disabled.update(bp["instance_id"] for bp in blueprints if bp.get("instance_id"))
         elif action == "toggle_blueprint" and instance_id:
-            new_enabled = bool(enabled) if enabled is not None else instance_id in disabled
-            if new_enabled:
-                disabled.discard(instance_id)
-                for bp in blueprints:
-                    if bp.get("instance_id") == instance_id:
-                        bp["enabled"] = True
-            else:
-                disabled.add(instance_id)
+            select = bool(enabled) if enabled is not None else instance_id in disabled
+            (disabled.discard if select else disabled.add)(instance_id)
 
+        current_version = package_current_version(blueprints, sorted(disabled)) or pkg.get("current_version")
+        self.update_package(package_id, {"disabled_blueprints": sorted(disabled), "current_version": current_version})
         for bp in blueprints:
-            bp["enabled"] = (bp.get("instance_id") not in disabled) and bp.get("enabled", True)
-
-        self.update_package(package_id, {"blueprints": blueprints, "disabled_blueprints": sorted(disabled)})
+            bp["enabled"] = bp.get("instance_id") not in disabled
 
         selected_count = sum(1 for bp in blueprints if bp["enabled"])
         total_count = len(blueprints)
@@ -164,9 +167,10 @@ class BaseDataStore(abc.ABC):
             "package_id": package_id,
             "blueprints": blueprints,
             "disabled_blueprints": sorted(disabled),
+            "current_version": current_version,
             "selected_count": selected_count,
             "total_count": total_count,
-            "message": f"Updated blueprint selection for {package_id} ({selected_count}/{total_count} selected)."
+            "message": f"Updated blueprint selection for {package_id} ({selected_count}/{total_count} selected).",
         }
 
     # Candidates
@@ -395,20 +399,20 @@ class FirestoreDataStore(BaseDataStore):
         batch = self.db.batch()
         count = 0
 
-        def _set(ref, doc):
+        def _write(ref, doc, update=False):
             nonlocal batch, count
-            batch.set(ref, doc)
+            (batch.update if update else batch.set)(ref, doc)
             count += 1
             if count % 400 == 0:
                 batch.commit()
                 batch = self.db.batch()
 
         for pid, pkg in seed_data.get("packages", {}).items():
-            _set(self.db.collection("packages").document(pid), merge_seed_package(existing.get(pid), pkg))
-
-        for rule in seed_data.get("learned_rules", []):
-            if rule.get("rule_id"):
-                _set(self.db.collection("learned_rules").document(rule["rule_id"]), rule)
+            ref = self.db.collection("packages").document(pid)
+            if pid in existing:  # only registry fields, so concurrent runtime updates are not overwritten
+                _write(ref, registry_updates(existing[pid], pkg), update=True)
+            else:
+                _write(ref, pkg)
 
         if count % 400 != 0:
             batch.commit()

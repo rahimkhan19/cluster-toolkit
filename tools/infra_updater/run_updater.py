@@ -58,6 +58,8 @@ def run_check_all(model: str = None):
     # Ensure target workspace develop branch is in sync with remote origin
     repo_mgr = RepoManager(CONFIG)
     repo_mgr.ensure_workspace(force_clean=True)
+    # Re-discover blueprints so current versions reflect the latest base branch (runtime state kept).
+    init_database(reset=False, sync_workspace=False)
     print("Evaluating GA Stability, Policy Rules, and Compatibility...\n")
 
     agent = SourceQualificationAgent(model=model)
@@ -294,7 +296,7 @@ def run_end_to_end(model: str = None, wait_for_test: bool = True):
     print(f"{BOLD}[STAGE 0/3] Synchronizing Target Repository ({CONFIG.repository.url})...{RESET}")
     run_sync_repo()
     print(f"{BOLD}[STAGE 0/3] Refreshing package registry...{RESET}")
-    init_database(reset=False)
+    init_database(reset=False, sync_workspace=False)
 
     # Stage 1: Source Qualification Across Canonical Packages
     print(f"\n{BOLD}[STAGE 1/3] Running Source Qualification Agent Across Monitored Packages ({model})...{RESET}")
@@ -342,8 +344,7 @@ def run_unblock(package_id: str):
 
 def run_reset():
     print(f"\n{BOLD}{YELLOW}[RESET] Reverting target workspace and resetting state store...{RESET}")
-    RepoManager(CONFIG).ensure_workspace(force_clean=True)
-    init_database(reset=True)
+    init_database(reset=True)  # also resets the workspace to the base branch
     print(f"{GREEN}[SUCCESS] Environment and state store reset to baseline.{RESET}\n")
 
 

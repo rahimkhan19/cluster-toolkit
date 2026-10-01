@@ -31,7 +31,7 @@ from pydantic import BaseModel, Field
 from fetchers import Candidate, describe
 from llm_client import clean_error_message
 from prompts import render_prompt
-from versions import is_version_greater, parse_semver
+from versions import is_version_greater, match_v_prefix, parse_semver
 
 PRERELEASE_RE = re.compile(
     r"(?i)(?:^|[-_.+~])(?:rc|beta|alpha|preview|pre|dev|test|nightly|snapshot|draft|dirty|unverified)\d*(?=$|[-_.+~])"
@@ -41,7 +41,7 @@ PRERELEASE_RE = re.compile(
 DEFAULT_RULES: Dict[str, str] = {
     "archive_scraper": "Candidates are installer links scraped from a downloads page: prefer the full standalone "
                        "Linux installer over network, patch or driver-only packages.",
-    "docker_hub": "Versions are complete image tags; keep the deployed tag's flavor suffix (e.g. -base-ubuntu24.04).",
+    "docker_hub": "Versions are complete image tags (e.g. 13.4.2-base-ubuntu24.04); copy the full tag.",
     "apt_repository": "Versions are Debian package versions; copy them including any epoch prefix (e.g. '1:').",
 }
 
@@ -88,13 +88,7 @@ def _core(version: str) -> str:
 
 def normalize_version(version: str, current: Optional[str]) -> str:
     """Aligns the 'v' prefix with the deployed version's style (v1.2.3 vs 1.2.3)."""
-    if not current or not version:
-        return version
-    if current.startswith("v") and version[:1].isdigit():
-        return f"v{version}"
-    if not current.startswith("v") and version.startswith("v") and version[1:2].isdigit():
-        return version[1:]
-    return version
+    return match_v_prefix(current or "", version)
 
 
 def _numbered(rules: List[str], start: int) -> str:

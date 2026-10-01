@@ -201,9 +201,9 @@ def _docker_repo(source_url: str) -> str:
 
 @register("docker_hub")
 def fetch_docker_hub(pkg: Dict[str, Any], ctx: FetchContext) -> List[Candidate]:
-    """Tags of the image that share the deployed tag's flavor (e.g. '-base-ubuntu24.04')."""
+    """Tags of the image with source_options.flavor (default: the deployed tag's flavor, e.g. 'base-ubuntu24.04')."""
     repo = _docker_repo(pkg.get("source_url", ""))
-    _, flavor = split_tag(pkg.get("current_version", ""))
+    flavor = _opts(pkg).get("flavor") or split_tag(pkg.get("current_version", ""))[1]
     params = {"page_size": 100, **({"name": flavor} if flavor else {})}
     resp = http_client.get(f"https://hub.docker.com/v2/repositories/{repo}/tags", params=params)
     resp.raise_for_status()
