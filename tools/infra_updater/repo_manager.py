@@ -40,6 +40,15 @@ from statuses import (
 # Workspaces already fetched by this process: every CLI run syncs once, however many RepoManagers it creates.
 _SYNCED_WORKSPACES = set()
 
+PR_URL_RE = re.compile(r"github\.com/([^/]+)/([^/]+)/pull/(\d+)")
+
+
+def parse_pr_url(url: Optional[str]) -> Optional[Tuple[str, str, int]]:
+    """(owner, repo, number) of a GitHub PR URL. PR URLs are self-describing, so PRs
+    opened against a previously configured repository are still tracked correctly."""
+    m = PR_URL_RE.search(url or "")
+    return (m.group(1), m.group(2), int(m.group(3))) if m else None
+
 
 class RepoManager:
     """Manages cloning, syncing, branching, committing, pushing, and PR creation for target repos."""
@@ -113,12 +122,11 @@ class RepoManager:
             self._run_git(["fetch", "origin", self.base_branch])
 
         if self.workspace_dir not in _SYNCED_WORKSPACES:
-            # Configure the fork remote (plain URL; auth comes from _git_env) when a fork is configured.
+            # Configure the fork push remote (plain URL; auth comes from _git_env) when a fork is configured.
             if self.config.repository.is_fork:
                 remotes = self._run_git(["remote"], check=False).stdout.split()
                 verb = "set-url" if "fork" in remotes else "add"
                 self._run_git(["remote", verb, "fork", self.fork_url], check=False)
-                self._run_git(["fetch", "fork", self.base_branch], check=False)
             _SYNCED_WORKSPACES.add(self.workspace_dir)
 
         if force_clean:
@@ -128,19 +136,15 @@ class RepoManager:
 
     def prepare_update_branch(self, package_id: str, target_version: str) -> str:
         """
-        Creates and checks out a clean atomic update branch.
-        When using a fork, branches off fork/base_branch so pushing does not transfer
-        unrelated upstream commits (e.g. .github/workflows) that require elevated PAT scopes.
+        Creates and checks out a clean update branch off the target repository's latest
+        base branch (the same tree blueprints were discovered from), even when pushing to a
+        fork whose base branch is behind. Note: if the upstream commits the fork lacks touch
+        .github/workflows, pushing them requires a token with the `workflow` scope.
         """
         self.ensure_workspace(force_clean=True)
         clean_version = re.sub(r'[^a-zA-Z0-9_.\-]', '_', target_version)
         branch_name = f"{self.config.pull_request.branch_prefix}{package_id}-{clean_version}"
-
         base_ref = f"origin/{self.base_branch}"
-        if self.config.repository.is_fork:
-            if self._run_git(["rev-parse", "--verify", f"fork/{self.base_branch}"], check=False).returncode == 0:
-                base_ref = f"fork/{self.base_branch}"
-
         print(f"[RepoManager] Creating branch '{branch_name}' off {base_ref}...", flush=True)
         self._run_git(["checkout", "-B", branch_name, base_ref])
         return branch_name
@@ -320,13 +324,14 @@ class RepoManager:
 
         for cand in candidates:
             status = cand.get("status")
-            m = re.search(r"/pull/(\d+)", cand.get("pr_url") or "")
-            if not m or status == CandidateStatus.MERGED:
+            ref = parse_pr_url(cand.get("pr_url"))
+            if not ref or status == CandidateStatus.MERGED:
                 continue
-            cand_id, pkg_id, pr_num = cand["candidate_id"], cand.get("package_id"), int(m.group(1))
+            pr_owner, pr_repo, pr_num = ref
+            cand_id, pkg_id = cand["candidate_id"], cand.get("package_id")
 
             try:
-                pr = self.github.get(f"{self.pulls_path}/{pr_num}")
+                pr = self.github.get(f"/repos/{pr_owner}/{pr_repo}/pulls/{pr_num}")
             except GitHubError as he:
                 if he.status != 404:
                     errors += 1

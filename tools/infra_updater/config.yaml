@@ -12,9 +12,9 @@ database:
 # Target Repository & Branch
 repository:
   # Upstream target repository where Pull Requests will be opened
-  url: "https://github.com/rahimkhan19/cluster-toolkit.git"
+  url: "https://github.com/GoogleCloudPlatform/cluster-toolkit.git"
   branch: "develop"
-  # Fork repository where update branches will be pushed
+  # Fork repository where update branches will be pushed (omit to push to the target repository)
   fork_url: "https://github.com/rahimkhan19/cluster-toolkit.git"
 
 # Update branch naming and commit / PR titles. Placeholders: {package_id}, {version}

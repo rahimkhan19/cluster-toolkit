@@ -31,6 +31,7 @@ import yaml
 
 from config import get_config, BASE_DIR
 from registry import load_registry
+from repo_manager import parse_pr_url
 from statuses import TEST_FAILED_STATUSES, TEST_TERMINAL_STATUSES, CandidateStatus, TestStatus
 
 CLOUD_BUILD_API = "https://cloudbuild.googleapis.com/v1"
@@ -393,10 +394,8 @@ class TestManager:
             tests = cand.get("tests") or []
             if not tests or not self.refresh_tests(tests):
                 continue
-            pr_num = None
-            pr_url = cand.get("pr_url") or ""
-            if "/pull/" in pr_url:
-                pr_num = pr_url.rstrip("/").rsplit("/", 1)[-1]
+            ref = parse_pr_url(cand.get("pr_url"))
+            pr_num = ref[2] if ref else None
             summary, _, _ = record_test_results(store, cand["candidate_id"], cand["package_id"], tests, pr_num)
             print(f"[TestManager] Candidate {cand['candidate_id']} ({cand['package_id']}): {summary}", flush=True)
             updated += 1

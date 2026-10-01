@@ -21,7 +21,6 @@ validates YAML syntax, and opens a PR with integration tests.
 
 import difflib
 import os
-import re
 import sys
 from typing import Any, Dict, List, Optional
 import yaml
@@ -33,7 +32,7 @@ from config import get_config
 from datastore import BaseDataStore, get_datastore
 from policy import policy_hold
 from registry import load_registry, render_values, rewrite
-from repo_manager import RepoManager
+from repo_manager import RepoManager, parse_pr_url
 from statuses import APPLICABLE_CANDIDATE_STATUSES, CandidateStatus, PackageStatus, TestStatus
 
 class OrchestratorAgent:
@@ -247,9 +246,13 @@ class OrchestratorAgent:
         cand = self.store.get_candidate(candidate_id)
         if not cand:
             return {"status": "ERROR", "message": f"Candidate '{candidate_id}' not found."}
-        m = re.search(r"/pull/(\d+)", cand.get("pr_url") or "")
-        if not m:
+        ref = parse_pr_url(cand.get("pr_url"))
+        if not ref:
             return {"status": "ERROR", "message": "Candidate does not have an active PR."}
+        repo = self.repo_manager.config.repository
+        if (ref[0].lower(), ref[1].lower()) != (repo.owner.lower(), repo.name.lower()):
+            return {"status": "ERROR", "message": f"PR {cand['pr_url']} is not on the target repository "
+                                                  f"{repo.owner}/{repo.name}; its Cloud Build triggers do not apply."}
 
         package_id = cand["package_id"]
         pkg = self.store.get_package(package_id) or {}
@@ -257,7 +260,7 @@ class OrchestratorAgent:
         if not bp_paths:
             return {"status": "ERROR", "message": f"No active/selected blueprints found for package '{package_id}'."}
 
-        res = self._run_tests(candidate_id, package_id, int(m.group(1)), bp_paths,
+        res = self._run_tests(candidate_id, package_id, ref[2], bp_paths,
                               head_sha=cand.get("head_sha"), rerun_finished=True, wait=wait_for_test)
         if res["status"] == "NO_TESTS":
             return {"status": "ERROR", "message": f"No integration tests mapped for package '{package_id}'."}
