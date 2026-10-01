@@ -21,7 +21,6 @@ and loaded dynamically rather than being hardcoded across pipeline modules.
 
 import os
 from functools import lru_cache
-from typing import Any
 
 PROMPTS_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -77,16 +76,6 @@ def get_apt_repo_prompt(package_id: str, target_pkg: str, repo_source: str, avai
         target_pkg=target_pkg,
         repo_source=repo_source,
         available_versions_json=available_versions_json
-    )
-
-
-def get_compute_image_prompt(family: str, project: str, package_id: str, image_metadata_json: str) -> str:
-    template = load_prompt("compute_image")
-    return template.format(
-        family=family,
-        project=project,
-        package_id=package_id,
-        image_metadata_json=image_metadata_json
     )
 
 

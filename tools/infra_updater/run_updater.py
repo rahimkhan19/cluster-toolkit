@@ -27,9 +27,7 @@ from the DataStore (packages, blueprints, learned_rules).
 
 import argparse
 import os
-import subprocess
 import sys
-import time
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 if BASE_DIR not in sys.path:
@@ -38,8 +36,10 @@ from config import get_config
 from repo_manager import RepoManager
 from datastore import get_datastore
 from init_db import init_database, preview_tables
-from source_agent import SourceQualificationAgent, UpfrontRuleChecker
-from code_modifier import OrchestratorAgent, AtomicCodeModifier
+from source_agent import SourceQualificationAgent
+from code_modifier import OrchestratorAgent
+import policy
+from statuses import PR_TRACKED_CANDIDATE_STATUSES, TEST_FAILED_STATUSES, CandidateStatus, PackageStatus, TestStatus
 
 CONFIG = get_config()
 
@@ -76,18 +76,15 @@ def run_check_all(model: str = None):
         status = r.get("status") or "-"
         summary = r.get("summary") or r.get("message") or "-"
 
-        if status == "UPDATE_FOUND":
+        if status == PackageStatus.UPDATE_FOUND:
             policy_check = f"{GREEN}PASSED{RESET}"
             status_str = f"{GREEN}{BOLD}UPDATE_FOUND{RESET}"
-        elif status == "BLOCKED" or status == "BLOCKED_BY_RULE":
-            policy_check = f"{RED}BLOCKED{RESET}"
-            status_str = f"{RED}{BOLD}BLOCKED{RESET}"
-        elif status == "UP_TO_DATE":
+        elif status in (PackageStatus.BLOCKED, PackageStatus.SNOOZED):
+            policy_check = f"{RED}HELD{RESET}"
+            status_str = f"{RED}{BOLD}{status}{RESET}"
+        elif status == PackageStatus.UP_TO_DATE:
             policy_check = f"{CYAN}PASS{RESET}"
             status_str = f"{CYAN}UP-TO-DATE{RESET}"
-        elif status == "REJECTED_UNSTABLE":
-            policy_check = f"{YELLOW}-{RESET}"
-            status_str = f"{YELLOW}NON_GA{RESET}"
         else:
             policy_check = f"{YELLOW}-{RESET}"
             status_str = f"{RED}{status}{RESET}"
@@ -101,7 +98,7 @@ def run_check_all(model: str = None):
     # Record Operational Telemetry (Doc Section 2.5)
     try:
         store = get_datastore()
-        updates_found = len([r for r in results if r.get("status") == "UPDATE_FOUND"])
+        updates_found = len([r for r in results if r.get("status") == PackageStatus.UPDATE_FOUND])
         store.record_audit_run({
             "trigger_type": "MANUAL",
             "triggered_by": "cli_user",
@@ -109,8 +106,40 @@ def run_check_all(model: str = None):
             "prs_opened": 0,
             "summary": {"updates_found": updates_found, "total_scanned": len(results)}
         })
-    except Exception:
-        pass
+    except Exception as e:  # Telemetry must never fail the qualification run.
+        print(f"{YELLOW}[WARN] Could not record audit run: {e}{RESET}")
+
+
+def _print_tests(res: dict):
+    if res.get("tests_summary"):
+        print(f"Tests Summary: {BOLD}{res['tests_summary']}{RESET}")
+    for t in res.get("tests") or []:
+        t_status = t.get("status", "UNKNOWN")
+        col = GREEN if t_status == TestStatus.SUCCESS else (RED if t_status in TEST_FAILED_STATUSES else YELLOW)
+        print(f"  * {BOLD}{t.get('test_name')}{RESET}: {col}{t_status}{RESET} -> {t.get('build_url') or t.get('message') or 'Pending'}")
+
+
+def _print_changes(res: dict):
+    if res.get("modified_files"):
+        print(f"{BOLD}Modified Blueprints & Synchronized Variables:{RESET}")
+        for mod in res["modified_files"]:
+            print(f"  * {BOLD}{mod['file_path']}{RESET}")
+            print(f"    - Primary Var:  {mod['primary_variable']}: {mod.get('old_value') or '-'} -> {mod['new_value']}")
+            for c in mod.get("coupled_changes", []):
+                print(f"    - Coupled Var:  {c['variable']} = {c['new_value']} {YELLOW}(Synchronized){RESET}")
+    if res.get("diffs"):
+        print(f"\n{BOLD}{CYAN}=== Generated Git Diff ==={RESET}\n")
+        for diff in res["diffs"].values():
+            for line in diff.splitlines():
+                if line.startswith("+") and not line.startswith("+++"):
+                    print(f"{GREEN}{line}{RESET}")
+                elif line.startswith("-") and not line.startswith("---"):
+                    print(f"{RED}{line}{RESET}")
+                elif line.startswith("@@"):
+                    print(f"{CYAN}{line}{RESET}")
+                else:
+                    print(line)
+            print()
 
 
 def run_apply(package_id: str, create_pr: bool = True, wait_for_test: bool = True, skip_test: bool = False):
@@ -119,9 +148,7 @@ def run_apply(package_id: str, create_pr: bool = True, wait_for_test: bool = Tru
     print(f"Target Repository: {BOLD}{CONFIG.repository.url}{RESET} (branch: {BOLD}{CONFIG.repository.base_branch}{RESET})\n")
 
     store = get_datastore()
-    candidates = store.list_candidates(package_id=package_id)
-    cand = candidates[-1] if candidates else None
-
+    cand = store.get_active_candidate(package_id)
     if cand:
         print(f"{CYAN}[Candidate]{RESET} Target Version: {GREEN}{cand.get('version')}{RESET}")
         if cand.get("summary"):
@@ -144,7 +171,7 @@ def run_apply(package_id: str, create_pr: bool = True, wait_for_test: bool = Tru
 
     print(f"{GREEN}[SUCCESS] Target Version:   {res['target_version']}{RESET}")
     print(f"{GREEN}[SUCCESS] Download URL:     {res['download_url']}{RESET}")
-    print(f"{GREEN}[SUCCESS] Workflow Status:  {res.get('workflow_status', 'READY_FOR_REVIEW')}{RESET}")
+    print(f"{GREEN}[SUCCESS] Workflow Status:  {res.get('workflow_status', CandidateStatus.READY_FOR_REVIEW)}{RESET}")
     if res.get("branch"):
         print(f"{CYAN}[BRANCH]{RESET}        Update Branch:  {BOLD}{res['branch']}{RESET}")
     if res.get("pushed"):
@@ -152,68 +179,25 @@ def run_apply(package_id: str, create_pr: bool = True, wait_for_test: bool = Tru
         print(f"{GREEN}[GIT PUSH]{RESET}      Remote Branch:  {dest}")
     if res.get("pr_url"):
         print(f"{GREEN}{BOLD}[PULL REQUEST]{RESET}  GitHub PR:      {BOLD}{res['pr_url']}{RESET}")
-    if res.get("test_name"):
-        print(f"{CYAN}[INTEGRATION TEST]{RESET} Blueprint Test: {BOLD}{res['test_name']}{RESET}")
-    if res.get("build_id"):
-        print(f"{CYAN}[CLOUD BUILD]{RESET}      Build ID:       {res['build_id']}")
-    if res.get("build_url"):
-        print(f"{CYAN}[CLOUD BUILD]{RESET}      Build Log:      {BOLD}{res['build_url']}{RESET}")
-    if res.get("test_status"):
-        color = GREEN if res["test_status"] == "SUCCESS" else (RED if res["test_status"] == "FAILURE" else YELLOW)
-        print(f"{color}[TEST RESULT]{RESET}     Test Status:    {BOLD}{res['test_status']}{RESET}")
+    _print_tests(res)
+    _print_changes(res)
     print()
 
 
 def run_test(package_id: str, wait: bool = True):
     print(f"\n{BOLD}{CYAN}=== Blueprint Integration Test Trigger ==={RESET}")
     store = get_datastore()
-    candidates = store.list_candidates(package_id=package_id)
-    cand = candidates[-1] if candidates else None
+    cand = next((c for c in store.list_candidates(package_id=package_id)
+                 if c.get("pr_url") and c.get("status") in PR_TRACKED_CANDIDATE_STATUSES), None)
     if not cand:
-        print(f"{RED}[ERROR] No candidate found for package '{package_id}'.{RESET}")
+        print(f"{RED}[ERROR] No candidate with an open PR found for package '{package_id}'.{RESET}")
         return
-    agent = OrchestratorAgent(store=store)
-    res = agent.trigger_candidate_test(cand["candidate_id"], wait_for_test=wait)
-    if res.get("status") == "SUCCESS":
-        print(f"{GREEN}[SUCCESS] Tests triggered successfully!{RESET}")
-        if res.get("tests_summary"):
-            print(f"Summary: {BOLD}{res['tests_summary']}{RESET}")
-        if res.get("tests"):
-            print(f"\n{BOLD}Test Suite Breakdown:{RESET}")
-            for t in res["tests"]:
-                t_status = t.get("status", "UNKNOWN")
-                col = GREEN if t_status == "SUCCESS" else (RED if t_status in ("FAILURE", "ERROR") else YELLOW)
-                print(f"  * {BOLD}{t.get('test_name')}{RESET}: {col}{t_status}{RESET} -> {t.get('build_url') or 'Pending'}")
-        elif res.get("build_url"):
-            print(f"Log URL: {res['build_url']}")
-        if res.get("test_status"):
-            color = GREEN if res["test_status"] == "SUCCESS" else RED
-            print(f"{color}Overall Status: {res['test_status']}{RESET}")
-    else:
+    res = OrchestratorAgent(store=store).trigger_candidate_test(cand["candidate_id"], wait_for_test=wait)
+    if res.get("status") != "SUCCESS":
         print(f"{RED}[ERROR] {res.get('message')}{RESET}")
-
-    if res.get("modified_files"):
-        print(f"{BOLD}Modified Blueprints & Synchronized Variables:{RESET}")
-        for mod in res["modified_files"]:
-            print(f"  * {BOLD}{mod['file_path']}{RESET}")
-            print(f"    - Primary Var:  {mod['primary_variable']} = {mod['new_value']}")
-            for c in mod.get("coupled_changes", []):
-                print(f"    - Coupled Var:  {c['variable']} = {c['new_value']} {YELLOW}(Synchronized){RESET}")
-
-    if res.get("diffs"):
-        print(f"\n{BOLD}{CYAN}=== Generated Git Diff (Comments & Structure Preserved) ==={RESET}\n")
-        for path, diff in res["diffs"].items():
-            for line in diff.splitlines():
-                if line.startswith("+") and not line.startswith("+++"):
-                    print(f"{GREEN}{line}{RESET}")
-                elif line.startswith("-") and not line.startswith("---"):
-                    print(f"{RED}{line}{RESET}")
-                elif line.startswith("@@"):
-                    print(f"{CYAN}{line}{RESET}")
-                else:
-                    print(line)
-            print()
-        print(f"{GREEN}[VERIFIED] YAML syntax valid on all modified files.{RESET}")
+        return
+    print(f"{GREEN}[SUCCESS] Tests triggered for {cand.get('pr_url')}{RESET}")
+    _print_tests(res)
 
 
 def run_test_rule_blocking():
@@ -238,15 +222,9 @@ def run_sync_repo():
     print(f"Target Directory:  {BOLD}{repo_mgr.workspace_dir}{RESET}")
     print("Fetching latest commits from remote and resetting workspace to clean base...")
     repo_mgr.ensure_workspace(force_clean=True)
-    head_proc = subprocess.run(["git", "rev-parse", "--short", "HEAD"], cwd=repo_mgr.workspace_dir, stdout=subprocess.PIPE, text=True, check=False)
-    head_commit = head_proc.stdout.strip()
+    head_commit = (repo_mgr.get_head_sha() or "")[:8]
     print(f"{GREEN}[SUCCESS] Target workspace synchronized to {CONFIG.repository.base_branch} @ {head_commit}.{RESET}")
-
-    # Synchronize open PR statuses with GitHub
-    store = get_datastore()
-    print("Checking open Pull Request statuses on GitHub...")
-    repo_mgr.sync_open_pr_statuses(store)
-    print(f"{GREEN}[SUCCESS] Pull request statuses synchronized.{RESET}\n")
+    run_sync_prs()
 
 
 def run_sync_prs():
@@ -280,8 +258,7 @@ def run_show_config():
     print(f"{BOLD}{CYAN}   CLUSTER TOOLKIT INFRASTRUCTURE UPDATER - CONFIGURATION OVERVIEW    {RESET}")
     print(f"{BOLD}{CYAN}======================================================================{RESET}\n")
     repo_mgr = RepoManager(CONFIG)
-    token = CONFIG.get_github_token()
-    token_display = f"{GREEN}Present ({token[:4]}...{token[-4:]}){RESET}" if token else f"{YELLOW}None (unauthenticated/read-only){RESET}"
+    token_display = f"{GREEN}Present{RESET}" if CONFIG.github_token else f"{YELLOW}None (unauthenticated/read-only){RESET}"
 
     print(f"{BOLD}Target Repository:{RESET}")
     print(f"  * URL:              {CONFIG.repository.url}")
@@ -297,23 +274,27 @@ def run_show_config():
     print(f"  * Email:            {CONFIG.git.author_email}")
     print(f"\n{BOLD}LLM Configuration:{RESET}")
     print(f"  * Model:            {CONFIG.llm.model}")
+    print(f"  * Project / Region: {CONFIG.llm.project_id} / {CONFIG.llm.location}")
+    print(f"\n{BOLD}Cloud Build:{RESET}")
+    print(f"  * Project:          {CONFIG.cloud_build.project_id}")
+    print(f"  * Trigger Prefix:   {CONFIG.cloud_build.trigger_prefix}")
     print(f"\n{BOLD}Dashboard Server:{RESET}")
     print(f"  * Port:             {CONFIG.server.port}")
     print()
 
 
-def run_end_to_end(model: str = None):
+def run_end_to_end(model: str = None, wait_for_test: bool = True):
     if model is None:
         model = CONFIG.llm.model
     print(f"\n{BOLD}{CYAN}======================================================================{RESET}")
     print(f"{BOLD}{CYAN}      CLUSTER TOOLKIT INFRASTRUCTURE UPDATER - FULL PIPELINE RUN      {RESET}")
     print(f"{BOLD}{CYAN}======================================================================{RESET}\n")
 
-    # Stage 0: Synchronize Target Repository & Clean Baseline
+    # Stage 0: Synchronize Target Repository & refresh the registry (runtime state preserved)
     print(f"{BOLD}[STAGE 0/3] Synchronizing Target Repository ({CONFIG.repository.url})...{RESET}")
     run_sync_repo()
-    print(f"{BOLD}[STAGE 0/3] Initializing Database & Verifying Registry...{RESET}")
-    init_database(preserve_candidates=True)
+    print(f"{BOLD}[STAGE 0/3] Refreshing package registry...{RESET}")
+    init_database(reset=False)
 
     # Stage 1: Source Qualification Across Canonical Packages
     print(f"\n{BOLD}[STAGE 1/3] Running Source Qualification Agent Across Monitored Packages ({model})...{RESET}")
@@ -321,13 +302,12 @@ def run_end_to_end(model: str = None):
 
     # Stage 2: Orchestrator Agent Blueprint Modification, Branch Push, & GitHub PR Creation
     store = get_datastore()
-    candidates = store.list_candidates()
-    candidate_pkgs = [c.get("package_id") for c in candidates if c.get("status") == "UPDATE_FOUND"]
+    candidate_pkgs = sorted({c["package_id"] for c in store.list_candidates(status=CandidateStatus.UPDATE_FOUND)})
 
     if candidate_pkgs:
         print(f"\n{BOLD}[STAGE 2/3] Orchestrator Agent applying updates across {len(candidate_pkgs)} candidate package(s)...{RESET}")
         for target_pkg in candidate_pkgs:
-            run_apply(target_pkg, create_pr=True)
+            run_apply(target_pkg, create_pr=True, wait_for_test=wait_for_test)
     else:
         print(f"\n{BOLD}[STAGE 2/3] No candidate updates with status UPDATE_FOUND available to apply.{RESET}")
 
@@ -341,119 +321,29 @@ def run_end_to_end(model: str = None):
     print(f"[TIP] Run '{BOLD}python3 tools/infra_updater/run_updater.py --reset{RESET}' to restore files and reset state store.\n")
 
 
-def run_snooze(package_id: str, days: int = 30, version: str = None):
-    import datetime
-    store = get_datastore()
-    pkg = store.get_package(package_id)
-    if not pkg:
-        print(f"{RED}[ERROR] Package '{package_id}' not found in datastore.{RESET}")
+def _print_policy_result(res: dict, color: str, tag: str):
+    if res.get("status") != "SUCCESS":
+        print(f"{RED}[ERROR] {res.get('message')}{RESET}")
         return
-    if not version:
-        cand = store.get_active_candidate(package_id)
-        version = cand.get("version") if cand else pkg.get("upstream_version", pkg.get("current_version"))
-    snooze_until = (datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(days=days)).isoformat()
-    summary = f"Snoozed version {version} for {days} days (until {snooze_until[:10]})."
-    store.update_package(package_id, {
-        "status": "SNOOZED",
-        "snooze_until": snooze_until,
-        "snoozed_version": version,
-        "qualification_summary": summary
-    })
-    cand = None
-    for c in store.list_candidates(package_id=package_id):
-        if c.get("version") == version:
-            cand = c
-            break
-    if not cand:
-        cand = store.get_active_candidate(package_id)
-    if cand:
-        store.update_candidate(cand["candidate_id"], {"status": "SNOOZED", "summary": summary, "version": version})
-    else:
-        store.save_candidate({
-            "package_id": package_id,
-            "version": version,
-            "current_version": pkg.get("current_version"),
-            "download_url": pkg.get("source_url"),
-            "status": "SNOOZED",
-            "summary": summary
-        })
-    print(f"{YELLOW}[SNOOZE] Package '{package_id}' snoozed for version {version} until {snooze_until[:10]}.{RESET}")
-    print(f"[INFO] Future updates will skip PR generation for {version} during this period.")
+    print(f"{color}[{tag}] {res['package_id']}: {res.get('message')}{RESET}")
+
+
+def run_snooze(package_id: str, days: int = None, version: str = None):
+    _print_policy_result(policy.snooze(get_datastore(), package_id, days=days, version=version), YELLOW, "SNOOZED")
 
 
 def run_block(package_id: str, version: str = None):
-    store = get_datastore()
-    pkg = store.get_package(package_id)
-    if not pkg:
-        print(f"{RED}[ERROR] Package '{package_id}' not found in datastore.{RESET}")
-        return
-    if not version:
-        cand = store.get_active_candidate(package_id)
-        version = cand.get("version") if cand else pkg.get("upstream_version", pkg.get("current_version"))
-    summary = f"Blocked version {version} (manual unblock required from dashboard)."
-    store.update_package(package_id, {
-        "status": "BLOCKED",
-        "blocked_version": version,
-        "qualification_summary": summary
-    })
-    cand = None
-    for c in store.list_candidates(package_id=package_id):
-        if c.get("version") == version:
-            cand = c
-            break
-    if not cand:
-        cand = store.get_active_candidate(package_id)
-    if cand:
-        store.update_candidate(cand["candidate_id"], {"status": "BLOCKED", "summary": summary, "version": version})
-    else:
-        store.save_candidate({
-            "package_id": package_id,
-            "version": version,
-            "current_version": pkg.get("current_version"),
-            "download_url": pkg.get("source_url"),
-            "status": "BLOCKED",
-            "summary": summary
-        })
-    print(f"{RED}[BLOCKED] Package '{package_id}' blocked for version {version}.{RESET}")
-    print(f"[INFO] Future updates will skip PR generation for {version} until manually unblocked.")
+    _print_policy_result(policy.block(get_datastore(), package_id, version=version), RED, "BLOCKED")
 
 
 def run_unblock(package_id: str):
-    store = get_datastore()
-    pkg = store.get_package(package_id)
-    if not pkg:
-        print(f"{RED}[ERROR] Package '{package_id}' not found in datastore.{RESET}")
-        return
-    summary = "Unblocked manually. Ready for qualification."
-    store.update_package(package_id, {
-        "status": "REGISTERED",
-        "snooze_until": None,
-        "snoozed_version": None,
-        "blocked_version": None,
-        "qualification_summary": summary
-    })
-    cands = store.list_candidates(package_id=package_id)
-    has_active_other = any(c.get("status") in ("UPDATE_FOUND", "READY_FOR_REVIEW", "QUALIFIED") for c in cands)
-    for c in cands:
-        if c.get("status") in ("SNOOZED", "BLOCKED"):
-            if has_active_other:
-                store.delete_candidate(c["candidate_id"])
-            else:
-                store.update_candidate(c["candidate_id"], {
-                    "status": "UPDATE_FOUND",
-                    "summary": f"Unblocked candidate ({c.get('version')})."
-                })
-    print(f"{GREEN}[UNBLOCKED] Package '{package_id}' is now unblocked and ready for qualification.{RESET}")
+    _print_policy_result(policy.unblock(get_datastore(), package_id), GREEN, "UNBLOCKED")
 
 
 def run_reset():
-    print(f"\n{BOLD}{YELLOW}[RESET] Reverting blueprint files and resetting state store...{RESET}")
-    agent = OrchestratorAgent()
-    rev = agent.revert_update()
-    for f in rev.get("reverted_files", []):
-        print(f"  Reverted: {f}")
-
-    init_database()
+    print(f"\n{BOLD}{YELLOW}[RESET] Reverting target workspace and resetting state store...{RESET}")
+    RepoManager(CONFIG).ensure_workspace(force_clean=True)
+    init_database(reset=True)
     print(f"{GREEN}[SUCCESS] Environment and state store reset to baseline.{RESET}\n")
 
 
@@ -466,7 +356,7 @@ Examples:
   python3 run_updater.py --sync-repo           # Fetch latest target repo develop branch
   python3 run_updater.py --check-all           # Run qualification (upstream discovery + rules + liveness)
   python3 run_updater.py --apply <package_id>  # Apply update, push branch & create GitHub PR
-  python3 run_updater.py --snooze <pkg>        # Snooze updates for 30 days
+  python3 run_updater.py --snooze <pkg>        # Snooze updates (policy.default_snooze_days)
   python3 run_updater.py --block <pkg>         # Block updates until manually unblocked
   python3 run_updater.py --unblock <pkg>       # Unblock package
   python3 run_updater.py --rules               # Display active learned policy rules
@@ -486,7 +376,8 @@ Examples:
     parser.add_argument("--no-wait-test", action="store_true", help="Trigger integration test asynchronously without waiting in CLI")
     parser.add_argument("--no-pr", action="store_true", help="Skip GitHub PR creation during apply")
     parser.add_argument("--snooze", metavar="PACKAGE_ID", type=str, help="Snooze updates for PACKAGE_ID")
-    parser.add_argument("--days", type=int, default=30, help="Number of days to snooze (default: 30)")
+    parser.add_argument("--days", type=int, default=None,
+                        help=f"Number of days to snooze (default: {CONFIG.policy.default_snooze_days})")
     parser.add_argument("--version", type=str, default=None, help="Version to snooze or block (default: latest candidate)")
     parser.add_argument("--block", metavar="PACKAGE_ID", type=str, help="Block updates for PACKAGE_ID until manually unblocked")
     parser.add_argument("--unblock", metavar="PACKAGE_ID", type=str, help="Unblock/unsnooze PACKAGE_ID")
@@ -514,7 +405,7 @@ Examples:
     if args.unblock:
         run_unblock(args.unblock)
     if args.end_to_end:
-        run_end_to_end(model=args.model)
+        run_end_to_end(model=args.model, wait_for_test=not args.no_wait_test)
         return
     if args.reset:
         run_reset()

@@ -16,69 +16,80 @@
 Independent Target Repository Manager for Cluster Toolkit Automated Infrastructure Updater.
 
 Decouples the updater execution from the local codebase by maintaining an isolated
-workspace clone of the target repository (https://github.com/rahimkhan19/cluster-toolkit, branch develop).
+workspace clone of the configured target repository.
 Automates the end-to-end lifecycle:
-  1. Fetch / Sync latest develop branch
+  1. Fetch / Sync latest base branch
   2. Create atomic update branch
-  3. Commit AST changes
+  3. Commit blueprint changes
   4. Push branch to remote
   5. Create GitHub Pull Request with automated update details
 """
 
-import json
+import base64
 import os
 import re
 import subprocess
-import sys
 from typing import Any, Dict, List, Optional, Tuple
-import urllib.request
-import urllib.error
 
 from config import get_config, UpdaterConfig
+from http_client import GitHubClient, GitHubError
+from statuses import (
+    POLICY_STATUSES, PR_TRACKED_CANDIDATE_STATUSES, CandidateStatus, PackageStatus, derive_package_status,
+)
+
 
 class RepoManager:
     """Manages cloning, syncing, branching, committing, pushing, and PR creation for target repos."""
 
     def __init__(self, config: Optional[UpdaterConfig] = None):
         self.config = config or get_config()
+        repo = self.config.repository
         self.workspace_dir = self.config.get_workspace_path()
-        self.repo_url = self.config.repository.url
-        self.base_branch = self.config.repository.base_branch
-        self.owner = self.config.repository.owner
-        self.repo_name = self.config.repository.name
-        self.fork_url = self.config.repository.fork_url
-        self.fork_owner = self.config.repository.fork_owner
-        self.fork_name = self.config.repository.fork_name
-        self.token = self.config.get_github_token()
+        self.repo_url = repo.url
+        self.base_branch = repo.base_branch
+        self.owner = repo.owner
+        self.repo_name = repo.name
+        self.fork_url = repo.fork_url
+        self.fork_owner = repo.fork_owner
+        self.token = self.config.github_token
         self.author_name = self.config.git.author_name
         self.author_email = self.config.git.author_email
+        self.github = GitHubClient(self.token)
+        self.pulls_path = f"/repos/{self.owner}/{self.repo_name}/pulls"
 
-    def _run_git(self, args: List[str], check: bool = True, capture: bool = True) -> subprocess.CompletedProcess:
-        """Executes a git command inside the target workspace directory."""
+    # ------------------------------------------------------------------ git
+
+    def _git_env(self) -> Dict[str, str]:
+        """
+        Environment for git subprocesses. The token is passed as an HTTP auth header via
+        GIT_CONFIG_* env vars, so it never lands in .git/config, remote URLs, or `ps` output.
+        """
         env = os.environ.copy()
+        env["GIT_TERMINAL_PROMPT"] = "0"
+        env["GIT_AUTHOR_NAME"] = env["GIT_COMMITTER_NAME"] = self.author_name
+        env["GIT_AUTHOR_EMAIL"] = env["GIT_COMMITTER_EMAIL"] = self.author_email
         if self.token:
-            env["GITHUB_TOKEN"] = self.token
-            env["GH_TOKEN"] = self.token
-        if self.author_name:
-            env["GIT_AUTHOR_NAME"] = self.author_name
-            env["GIT_COMMITTER_NAME"] = self.author_name
-        if self.author_email:
-            env["GIT_AUTHOR_EMAIL"] = self.author_email
-            env["GIT_COMMITTER_EMAIL"] = self.author_email
+            basic = base64.b64encode(f"x-access-token:{self.token}".encode()).decode()
+            env["GIT_CONFIG_COUNT"] = "1"
+            env["GIT_CONFIG_KEY_0"] = "http.https://github.com/.extraheader"
+            env["GIT_CONFIG_VALUE_0"] = f"AUTHORIZATION: basic {basic}"
+        return env
 
+    def _redact(self, text: str) -> str:
+        return text.replace(self.token, "***") if self.token and text else text
+
+    def _run_git(self, args: List[str], check: bool = True, cwd: Optional[str] = None) -> subprocess.CompletedProcess:
+        """Executes a git command inside the target workspace directory."""
         res = subprocess.run(
             ["git"] + args,
-            cwd=self.workspace_dir,
-            capture_output=capture,
+            cwd=cwd or self.workspace_dir,
+            capture_output=True,
             text=True,
             check=False,
-            env=env
+            env=self._git_env(),
         )
         if check and res.returncode != 0:
-            err = res.stderr.strip() if res.stderr else res.stdout.strip()
-            # Redact token from error message if present
-            if self.token and self.token in err:
-                err = err.replace(self.token, "***")
+            err = self._redact((res.stderr or res.stdout).strip())
             raise RuntimeError(f"Git command failed ('git {' '.join(args)}'): {err}")
         return res
 
@@ -87,21 +98,15 @@ class RepoManager:
         Ensures the target repository is cloned and synced to the latest base_branch.
         Creates workspace_dir if needed and fetches/resets to origin/base_branch.
         """
-        os.makedirs(os.path.dirname(self.workspace_dir), exist_ok=True)
-        git_dir = os.path.join(self.workspace_dir, ".git")
+        parent = os.path.dirname(self.workspace_dir)
+        os.makedirs(parent, exist_ok=True)
 
-        if not os.path.exists(git_dir):
+        if not os.path.exists(os.path.join(self.workspace_dir, ".git")):
             print(f"[RepoManager] Cloning target repository '{self.repo_url}' (branch: {self.base_branch}) into {self.workspace_dir}...", flush=True)
-            clone_cmd = [
-                "git", "clone",
-                "--branch", self.base_branch,
-                "--single-branch",
-                self.repo_url,
-                self.workspace_dir
-            ]
-            res = subprocess.run(clone_cmd, capture_output=True, text=True, check=False)
-            if res.returncode != 0:
-                raise RuntimeError(f"Failed to clone target repo {self.repo_url}: {res.stderr.strip()}")
+            self._run_git(
+                ["clone", "--branch", self.base_branch, "--single-branch", self.repo_url, self.workspace_dir],
+                cwd=parent,
+            )
         else:
             print(f"[RepoManager] Syncing workspace with latest origin/{self.base_branch}...", flush=True)
             self._run_git(["remote", "set-url", "origin", self.repo_url], check=False)
@@ -111,25 +116,14 @@ class RepoManager:
                 self._run_git(["reset", "--hard", f"origin/{self.base_branch}"])
                 self._run_git(["clean", "-fd"])
 
-        # Configure local git author from config
         self._run_git(["config", "user.name", self.author_name], check=False)
         self._run_git(["config", "user.email", self.author_email], check=False)
 
-        # Configure fork remote and fetch fork base_branch if fork is configured
-        if self.config.repository.is_fork and self.fork_url:
-            push_owner = self.fork_owner or self.owner
-            push_name = self.fork_name or self.repo_name
-            if self.token:
-                fork_remote_url = f"https://x-access-token:{self.token}@github.com/{push_owner}/{push_name}.git"
-            else:
-                fork_remote_url = self.fork_url
-
+        # Configure fork remote (plain URL; auth comes from _git_env) when a fork is configured.
+        if self.config.repository.is_fork:
             remotes = self._run_git(["remote"], check=False).stdout.split()
-            if "fork" in remotes:
-                self._run_git(["remote", "set-url", "fork", fork_remote_url], check=False)
-            else:
-                self._run_git(["remote", "add", "fork", fork_remote_url], check=False)
-
+            verb = "set-url" if "fork" in remotes else "add"
+            self._run_git(["remote", verb, "fork", self.fork_url], check=False)
             self._run_git(["fetch", "fork", self.base_branch], check=False)
 
         return self.workspace_dir
@@ -141,13 +135,12 @@ class RepoManager:
         unrelated upstream commits (e.g. .github/workflows) that require elevated PAT scopes.
         """
         self.ensure_workspace(force_clean=True)
-        clean_version = re.sub(r'[^a-zA-Z0-9_\.\-]', '_', target_version)
-        branch_name = f"infra-update/{package_id}-{clean_version}"
+        clean_version = re.sub(r'[^a-zA-Z0-9_.\-]', '_', target_version)
+        branch_name = f"{self.config.pull_request.branch_prefix}{package_id}-{clean_version}"
 
         base_ref = f"origin/{self.base_branch}"
         if self.config.repository.is_fork:
-            rev_chk = self._run_git(["rev-parse", "--verify", f"fork/{self.base_branch}"], check=False)
-            if rev_chk.returncode == 0:
+            if self._run_git(["rev-parse", "--verify", f"fork/{self.base_branch}"], check=False).returncode == 0:
                 base_ref = f"fork/{self.base_branch}"
 
         print(f"[RepoManager] Creating branch '{branch_name}' off {base_ref}...", flush=True)
@@ -158,16 +151,16 @@ class RepoManager:
         res = self._run_git(["rev-parse", "--abbrev-ref", "HEAD"], check=False)
         return res.stdout.strip() if res.returncode == 0 else "unknown"
 
+    def get_head_sha(self) -> Optional[str]:
+        res = self._run_git(["rev-parse", "HEAD"], check=False)
+        return res.stdout.strip() if res.returncode == 0 else None
+
     def get_diff(self, base_ref: Optional[str] = None) -> str:
         """Computes git diff against base branch (e.g. origin/develop) or working tree."""
-        ref = base_ref or f"origin/{self.base_branch}"
-        res = self._run_git(["diff", ref], check=False)
-        return res.stdout
+        return self._run_git(["diff", base_ref or f"origin/{self.base_branch}"], check=False).stdout
 
     def get_diff_stat(self, base_ref: Optional[str] = None) -> str:
-        ref = base_ref or f"origin/{self.base_branch}"
-        res = self._run_git(["diff", "--stat", ref], check=False)
-        return res.stdout.strip()
+        return self._run_git(["diff", "--stat", base_ref or f"origin/{self.base_branch}"], check=False).stdout.strip()
 
     def commit_changes(
         self,
@@ -180,49 +173,36 @@ class RepoManager:
         if not modified_files:
             return False, "No files modified to commit"
 
-        for f in modified_files:
-            self._run_git(["add", f])
+        self._run_git(["add", "--"] + modified_files)
 
-        commit_title = f"[infra-update] Upgrade {package_id} to {target_version}"
-        commit_body = f"{summary.strip()}\n\nAutomated update generated by Cluster Toolkit Infrastructure Updater."
-        full_msg = f"{commit_title}\n\n{commit_body}"
-
-        commit_cmd = ["commit"]
-        if self.author_name and self.author_email:
-            commit_cmd.append(f"--author={self.author_name} <{self.author_email}>")
-        commit_cmd.extend(["-m", full_msg])
-
-        res = self._run_git(commit_cmd, check=False)
-        if res.returncode == 0:
-            rev = self._run_git(["rev-parse", "HEAD"]).stdout.strip()
-            print(f"[RepoManager] Committed changes: {rev[:8]} - {commit_title}", flush=True)
-            return True, rev
-        else:
-            return False, res.stderr.strip() or res.stdout.strip()
+        commit_title = self.config.pull_request.commit_title.format(package_id=package_id, version=target_version)
+        body = f"{(summary or '').strip()}\n\nAutomated update generated by Cluster Toolkit Infrastructure Updater."
+        res = self._run_git(["commit", "-m", f"{commit_title}\n\n{body.strip()}"], check=False)
+        if res.returncode != 0:
+            return False, (res.stderr or res.stdout).strip()
+        rev = self.get_head_sha() or ""
+        print(f"[RepoManager] Committed changes: {rev[:8]} - {commit_title}", flush=True)
+        return True, rev
 
     def push_branch(self, branch_name: str) -> bool:
-        """Pushes the update branch to the remote repository (fork if configured, else upstream)."""
-        token = self.config.get_github_token()
-        push_owner = self.fork_owner or self.owner
-        push_name = self.fork_name or self.repo_name
-        dest_desc = f"{push_owner}/{push_name}" + (" (fork)" if self.config.repository.is_fork else "")
-
-        if token:
-            remote_url = f"https://x-access-token:{token}@github.com/{push_owner}/{push_name}.git"
-        else:
-            remote_url = self.fork_url or "origin"
+        """Pushes the update branch to the fork remote if configured, else to origin."""
+        repo = self.config.repository
+        remote = "fork" if repo.is_fork else "origin"
+        dest_desc = f"{repo.push_owner}/{repo.push_name}" + (" (fork)" if repo.is_fork else "")
 
         print(f"[RepoManager] Pushing branch '{branch_name}' to {dest_desc}...", flush=True)
-        res = self._run_git(["push", remote_url, branch_name, "--force"], check=False)
+        res = self._run_git(["push", "--force", remote, branch_name], check=False)
         if res.returncode == 0:
             print(f"[RepoManager] Branch '{branch_name}' pushed successfully to {dest_desc}.", flush=True)
             return True
-        else:
-            err = res.stderr.strip()
-            if token and token in err:
-                err = err.replace(token, "***")
-            print(f"[RepoManager] [WARN] Push failed: {err}", flush=True)
-            return False
+        print(f"[RepoManager] [WARN] Push failed: {self._redact(res.stderr.strip())}", flush=True)
+        return False
+
+    # --------------------------------------------------------------- github
+
+    @property
+    def _head_owner(self) -> str:
+        return (self.fork_owner if self.config.repository.is_fork else self.owner) or ""
 
     def create_pull_request(
         self,
@@ -235,334 +215,173 @@ class RepoManager:
         Creates a GitHub Pull Request using GitHub REST API.
         Formats full PR description including release overview and qualification verification.
         """
-        token = self.config.get_github_token()
-        if not token:
+        if not self.token:
             return {
                 "status": "SKIPPED",
-                "message": "GITHUB_TOKEN not available. Branch committed locally; PR creation skipped.",
+                "error": "GITHUB_TOKEN not available. Branch committed locally; PR creation skipped.",
                 "pr_url": None
             }
 
         branch_name = self.get_current_branch()
-        title = f"[Infra Update] Upgrade {package_id} to {target_version}"
+        title = self.config.pull_request.pr_title.format(package_id=package_id, version=target_version)
+        dl_url = candidate_info.get("download_url")
+        summary = candidate_info.get("summary") or "Qualified production GA release."
 
-        # Markdown Body Construction
-        dl_url = candidate_info.get("download_url", "-")
-        curr_ver = candidate_info.get("current_version") or candidate_info.get("previous_version")
-        if not curr_ver or curr_ver == "-":
-            try:
-                from datastore import get_datastore
-                pkg = get_datastore().get_package(package_id)
-                if pkg and pkg.get("current_version"):
-                    curr_ver = pkg.get("current_version")
-            except Exception:
-                pass
-        if not curr_ver or curr_ver == "-":
-            if modified_blueprints:
-                for mb in modified_blueprints:
-                    old_v = mb.get("old_value")
-                    if old_v and old_v != "-":
-                        curr_ver = old_v
-                        break
-        if not curr_ver:
-            curr_ver = "-"
-
-        summary = candidate_info.get("summary") or candidate_info.get("changelog_summary", "Qualified production GA release.")
-
-        body_lines = [
-            f"## Automated Infrastructure Update: `{package_id}`",
-            "",
-        ]
-
+        body_lines = [f"## Automated Infrastructure Update: `{package_id}`", ""]
         if modified_blueprints:
-            body_lines.append("### Modified Blueprints & Coupled Variables")
-            body_lines.append("| Blueprint File | Variable | Old Value | New Value |")
-            body_lines.append("| :--- | :--- | :--- | :--- |")
+            body_lines += [
+                "### Modified Blueprints & Coupled Variables",
+                "| Blueprint File | Variable | Old Value | New Value |",
+                "| :--- | :--- | :--- | :--- |",
+            ]
             for m in modified_blueprints:
-                body_lines.append(f"| `{m.get('file_path')}` | `{m.get('primary_variable')}` | `{m.get('old_value')}` | `{m.get('new_value')}` |")
+                body_lines.append(f"| `{m.get('file_path')}` | `{m.get('primary_variable')}` | `{m.get('old_value') or '-'}` | `{m.get('new_value')}` |")
             body_lines.append("")
 
-        body_lines.append("### Summary")
-        body_lines.append(f"{summary}")
-        body_lines.append("")
-
-        if dl_url and dl_url != "-":
-            body_lines.append(f"- **Artifact URL:** {dl_url}")
-            body_lines.append("")
-
-        headers = {
-            "Authorization": f"token {token}",
-            "Accept": "application/vnd.github.v3+json",
-            "Content-Type": "application/json",
-            "User-Agent": "ClusterToolkitInfraUpdater/1.0"
-        }
+        body_lines += ["### Summary", summary, ""]
+        if dl_url:
+            body_lines += [f"- **Artifact URL:** {dl_url}", ""]
 
         # Note any other open PRs for this package (both will remain open)
-        open_pkg_prs = self._find_open_prs_for_package(package_id, headers)
-        other_prs = [p for p in open_pkg_prs if p.get("head", {}).get("ref") != branch_name]
+        other_prs = [p for p in self._find_open_prs_for_package(package_id) if p.get("head", {}).get("ref") != branch_name]
         if other_prs:
             body_lines.append("### Related Open Pull Requests")
             for op in other_prs:
-                op_num = op.get("number")
-                op_branch = op.get("head", {}).get("ref", "")
-                body_lines.append(f"> [!NOTE]\n> Pull request **#{op_num}** (`{op_branch}`) is also currently open for this package.")
+                body_lines.append(f"> [!NOTE]\n> Pull request **#{op.get('number')}** (`{op.get('head', {}).get('ref', '')}`) is also currently open for this package.")
             body_lines.append("")
 
-        body_lines.append("---")
-        body_lines.append("*Generated automatically by the Cluster Toolkit Automated Infrastructure Updater.*")
-
-        pr_body = "\n".join(body_lines)
+        body_lines += ["---", "*Generated automatically by the Cluster Toolkit Automated Infrastructure Updater.*"]
 
         head_param = f"{self.fork_owner}:{branch_name}" if self.config.repository.is_fork else branch_name
-
-        url = f"https://api.github.com/repos/{self.owner}/{self.repo_name}/pulls"
         payload = {
             "title": title,
             "head": head_param,
             "base": self.base_branch,
-            "body": pr_body,
+            "body": "\n".join(body_lines),
             "draft": False,
             "maintainer_can_modify": True
         }
 
-        req = urllib.request.Request(url, data=json.dumps(payload).encode("utf-8"), headers=headers, method="POST")
-
         try:
-            with urllib.request.urlopen(req) as resp:
-                data = json.loads(resp.read().decode("utf-8"))
-                pr_url = data.get("html_url")
-                pr_number = data.get("number")
-                print(f"[RepoManager] Created Pull Request #{pr_number}: {pr_url}", flush=True)
-
-                # Keep any existing older PRs open for human maintainer review
-
-                return {
-                    "status": "CREATED",
-                    "pr_url": pr_url,
-                    "pr_number": pr_number,
-                    "branch": branch_name
-                }
-        except urllib.error.HTTPError as he:
-            err_body = he.read().decode("utf-8", errors="ignore")
+            data = self.github.post(self.pulls_path, payload)
+            print(f"[RepoManager] Created Pull Request #{data.get('number')}: {data.get('html_url')}", flush=True)
+            return {"status": "CREATED", "pr_url": data.get("html_url"), "pr_number": data.get("number"), "branch": branch_name}
+        except GitHubError as he:
             # If PR already exists for this branch, lookup existing PR (Idempotent)
-            if he.code == 422 and "already exists" in err_body:
+            if he.status == 422 and "already exists" in he.body:
                 print(f"[RepoManager] PR already exists for branch {branch_name}, looking up PR URL...", flush=True)
-                existing = self._find_existing_pr(branch_name, headers)
+                existing = self._find_existing_pr(branch_name)
                 if existing:
-                    return {
-                        "status": "EXISTING",
-                        "pr_url": existing.get("html_url"),
-                        "pr_number": existing.get("number"),
-                        "branch": branch_name
-                    }
-            print(f"[RepoManager] [WARN] GitHub PR creation returned HTTP {he.code}: {err_body}", flush=True)
-            return {
-                "status": "ERROR",
-                "error": f"HTTP {he.code}: {err_body}",
-                "branch": branch_name,
-                "pr_url": None
-            }
-        except Exception as ex:
+                    return {"status": "EXISTING", "pr_url": existing.get("html_url"), "pr_number": existing.get("number"), "branch": branch_name}
+            print(f"[RepoManager] [WARN] GitHub PR creation failed: {he}", flush=True)
+            return {"status": "ERROR", "error": str(he), "branch": branch_name, "pr_url": None}
+        except (OSError, ValueError) as ex:
             print(f"[RepoManager] [WARN] PR creation exception: {ex}", flush=True)
-            return {
-                "status": "ERROR",
-                "error": str(ex),
-                "branch": branch_name,
-                "pr_url": None
-            }
+            return {"status": "ERROR", "error": str(ex), "branch": branch_name, "pr_url": None}
 
-    def _find_existing_pr(self, branch_name: str, headers: Dict[str, str]) -> Optional[Dict[str, Any]]:
-        """Queries GitHub for existing open PR matching head branch."""
+    def _find_existing_pr(self, branch_name: str) -> Optional[Dict[str, Any]]:
+        """Queries GitHub for an existing open PR matching head branch."""
         try:
-            head_owner = self.fork_owner if self.config.repository.is_fork else self.owner
-            head_param = f"{head_owner}:{branch_name}"
-            url = f"https://api.github.com/repos/{self.owner}/{self.repo_name}/pulls?head={urllib.parse.quote(head_param)}&state=open"
-            req = urllib.request.Request(url, headers=headers)
-            with urllib.request.urlopen(req) as resp:
-                prs = json.loads(resp.read().decode("utf-8"))
-                if prs and len(prs) > 0:
-                    return prs[0]
-        except Exception:
-            pass
-        return None
+            prs = self.github.get(self.pulls_path, params={"head": f"{self._head_owner}:{branch_name}", "state": "open"})
+            return prs[0] if prs else None
+        except (GitHubError, OSError, ValueError) as e:
+            print(f"[RepoManager] [WARN] Existing PR lookup failed: {e}", flush=True)
+            return None
 
-    def _find_open_prs_for_package(self, package_id: str, headers: Dict[str, str]) -> List[Dict[str, Any]]:
-        """Queries GitHub for any open PRs associated with this package."""
+    def _find_open_prs_for_package(self, package_id: str) -> List[Dict[str, Any]]:
+        """Queries GitHub for any open PRs whose head branch belongs to this package."""
         try:
-            url = f"https://api.github.com/repos/{self.owner}/{self.repo_name}/pulls?state=open&per_page=50"
-            req = urllib.request.Request(url, headers=headers)
-            with urllib.request.urlopen(req) as resp:
-                prs = json.loads(resp.read().decode("utf-8"))
-                matching = []
-                for p in prs:
-                    head_ref = p.get("head", {}).get("ref", "")
-                    head_user = p.get("head", {}).get("user", {}).get("login", "")
-                    if head_ref.startswith(f"infra-update/{package_id}-"):
-                        if self.config.repository.is_fork and head_user and head_user.lower() != self.fork_owner.lower():
-                            continue
-                        matching.append(p)
-                return matching
-        except Exception:
+            prs = self.github.get_all(self.pulls_path, {"state": "open"})
+        except (GitHubError, OSError, ValueError) as e:
+            print(f"[RepoManager] [WARN] Open PR lookup failed: {e}", flush=True)
             return []
-
-    def _add_labels_to_pr(self, pr_number: int, labels: List[str], headers: Dict[str, str]):
-        """Attaches labels to the created pull request."""
-        try:
-            url = f"https://api.github.com/repos/{self.owner}/{self.repo_name}/issues/{pr_number}/labels"
-            payload = {"labels": labels}
-            req = urllib.request.Request(url, data=json.dumps(payload).encode("utf-8"), headers=headers, method="POST")
-            with urllib.request.urlopen(req):
-                pass
-        except Exception as e:
-            print(f"[RepoManager] [WARN] Failed to attach labels to PR #{pr_number}: {e}", flush=True)
+        prefix = f"{self.config.pull_request.branch_prefix}{package_id}-"
+        owner = self._head_owner.lower()
+        return [
+            p for p in prs
+            if p.get("head", {}).get("ref", "").startswith(prefix)
+            and p.get("head", {}).get("user", {}).get("login", "").lower() == owner
+        ]
 
     def sync_open_pr_statuses(self, store: Optional[Any] = None) -> Dict[str, Any]:
         """
         Synchronizes datastore status with remote GitHub Pull Request states.
-        If a developer closes a PR manually without merging it, candidate and package
-        move back to 'UPDATE_FOUND' (update available).
-        If a PR was merged into the base branch, status transitions to 'MERGED' / 'UP_TO_DATE'.
+        Each tracked candidate's PR is fetched by number (no pagination limits):
+          - merged           -> candidate MERGED, package UP_TO_DATE at the candidate version
+          - closed unmerged  -> candidate/package back to UPDATE_FOUND
+          - open             -> candidate READY_FOR_REVIEW (unless TESTING / TEST_FAILED)
+        SNOOZED / BLOCKED candidates are only touched when their PR was merged.
         """
         if store is None:
             from datastore import get_datastore
             store = get_datastore()
 
-        token = self.config.get_github_token()
-        headers = {
-            "Accept": "application/vnd.github.v3+json",
-            "User-Agent": "ClusterToolkitInfraUpdater/1.0"
-        }
-        if token:
-            headers["Authorization"] = f"token {token}"
-
-        # Fetch recent pull requests from GitHub (both open and closed)
-        url = f"https://api.github.com/repos/{self.owner}/{self.repo_name}/pulls?state=all&per_page=100"
-        req = urllib.request.Request(url, headers=headers)
-        try:
-            with urllib.request.urlopen(req) as resp:
-                pulls_data = json.loads(resp.read().decode("utf-8"))
-        except urllib.error.HTTPError as he:
-            print(f"[RepoManager] [WARN] Failed to fetch PRs from GitHub (HTTP {he.code}): {he.reason}", flush=True)
-            return {"synced": False, "error": f"HTTP {he.code}"}
-        except Exception as e:
-            print(f"[RepoManager] [WARN] PR sync exception: {e}", flush=True)
-            return {"synced": False, "error": str(e)}
-
-        prs_by_number = {p.get("number"): p for p in pulls_data if p.get("number")}
-        prs_by_branch = {}
-        for p in pulls_data:
-            ref = p.get("head", {}).get("ref")
-            user = p.get("head", {}).get("user", {}).get("login")
-            if ref:
-                prs_by_branch[ref] = p
-                if user:
-                    prs_by_branch[f"{user}:{ref}"] = p
-
-        changes = []
         candidates = store.list_candidates()
+        changes = []
+        errors = 0
+
         for cand in candidates:
-            cand_id = cand.get("candidate_id")
-            pkg_id = cand.get("package_id")
             status = cand.get("status")
-            pr_url = cand.get("pr_url")
-            branch = cand.get("branch")
+            m = re.search(r"/pull/(\d+)", cand.get("pr_url") or "")
+            if not m or status == CandidateStatus.MERGED:
+                continue
+            cand_id, pkg_id, pr_num = cand["candidate_id"], cand.get("package_id"), int(m.group(1))
 
-            # Look up corresponding GitHub PR
-            pr_data = None
-            if pr_url:
-                m = re.search(r"/pull/(\d+)", pr_url)
-                if m:
-                    pr_num = int(m.group(1))
-                    pr_data = prs_by_number.get(pr_num)
-            if not pr_data and branch:
-                pr_data = prs_by_branch.get(branch)
-
-            if not pr_data:
-                # If candidate was in READY_FOR_REVIEW but PR is not on GitHub
-                if status == "READY_FOR_REVIEW" and pr_url:
-                    print(f"[RepoManager] PR for candidate '{cand_id}' not found on GitHub. Moving back to UPDATE_FOUND.", flush=True)
-                    prev_ver = cand.get("previous_version")
-                    store.update_candidate(cand_id, {"status": "UPDATE_FOUND", "pr_url": None})
-                    pkg_update = {"status": "UPDATE_FOUND"}
-                    if prev_ver:
-                        pkg_update["current_version"] = prev_ver
-                    store.update_package(pkg_id, pkg_update)
-                    changes.append({"candidate_id": cand_id, "action": "REVERTED_TO_UPDATE_FOUND", "reason": "PR not found"})
+            try:
+                pr = self.github.get(f"{self.pulls_path}/{pr_num}")
+            except GitHubError as he:
+                if he.status != 404:
+                    errors += 1
+                    print(f"[RepoManager] [WARN] Failed to fetch PR #{pr_num} (HTTP {he.status})", flush=True)
+                    continue
+                pr = None
+            except (OSError, ValueError) as e:
+                errors += 1
+                print(f"[RepoManager] [WARN] Failed to fetch PR #{pr_num}: {e}", flush=True)
                 continue
 
-            pr_num = pr_data.get("number")
-            pr_state = pr_data.get("state") # "open" or "closed"
-            merged_at = pr_data.get("merged_at")
-            is_merged = bool(merged_at or pr_data.get("merged", False))
-
-            if pr_state == "closed":
-                if is_merged:
-                    # Successfully merged into base branch
-                    if status != "MERGED":
-                        print(f"[RepoManager] PR #{pr_num} was MERGED into {self.base_branch}. Updating status to UP_TO_DATE.", flush=True)
-                        store.update_candidate(cand_id, {
-                            "status": "MERGED",
-                            "pr_url": pr_data.get("html_url")
-                        })
-                        store.update_package(pkg_id, {
-                            "status": "UP_TO_DATE",
-                            "current_version": cand.get("target_version") or cand.get("version"),
-                            "snooze_until": None,
-                            "snoozed_version": None,
-                            "blocked_version": None
-                        })
-                        # Remove superseded SNOOZED and BLOCKED candidates for this package
-                        for other_c in store.list_candidates(package_id=pkg_id):
-                            if other_c.get("status") in ("SNOOZED", "BLOCKED"):
-                                store.delete_candidate(other_c["candidate_id"])
-                        changes.append({"candidate_id": cand_id, "action": "MERGED", "pr_number": pr_num})
-                else:
-                    # Closed manually without merging! Move back to update available!
-                    if status != "UPDATE_FOUND":
-                        print(f"[RepoManager] PR #{pr_num} for package '{pkg_id}' was closed manually without merge. Moving back to UPDATE_FOUND (update available).", flush=True)
-                        prev_ver = cand.get("previous_version")
-                        store.update_candidate(cand_id, {
-                            "status": "UPDATE_FOUND",
-                            "pr_url": None
-                        })
-                        pkg_update = {"status": "UPDATE_FOUND"}
-                        if prev_ver:
-                            pkg_update["current_version"] = prev_ver
-                        store.update_package(pkg_id, pkg_update)
-                        changes.append({"candidate_id": cand_id, "action": "REVERTED_TO_UPDATE_FOUND", "pr_number": pr_num})
-            elif pr_state == "open":
-                # Ensure status is READY_FOR_REVIEW unless currently in TESTING or TEST_FAILED
-                is_testing = status in ("TESTING", "TEST_FAILED")
-                target_status = status if is_testing else "READY_FOR_REVIEW"
-                if (status != target_status) or cand.get("pr_url") != pr_data.get("html_url"):
-                    store.update_candidate(cand_id, {
-                        "status": target_status,
-                        "pr_url": pr_data.get("html_url"),
-                        "branch": pr_data.get("head", {}).get("ref")
-                    })
-                    if not is_testing:
-                        store.update_package(pkg_id, {
-                            "status": "READY_FOR_REVIEW"
-                        })
-                    changes.append({"candidate_id": cand_id, "action": f"SYNCED_{target_status}", "pr_number": pr_num})
-
-        # Ensure package statuses reflect their active candidates
-        for pkg in store.list_packages():
-            pid = pkg.get("package_id")
-            pkg_cands = store.list_candidates(package_id=pid)
-            if not pkg_cands:
+            if pr and pr.get("merged"):
+                print(f"[RepoManager] PR #{pr_num} was MERGED into {self.base_branch}. Updating status to UP_TO_DATE.", flush=True)
+                store.update_candidate(cand_id, {"status": CandidateStatus.MERGED, "pr_url": pr.get("html_url")})
+                store.update_package(pkg_id, {
+                    "status": PackageStatus.UP_TO_DATE,
+                    "current_version": cand.get("version"),
+                    "snooze_until": None,
+                    "snoozed_version": None,
+                    "blocked_version": None
+                })
+                # Remove superseded SNOOZED and BLOCKED candidates for this package
+                for other in candidates:
+                    if other.get("package_id") == pkg_id and other.get("status") in POLICY_STATUSES and other["candidate_id"] != cand_id:
+                        store.delete_candidate(other["candidate_id"])
+                        other["status"] = "DELETED"
+                cand["status"] = CandidateStatus.MERGED
+                changes.append({"candidate_id": cand_id, "action": "MERGED", "pr_number": pr_num})
                 continue
-            has_testing = any(c.get("status") == "TESTING" for c in pkg_cands)
-            has_failed = any(c.get("status") == "TEST_FAILED" for c in pkg_cands)
-            has_ready = any(c.get("status") == "READY_FOR_REVIEW" for c in pkg_cands)
-            has_update = any(c.get("status") in ("UPDATE_FOUND", "QUALIFIED") for c in pkg_cands)
-            if has_testing and pkg.get("status") != "TESTING":
-                store.update_package(pid, {"status": "TESTING"})
-            elif has_failed and pkg.get("status") != "TEST_FAILED":
-                store.update_package(pid, {"status": "TEST_FAILED"})
-            elif has_ready and pkg.get("status") not in ("READY_FOR_REVIEW", "TESTING", "TEST_FAILED"):
-                store.update_package(pid, {"status": "READY_FOR_REVIEW"})
-            elif not has_ready and not has_testing and not has_failed and has_update and pkg.get("status") != "UPDATE_FOUND":
-                store.update_package(pid, {"status": "UPDATE_FOUND"})
 
-        return {"synced": True, "changes": changes}
+            if status not in PR_TRACKED_CANDIDATE_STATUSES:
+                continue
+
+            if pr is None or pr.get("state") == "closed":
+                reason = "not found" if pr is None else "closed without merge"
+                print(f"[RepoManager] PR #{pr_num} for package '{pkg_id}' {reason}. Moving back to UPDATE_FOUND.", flush=True)
+                store.update_candidate(cand_id, {"status": CandidateStatus.UPDATE_FOUND, "pr_url": None})
+                cand["status"] = CandidateStatus.UPDATE_FOUND
+                changes.append({"candidate_id": cand_id, "action": "REVERTED_TO_UPDATE_FOUND", "pr_number": pr_num})
+            elif pr.get("html_url") != cand.get("pr_url"):
+                store.update_candidate(cand_id, {"pr_url": pr.get("html_url"), "branch": pr.get("head", {}).get("ref")})
+
+        # Package status mirrors its most advanced active candidate (manual policy states win).
+        if changes:
+            by_pkg: Dict[str, List[str]] = {}
+            for c in candidates:
+                by_pkg.setdefault(c.get("package_id"), []).append(c.get("status"))
+            for pkg in store.list_packages():
+                pid, pstatus = pkg.get("package_id"), pkg.get("status")
+                if pstatus in POLICY_STATUSES or pstatus == PackageStatus.UP_TO_DATE:
+                    continue
+                derived = derive_package_status(by_pkg.get(pid, ()))
+                if derived and derived != pstatus:
+                    store.update_package(pid, {"status": derived})
+
+        return {"synced": errors == 0, "changes": changes, "error": f"{errors} PR lookup(s) failed" if errors else None}

@@ -15,16 +15,17 @@
 
 """
 Interactive Web UI Server for Cluster Toolkit Infrastructure Updater.
-Serves modern, minimal dashboard and provides REST API for end-to-end triggers.
+Serves the dashboard, exposes a small REST API, runs CLI actions as subprocesses,
+and runs one background poller that syncs PR statuses and Cloud Build test results.
 """
 
 import argparse
-import datetime
+import collections
 from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
-import io
 import json
 import os
 import re
+import socket
 import subprocess
 import sys
 import threading
@@ -35,18 +36,22 @@ if BASE_DIR not in sys.path:
     sys.path.insert(0, BASE_DIR)
 from config import get_config
 from datastore import get_datastore
+import policy
 from repo_manager import RepoManager
+from statuses import CandidateStatus, PackageStatus
 
 CONFIG = get_config()
 REPO_MANAGER = RepoManager(CONFIG)
 UI_DIR = os.path.join(BASE_DIR, "ui")
+ANSI_RE = re.compile(r'\033\[[0-9;]*m')
 
-# Global execution state buffer
+
 class LogStreamBuffer:
+    """Output of the currently running CLI action. Only one action runs at a time."""
+
     def __init__(self, max_lines=1000):
         self.lock = threading.Lock()
-        self.lines = []
-        self.max_lines = max_lines
+        self.lines = collections.deque(maxlen=max_lines)
         self.is_running = False
         self.current_action = "IDLE"
         self.last_status = "IDLE"
@@ -54,48 +59,51 @@ class LogStreamBuffer:
     def write_line(self, line):
         with self.lock:
             self.lines.append(line)
-            if len(self.lines) > self.max_lines:
-                self.lines.pop(0)
-
-    def clear(self):
-        with self.lock:
-            self.lines = []
 
     def get_logs(self):
         with self.lock:
             return "".join(self.lines)
 
+    def try_start(self, action_name) -> bool:
+        """Atomically claims the single action slot."""
+        with self.lock:
+            if self.is_running:
+                return False
+            self.is_running = True
+            self.current_action = action_name
+            self.lines.clear()
+            return True
+
+    def finish(self, status):
+        with self.lock:
+            self.is_running = False
+            self.current_action = "IDLE"
+            self.last_status = status
+
+
 GLOBAL_BUFFER = LogStreamBuffer()
 
 _GIT_DIFF_CACHE = {"stat": "", "timestamp": 0.0}
 
-def get_cached_git_diff_stat(force: bool = False) -> str:
+
+def get_cached_git_diff_stat(ttl: float = 5.0) -> str:
     now = time.time()
-    ttl = 5.0
-    if force or (now - _GIT_DIFF_CACHE["timestamp"] > ttl):
-        try:
-            _GIT_DIFF_CACHE["stat"] = REPO_MANAGER.get_diff_stat()
-        except Exception:
-            _GIT_DIFF_CACHE["stat"] = ""
+    if now - _GIT_DIFF_CACHE["timestamp"] > ttl:
+        _GIT_DIFF_CACHE["stat"] = REPO_MANAGER.get_diff_stat()
         _GIT_DIFF_CACHE["timestamp"] = now
     return _GIT_DIFF_CACHE["stat"]
 
-def invalidate_git_diff_cache():
-    _GIT_DIFF_CACHE["timestamp"] = 0.0
 
 def execute_cli_action(cmd_args, action_name):
-    GLOBAL_BUFFER.is_running = True
-    GLOBAL_BUFFER.current_action = action_name
+    """Runs run_updater.py with cmd_args, streaming output into GLOBAL_BUFFER."""
     GLOBAL_BUFFER.write_line(f"\n>>> [{time.strftime('%H:%M:%S')}] STARTING ACTION: {action_name} <<<\n")
-
     env = os.environ.copy()
     env["PYTHONUNBUFFERED"] = "1"
     env["PYTHONPATH"] = f"{BASE_DIR}:" + env.get("PYTHONPATH", "")
-    python_exec = sys.executable
-
+    status = "ERROR"
     try:
         proc = subprocess.Popen(
-            [python_exec, "-u", os.path.join(BASE_DIR, "run_updater.py")] + cmd_args,
+            [sys.executable, "-u", os.path.join(BASE_DIR, "run_updater.py")] + cmd_args,
             cwd=BASE_DIR,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
@@ -103,33 +111,89 @@ def execute_cli_action(cmd_args, action_name):
             bufsize=1,
             env=env
         )
-
         for line in iter(proc.stdout.readline, ''):
-            clean_line = re.sub(r'\033\[[0-9;]*m', '', line)
-            GLOBAL_BUFFER.write_line(clean_line)
-
+            GLOBAL_BUFFER.write_line(ANSI_RE.sub('', line))
         proc.stdout.close()
         return_code = proc.wait()
-
         if return_code == 0:
-            invalidate_git_diff_cache()
-            GLOBAL_BUFFER.last_status = "SUCCESS"
+            status = "SUCCESS"
             GLOBAL_BUFFER.write_line(f"\n>>> [{time.strftime('%H:%M:%S')}] COMPLETED SUCCESSFULLY <<<\n")
         else:
-            invalidate_git_diff_cache()
-            GLOBAL_BUFFER.last_status = "FAILED"
+            status = "FAILED"
             GLOBAL_BUFFER.write_line(f"\n>>> [{time.strftime('%H:%M:%S')}] FAILED WITH CODE {return_code} <<<\n")
-
     except Exception as e:
-        GLOBAL_BUFFER.last_status = "ERROR"
         GLOBAL_BUFFER.write_line(f"\n>>> [ERROR] Exception executing {action_name}: {e} <<<\n")
     finally:
-        invalidate_git_diff_cache()
-        GLOBAL_BUFFER.is_running = False
-        GLOBAL_BUFFER.current_action = "IDLE"
+        _GIT_DIFF_CACHE["timestamp"] = 0.0
+        GLOBAL_BUFFER.finish(status)
 
-_LAST_PR_SYNC_TIME = 0.0
-PR_SYNC_COOLDOWN = float(CONFIG.server.pr_sync_interval_seconds)  # Seconds between background GitHub PR status checks (default 60s)
+
+# ------------------------------------------------------------------ poller
+
+def background_poller(stop_event: threading.Event):
+    """
+    Keeps PR statuses and Cloud Build test results fresh without holding the action slot.
+    All state lives in the DataStore, so monitoring resumes automatically after a restart.
+    Ticks are skipped while a CLI action runs, to avoid racing its writes.
+    """
+    from test_manager import get_test_manager
+    pr_interval = CONFIG.server.pr_sync_interval_seconds
+    test_interval = CONFIG.server.test_poll_interval_seconds
+    next_pr = next_test = 0.0
+    print(f"[Poller] Started (PR sync every {pr_interval}s, test poll every {test_interval}s).", flush=True)
+
+    while not stop_event.wait(5):
+        if GLOBAL_BUFFER.is_running:
+            continue
+        now = time.time()
+        store = get_datastore()
+        if now >= next_pr:
+            next_pr = now + pr_interval
+            try:
+                res = REPO_MANAGER.sync_open_pr_statuses(store)
+                if res.get("changes"):
+                    print(f"[Poller] PR sync applied {len(res['changes'])} change(s).", flush=True)
+            except Exception as e:
+                print(f"[Poller] [WARN] PR sync failed: {e}", flush=True)
+        if now >= next_test:
+            next_test = now + test_interval
+            try:
+                get_test_manager().poll_testing_candidates(store)
+            except Exception as e:
+                print(f"[Poller] [WARN] Test poll failed: {e}", flush=True)
+
+
+# ------------------------------------------------------------ direct actions
+
+def action_blueprint_selection(store, pkg_id, data):
+    return store.update_blueprint_selection(
+        package_id=pkg_id,
+        action=data["action"],
+        instance_id=data.get("instance_id"),
+        enabled=data.get("enabled"),
+    )
+
+
+# Synchronous DataStore actions (require package_id): (store, package_id, request body) -> result.
+DIRECT_ACTIONS = {
+    "snooze": lambda store, pkg_id, data: policy.snooze(store, pkg_id, days=data.get("days"), version=data.get("version")),
+    "block": lambda store, pkg_id, data: policy.block(store, pkg_id, version=data.get("version")),
+    "unblock": lambda store, pkg_id, data: policy.unblock(store, pkg_id),
+    "toggle_blueprint": action_blueprint_selection,
+    "select_all_blueprints": action_blueprint_selection,
+    "deselect_all_blueprints": action_blueprint_selection,
+}
+
+# CLI actions: action -> (args builder, display name, requires package_id).
+# Test monitoring is owned by the background poller, so the CLI never waits on tests.
+CLI_ACTIONS = {
+    "end_to_end": (lambda p: ["--end-to-end", "--no-wait-test"], lambda p: "Full Pipeline Run", False),
+    "check_all": (lambda p: ["--check-all"], lambda p: "Source Qualification Agent", False),
+    "test_rule_blocking": (lambda p: ["--rules"], lambda p: "Learned Rule Policy Evaluation", False),
+    "apply": (lambda p: ["--apply", p, "--no-wait-test"], lambda p: f"Orchestrator Agent Update ({p})", True),
+    "test": (lambda p: ["--test", p, "--no-wait-test"], lambda p: f"Trigger Tests ({p})", True),
+    "reset": (lambda p: ["--reset"], lambda p: "Reset Environment & State", False),
+}
 
 
 class DashboardHandler(SimpleHTTPRequestHandler):
@@ -138,377 +202,168 @@ class DashboardHandler(SimpleHTTPRequestHandler):
 
     def end_headers(self):
         self.send_header("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0")
-        self.send_header("Pragma", "no-cache")
-        self.send_header("Expires", "0")
         super().end_headers()
+
+    def _send_json(self, code, payload):
+        body = json.dumps(payload).encode("utf-8")
+        self.send_response(code)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
 
     def do_GET(self):
         if self.path == "/api/state":
             self.handle_get_state()
         elif self.path.startswith("/api/logs"):
-            self.handle_get_logs()
+            self._send_json(200, {
+                "logs": GLOBAL_BUFFER.get_logs(),
+                "is_running": GLOBAL_BUFFER.is_running,
+                "current_action": GLOBAL_BUFFER.current_action,
+                "last_status": GLOBAL_BUFFER.last_status
+            })
         elif self.path.startswith("/api/diff"):
-            self.handle_get_diff()
+            self._send_json(200, {"diff": REPO_MANAGER.get_diff()})
         else:
-            # Static files
             super().do_GET()
 
     def do_POST(self):
         if self.path == "/api/action":
             self.handle_post_action()
         else:
-            self.send_error(404, "Endpoint not found")
+            self._send_json(404, {"error": "Endpoint not found"})
 
     def handle_get_state(self):
         try:
             store = get_datastore()
-
-            # Automatically sync GitHub PR statuses if cooldown has elapsed
-            global _LAST_PR_SYNC_TIME
-            now = time.time()
-            if (now - _LAST_PR_SYNC_TIME) > PR_SYNC_COOLDOWN:
-                _LAST_PR_SYNC_TIME = now
-                try:
-                    REPO_MANAGER.sync_open_pr_statuses(store)
-                except Exception as ex:
-                    print(f"[Server] Background PR sync warning: {ex}", flush=True)
-
             packages = store.list_packages()
             instances = store.list_all_blueprints()
             rules = store.list_rules()
             candidates = store.list_candidates()
-            audit_runs = store.list_audit_runs(limit=20)
 
-            # Git diff stats (cached with 5s TTL to prevent continuous subprocess execution)
-            git_diff_stat = get_cached_git_diff_stat()
+            def _count_pkgs(pkg_status, cand_status, version_field):
+                ids = {p["package_id"] for p in packages if p.get("status") == pkg_status or p.get(version_field)}
+                ids |= {c["package_id"] for c in candidates if c.get("status") == cand_status}
+                return len(ids)
 
-            payload = {
+            self._send_json(200, {
                 "packages": packages,
                 "instances": instances,
                 "rules": rules,
                 "candidates": candidates,
-                "audit_runs": audit_runs,
-                "git_diff_stat": git_diff_stat,
-                "has_modifications": bool(git_diff_stat),
+                "has_modifications": bool(get_cached_git_diff_stat()),
                 "is_running": GLOBAL_BUFFER.is_running,
                 "current_action": GLOBAL_BUFFER.current_action,
                 "last_status": GLOBAL_BUFFER.last_status,
                 "config": {
-                    "database_provider": CONFIG.database.provider,
-                    "database_id": CONFIG.database.database_id,
                     "project_id": CONFIG.database.project_id,
-                    "repo_url": CONFIG.repository.url,
+                    "cloud_build_project_id": CONFIG.cloud_build.project_id,
                     "owner": CONFIG.repository.owner,
                     "repo_name": CONFIG.repository.name,
                     "base_branch": CONFIG.repository.base_branch,
-                    "fork_url": CONFIG.repository.fork_url,
-                    "fork_owner": CONFIG.repository.fork_owner,
-                    "fork_name": CONFIG.repository.fork_name,
                     "is_fork": CONFIG.repository.is_fork,
-                    "llm_model": CONFIG.llm.model,
-                    "token_present": bool(CONFIG.get_github_token()),
-                    "workspace_dir": REPO_MANAGER.workspace_dir
+                    "fork_owner": CONFIG.repository.fork_owner,
+                    "snooze_days_default": CONFIG.policy.default_snooze_days,
+                    "trigger_prefix": CONFIG.cloud_build.trigger_prefix,
                 },
                 "stats": {
                     "total_packages": len(packages),
                     "total_instances": len(instances),
                     "total_rules": len(rules),
-                    "pending_updates": len([c for c in candidates if c.get("status") in ("UPDATE_FOUND", "QUALIFIED")]),
-                    "snoozed_packages": len(set([p.get("package_id") for p in packages if p.get("status") == "SNOOZED" or p.get("snoozed_version")] + [c.get("package_id") for c in candidates if c.get("status") == "SNOOZED"])),
-                    "blocked_packages": len(set([p.get("package_id") for p in packages if p.get("status") in ("BLOCKED", "BLOCKED_BY_RULE") or p.get("blocked_version")] + [c.get("package_id") for c in candidates if c.get("status") == "BLOCKED"])),
-                    "ready_updates": len([c for c in candidates if c.get("status") == "READY_FOR_REVIEW"]),
-                    "qualified_candidates": len([c for c in candidates if c.get("status") in ("UPDATE_FOUND", "QUALIFIED")]),
-                    "applied_candidates": len([c for c in candidates if c.get("status") in ("READY_FOR_REVIEW", "APPLIED")])
+                    "pending_updates": sum(1 for c in candidates if c.get("status") == CandidateStatus.UPDATE_FOUND),
+                    "ready_updates": sum(1 for c in candidates if c.get("status") == CandidateStatus.READY_FOR_REVIEW),
+                    "snoozed_packages": _count_pkgs(PackageStatus.SNOOZED, CandidateStatus.SNOOZED, "snoozed_version"),
+                    "blocked_packages": _count_pkgs(PackageStatus.BLOCKED, CandidateStatus.BLOCKED, "blocked_version"),
                 }
-            }
-
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json")
-            self.send_header("Access-Control-Allow-Origin", "*")
-            self.end_headers()
-            self.wfile.write(json.dumps(payload).encode("utf-8"))
+            })
         except Exception as e:
             import traceback
             traceback.print_exc()
-            self.send_response(500)
-            self.send_header("Content-Type", "application/json")
-            self.send_header("Access-Control-Allow-Origin", "*")
-            self.end_headers()
-            self.wfile.write(json.dumps({"error": str(e)}).encode("utf-8"))
-
-    def handle_get_logs(self):
-        payload = {
-            "logs": GLOBAL_BUFFER.get_logs(),
-            "is_running": GLOBAL_BUFFER.is_running,
-            "current_action": GLOBAL_BUFFER.current_action,
-            "last_status": GLOBAL_BUFFER.last_status
-        }
-        self.send_response(200)
-        self.send_header("Content-Type", "application/json")
-        self.send_header("Access-Control-Allow-Origin", "*")
-        self.end_headers()
-        self.wfile.write(json.dumps(payload).encode("utf-8"))
-
-    def handle_get_diff(self):
-        diff_text = REPO_MANAGER.get_diff()
-        payload = {"diff": diff_text}
-        self.send_response(200)
-        self.send_header("Content-Type", "application/json")
-        self.send_header("Access-Control-Allow-Origin", "*")
-        self.end_headers()
-        self.wfile.write(json.dumps(payload).encode("utf-8"))
+            self._send_json(500, {"error": str(e)})
 
     def handle_post_action(self):
-        content_length = int(self.headers.get("Content-Length", 0))
-        body = self.rfile.read(content_length).decode("utf-8")
-        data = json.loads(body) if body else {}
+        # Requiring a JSON content type forces a CORS preflight for cross-site requests,
+        # which this server never approves, so other origins cannot trigger actions.
+        if not self.headers.get("Content-Type", "").startswith("application/json"):
+            self._send_json(415, {"error": "Content-Type must be application/json"})
+            return
+        try:
+            length = int(self.headers.get("Content-Length", 0))
+            data = json.loads(self.rfile.read(length).decode("utf-8") or "{}")
+        except (ValueError, UnicodeDecodeError):
+            self._send_json(400, {"error": "Invalid JSON body"})
+            return
 
         action = data.get("action")
         pkg_id = data.get("package_id")
 
-        if GLOBAL_BUFFER.is_running:
-            self.send_response(409)
-            self.send_header("Content-Type", "application/json")
-            self.end_headers()
-            self.wfile.write(json.dumps({"error": "Another action is currently running"}).encode("utf-8"))
-            return
-
-        cmd_args = []
-        action_name = action
-
-        if action == "snooze":
+        if action in DIRECT_ACTIONS:
             if not pkg_id:
-                self.send_error(400, "package_id required for snooze")
-                return
-            days = int(data.get("days", 30))
-            store = get_datastore()
-            pkg = store.get_package(pkg_id)
-            if not pkg:
-                self.send_error(404, f"Package {pkg_id} not found")
-                return
-            version = data.get("version")
-            if not version:
-                cand = store.get_active_candidate(pkg_id)
-                version = cand.get("version") if cand else pkg.get("upstream_version", pkg.get("current_version"))
-
-            snooze_until = (datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(days=days)).isoformat()
-            summary = f"Snoozed version {version} for {days} days (until {snooze_until[:10]})."
-            store.update_package(pkg_id, {
-                "status": "SNOOZED",
-                "snooze_until": snooze_until,
-                "snoozed_version": version,
-                "qualification_summary": summary
-            })
-            cand = None
-            for c in store.list_candidates(package_id=pkg_id):
-                if c.get("version") == version:
-                    cand = c
-                    break
-            if not cand:
-                cand = store.get_active_candidate(pkg_id)
-            if cand:
-                store.update_candidate(cand["candidate_id"], {"status": "SNOOZED", "summary": summary, "version": version})
-            else:
-                store.save_candidate({
-                    "package_id": pkg_id,
-                    "version": version,
-                    "current_version": pkg.get("current_version"),
-                    "download_url": pkg.get("source_url"),
-                    "status": "SNOOZED",
-                    "summary": summary
-                })
-
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json")
-            self.send_header("Access-Control-Allow-Origin", "*")
-            self.end_headers()
-            self.wfile.write(json.dumps({"status": "SUCCESS", "message": summary, "package_id": pkg_id}).encode("utf-8"))
-            return
-
-        elif action == "block":
-            if not pkg_id:
-                self.send_error(400, "package_id required for block")
+                self._send_json(400, {"error": f"package_id required for {action}"})
                 return
             store = get_datastore()
-            pkg = store.get_package(pkg_id)
-            if not pkg:
-                self.send_error(404, f"Package {pkg_id} not found")
+            if not store.get_package(pkg_id):
+                self._send_json(404, {"error": f"Package '{pkg_id}' not found"})
                 return
-            version = data.get("version")
-            if not version:
-                cand = store.get_active_candidate(pkg_id)
-                version = cand.get("version") if cand else pkg.get("upstream_version", pkg.get("current_version"))
-
-            summary = f"Blocked version {version} (manual unblock required from dashboard)."
-            store.update_package(pkg_id, {
-                "status": "BLOCKED",
-                "blocked_version": version,
-                "qualification_summary": summary
-            })
-            cand = None
-            for c in store.list_candidates(package_id=pkg_id):
-                if c.get("version") == version:
-                    cand = c
-                    break
-            if not cand:
-                cand = store.get_active_candidate(pkg_id)
-            if cand:
-                store.update_candidate(cand["candidate_id"], {"status": "BLOCKED", "summary": summary, "version": version})
-            else:
-                store.save_candidate({
-                    "package_id": pkg_id,
-                    "version": version,
-                    "current_version": pkg.get("current_version"),
-                    "download_url": pkg.get("source_url"),
-                    "status": "BLOCKED",
-                    "summary": summary
-                })
-
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json")
-            self.send_header("Access-Control-Allow-Origin", "*")
-            self.end_headers()
-            self.wfile.write(json.dumps({"status": "SUCCESS", "message": summary, "package_id": pkg_id}).encode("utf-8"))
+            self._send_json(200, DIRECT_ACTIONS[action](store, pkg_id, data))
             return
 
-        elif action in ("unblock", "unsnooze"):
-            if not pkg_id:
-                self.send_error(400, "package_id required for unblock")
-                return
-            store = get_datastore()
-            pkg = store.get_package(pkg_id)
-            if not pkg:
-                self.send_error(404, f"Package {pkg_id} not found")
-                return
-            summary = "Unblocked manually from dashboard. Ready for qualification."
-            store.update_package(pkg_id, {
-                "status": "REGISTERED",
-                "snooze_until": None,
-                "snoozed_version": None,
-                "blocked_version": None,
-                "qualification_summary": summary
-            })
-            cands = store.list_candidates(package_id=pkg_id)
-            has_active_other = any(c.get("status") in ("UPDATE_FOUND", "READY_FOR_REVIEW", "QUALIFIED") for c in cands)
-            for c in cands:
-                if c.get("status") in ("SNOOZED", "BLOCKED"):
-                    if has_active_other:
-                        store.delete_candidate(c["candidate_id"])
-                    else:
-                        store.update_candidate(c["candidate_id"], {
-                            "status": "UPDATE_FOUND",
-                            "summary": f"Unblocked candidate ({c.get('version')})."
-                        })
-
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json")
-            self.send_header("Access-Control-Allow-Origin", "*")
-            self.end_headers()
-            self.wfile.write(json.dumps({"status": "SUCCESS", "message": summary, "package_id": pkg_id}).encode("utf-8"))
+        if action not in CLI_ACTIONS:
+            self._send_json(400, {"error": f"Unknown action: {action}"})
+            return
+        build_args, build_name, needs_pkg = CLI_ACTIONS[action]
+        if needs_pkg and not pkg_id:
+            self._send_json(400, {"error": f"package_id required for {action}"})
             return
 
-        elif action in ("toggle_blueprint", "update_blueprint_selection", "select_all_blueprints", "deselect_all_blueprints"):
-            if not pkg_id:
-                self.send_error(400, "package_id required for blueprint selection")
-                return
-            store = get_datastore()
-            instance_id = data.get("instance_id")
-            enabled = data.get("enabled")
-            selected_ids = data.get("selected_instance_ids")
-
-            res = store.update_blueprint_selection(
-                package_id=pkg_id,
-                action=action,
-                instance_id=instance_id,
-                enabled=enabled,
-                selected_instance_ids=selected_ids
-            )
-            if res is None:
-                self.send_error(404, f"Package '{pkg_id}' not found")
-                return
-
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json")
-            self.send_header("Access-Control-Allow-Origin", "*")
-            self.end_headers()
-            self.wfile.write(json.dumps(res).encode("utf-8"))
+        action_name = build_name(pkg_id)
+        if not GLOBAL_BUFFER.try_start(action_name):
+            self._send_json(409, {"error": "Another action is currently running"})
             return
+        threading.Thread(target=execute_cli_action, args=(build_args(pkg_id), action_name), daemon=True).start()
+        self._send_json(200, {"status": "STARTED", "action": action_name})
 
-        if action == "sync_repo":
-            cmd_args = ["--sync-repo"]
-            action_name = "Sync Target Repository"
-        elif action == "sync_prs":
-            cmd_args = ["--sync-prs"]
-            action_name = "Sync GitHub Pull Requests"
-        elif action == "end_to_end":
-            cmd_args = ["--end-to-end"]
-            action_name = "Full Pipeline Run"
-        elif action == "check_all":
-            cmd_args = ["--check-all"]
-            action_name = "Source Qualification Agent"
-        elif action == "test_rule_blocking":
-            cmd_args = ["--test-rule-blocking"]
-            action_name = "Learned Rule Policy Evaluation"
-        elif action == "apply":
-            if not pkg_id:
-                self.send_error(400, "package_id required for apply")
-                return
-            cmd_args = ["--apply", pkg_id]
-            action_name = f"Orchestrator Agent Update ({pkg_id})"
-        elif action == "test":
-            if not pkg_id:
-                self.send_error(400, "package_id required for test")
-                return
-            cmd_args = ["--test", pkg_id]
-            action_name = f"Trigger & Monitor Test ({pkg_id})"
-        elif action == "create_pr":
-            if not pkg_id:
-                self.send_error(400, "package_id required for create_pr")
-                return
-            cmd_args = ["--create-pr", pkg_id]
-            action_name = f"Create GitHub PR ({pkg_id})"
-        elif action == "reset":
-            cmd_args = ["--reset"]
-            action_name = "Reset Environment & State"
-        else:
-            self.send_error(400, f"Unknown action: {action}")
-            return
 
-        GLOBAL_BUFFER.clear()
-        t = threading.Thread(target=execute_cli_action, args=(cmd_args, action_name), daemon=True)
-        t.start()
+class DualStackHTTPServer(ThreadingHTTPServer):
+    """Accepts both IPv4 and IPv6 (e.g. port forwarders that connect to ::1)."""
+    address_family = socket.AF_INET6
 
-        self.send_response(200)
-        self.send_header("Content-Type", "application/json")
-        self.send_header("Access-Control-Allow-Origin", "*")
-        self.end_headers()
-        self.wfile.write(json.dumps({"status": "STARTED", "action": action_name}).encode("utf-8"))
+    def server_bind(self):
+        self.socket.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 0)
+        super().server_bind()
 
 
 def run_server(port=None):
-    if port is None:
-        port = CONFIG.server.port
-    host = "0.0.0.0"
+    port = port or CONFIG.server.port
+    host = CONFIG.server.host
 
-    # Ensure target workspace develop branch is in sync with origin on startup
+    if host in ("", "0.0.0.0", "::") and socket.has_ipv6:
+        server = DualStackHTTPServer(("::", port), DashboardHandler)
+    else:
+        server = ThreadingHTTPServer((host, port), DashboardHandler)
+
     try:
         REPO_MANAGER.ensure_workspace(force_clean=True)
     except Exception as e:
         print(f"[Server] [WARN] Initial workspace sync error: {e}", flush=True)
 
-    server = ThreadingHTTPServer((host, port), DashboardHandler)
-    print(f"\n======================================================================")
-    print(f"  CLUSTER TOOLKIT UPDATER - WEB DASHBOARD SERVER")
-    print(f"======================================================================")
+    stop_event = threading.Event()
+    threading.Thread(target=background_poller, args=(stop_event,), daemon=True, name="poller").start()
+    print("\n======================================================================")
+    print("  CLUSTER TOOLKIT UPDATER - WEB DASHBOARD SERVER")
+    print("======================================================================")
     print(f"  Target Repo:    {CONFIG.repository.url} ({CONFIG.repository.branch})")
+    print(f"  Listening on:   http://{host}:{port}")
     print(f"  Local Access:   http://localhost:{port}")
-    print(f"  Network Access: http://127.0.0.1:{port}")
-    print(f"======================================================================\n")
+    print("======================================================================\n", flush=True)
     try:
         server.serve_forever()
     except KeyboardInterrupt:
         print("\nShutting down server...")
+    finally:
+        stop_event.set()
         server.server_close()
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()

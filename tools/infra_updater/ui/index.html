@@ -359,7 +359,7 @@
           <select id="snooze-days-select" style="width: 100%; padding: 10px 14px; background: var(--bg-hover); color: var(--text-primary); border: 1px solid var(--border-color); border-radius: 8px; font-size: 14px; outline: none; cursor: pointer;">
             <option value="7">7 Days</option>
             <option value="14">14 Days</option>
-            <option value="30" selected>30 Days (Default)</option>
+            <option value="30" selected>30 Days</option>
             <option value="60">60 Days</option>
             <option value="90">90 Days</option>
           </select>
@@ -412,7 +412,7 @@
 
       <div class="modal-footer">
         <div class="test-modal-footer-info" id="test-modal-project-info">
-          <span>Target Project: <code class="code-pill">hpc-toolkit-dev</code></span>
+          <span>Target Project: <code class="code-pill" id="test-modal-project-id">-</code></span>
         </div>
         <div style="display: flex; gap: 8px;">
           <button class="btn btn-secondary" id="test-modal-rerun-btn" onclick="rerunTestsFromModal()" style="display: inline-flex; align-items: center; gap: 6px;">

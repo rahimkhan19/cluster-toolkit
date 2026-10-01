@@ -145,6 +145,11 @@ body {
   cursor: not-allowed;
 }
 
+.btn-sm {
+  padding: 4px 10px;
+  font-size: 12px;
+}
+
 .btn-primary {
   background-color: var(--accent-green);
   color: #ffffff;
@@ -477,6 +482,12 @@ body {
   background: rgba(248, 81, 73, 0.15);
   color: #f85149;
   border: 1px solid rgba(248, 81, 73, 0.3);
+}
+
+.badge-gray {
+  background: var(--bg-surface-elevated);
+  color: var(--text-muted);
+  border: 1px solid var(--border-color);
 }
 
 .code-pill {

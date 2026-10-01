@@ -14,37 +14,72 @@
 # limitations under the License.
 
 """
-Atomic Code Modifier for the Cluster Toolkit Infrastructure Updater.
-Performs surgical, comment-preserving AST-safe updates on target blueprints,
-synchronizing coupled variables atomically and validating YAML syntax.
-All coupling rules and line signature keywords are loaded dynamically from DataStore.
+Orchestrator (code modifier) for the Cluster Toolkit Infrastructure Updater.
+Performs surgical, comment-preserving updates on target blueprints, synchronizes
+coupled variables, validates YAML syntax, and opens a PR with integration tests.
+All coupling rules and line signature keywords are loaded from the DataStore.
 """
 
 import difflib
-import json
 import os
 import re
-import subprocess
 import sys
-from typing import Dict, List, Optional, Any, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 import yaml
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 if BASE_DIR not in sys.path:
     sys.path.insert(0, BASE_DIR)
 from config import get_config
-from datastore import DataStore, get_datastore
+from datastore import BaseDataStore, get_datastore
+from policy import policy_hold
 from repo_manager import RepoManager
+from statuses import APPLICABLE_CANDIDATE_STATUSES, CandidateStatus, PackageStatus, TestStatus
+
+_VERSION_RE = r'v?[0-9]+(?:\.[0-9]+)+(?:-[a-zA-Z0-9._]+)?'
+
+
+def _match_v_prefix(reference: str, value: str) -> str:
+    """Adds or strips a leading 'v' on value so it matches the reference's style."""
+    if re.match(r'^[vV][0-9]', reference) and re.match(r'^[0-9]', value):
+        return f"v{value}"
+    if re.match(r'^[0-9]', reference) and re.match(r'^[vV][0-9]', value):
+        return value[1:]
+    return value
+
+
+def _is_url(value: str) -> bool:
+    return value.startswith(("http://", "https://"))
+
+
+def _format_like(old_val: str, new_val: str) -> str:
+    """
+    Shapes new_val after old_val:
+    - URL with a /<version>/ path segment + bare version -> swap only that segment
+    - image reference with a :<version> tag + bare version -> swap only the tag
+    - otherwise keep the old value's v-prefix style
+    """
+    if _is_url(old_val) and not _is_url(new_val):
+        m = re.search(rf'/({_VERSION_RE})/', old_val)
+        if m:
+            return old_val.replace(f"/{m.group(1)}/", f"/{_match_v_prefix(m.group(1), new_val)}/")
+        return new_val
+    if ":" in old_val and not _is_url(new_val) and not ("/" in new_val and ":" in new_val):
+        m = re.search(rf':({_VERSION_RE})$', old_val)
+        if m:
+            return old_val[:m.start(1)] + _match_v_prefix(m.group(1), new_val)
+        return new_val
+    return _match_v_prefix(old_val, new_val)
+
 
 class OrchestratorAgent:
     """
-    Orchestrator Agent for Cluster Toolkit Automated Dependency Management (Doc Section 4.3).
-    Performs surgical, comment-preserving AST-safe updates on target blueprints,
-    synchronizing coupled variables atomically and validating YAML syntax.
-    Transitions candidate updates to READY_FOR_REVIEW and creates GitHub Pull Requests.
+    Orchestrator Agent for Cluster Toolkit Automated Dependency Management.
+    Applies a candidate to all selected blueprint instances, pushes a branch, opens a PR,
+    and triggers the mapped integration tests.
     """
 
-    def __init__(self, store: Optional[DataStore] = None, repo_root: Optional[str] = None):
+    def __init__(self, store: Optional[BaseDataStore] = None, repo_root: Optional[str] = None):
         self.config = get_config()
         self.store = store or get_datastore()
         self.repo_manager = RepoManager(self.config)
@@ -80,74 +115,96 @@ class OrchestratorAgent:
         self, text: str, var_name: str, new_val: str, signature_keywords: Optional[List[str]] = None
     ) -> Tuple[str, bool, str, str]:
         """
-        Surgically replaces a variable assignment line preserving exact indentation and quotes.
-        If signature_keywords is provided, checks contextual parent hierarchy and nearby metadata.
-        Returns: (new_text, changed, old_val, applied_val)
+        Replaces the value of every `var_name: value` line (filtered by signature keywords when
+        given). Preserves indentation, quote style, trailing `# comments`, and line endings.
+        Returns: (new_text, changed, old_val, applied_val) for the first matching line.
         """
-        pattern = rf'^([ \t]*{re.escape(var_name)}:[ \t]*)(["\']?)([^"\r\n]+)(["\']?.*)$'
+        pattern = re.compile(
+            rf'^(?P<prefix>[ \t]*{re.escape(var_name)}:[ \t]*)'
+            rf'(?:(?P<q>["\'])(?P<qval>.*?)(?P=q)|(?P<val>\S(?:.*?\S)?))'
+            rf'(?P<suffix>(?:[ \t]+#.*)?[ \t]*)$'
+        )
         lines = text.splitlines(keepends=True)
         changed = False
         old_val = ""
         applied_val = new_val
 
-        new_lines = []
         for i, line in enumerate(lines):
-            m = re.match(pattern, line)
-            if m:
-                # If keywords provided, check if line or nearby context matches
-                if signature_keywords:
-                    ctx = self._get_yaml_context(lines, i)
-                    if not any(k.lower() in ctx for k in signature_keywords):
-                        new_lines.append(line)
-                        continue
+            body = line.rstrip("\r\n")
+            m = pattern.match(body)
+            if not m:
+                continue
+            if signature_keywords:
+                ctx = self._get_yaml_context(lines, i)
+                if not any(k.lower() in ctx for k in signature_keywords):
+                    continue
 
-                prefix, quote1, val, suffix_rest = m.groups()
-                old_val = val.strip()
+            quote = m.group("q") or ""
+            current = m.group("qval") if quote else m.group("val")
+            target = _format_like(current, new_val)
+            if not old_val:
+                old_val, applied_val = current, target
+            new_line = f"{m.group('prefix')}{quote}{target}{quote}{m.group('suffix')}{line[len(body):]}"
+            if new_line != line:
+                lines[i] = new_line
+                changed = True
 
-                target_val = new_val
+        return ("".join(lines), changed, old_val, applied_val)
 
-                # If old_val is a URL and target_val is a version string, surgically update the version in the URL
-                if (old_val.startswith("http://") or old_val.startswith("https://")) and not (target_val.startswith("http://") or target_val.startswith("https://")):
-                    m_url = re.search(r'/(v?[0-9]+(?:\.[0-9]+)+(?:-[a-zA-Z0-9\._]+)?)/', old_val)
-                    if m_url:
-                        old_url_ver = m_url.group(1)
-                        formatted_ver = target_val
-                        if re.match(r'^[vV][0-9]', old_url_ver) and re.match(r'^[0-9]', formatted_ver):
-                            formatted_ver = f"v{formatted_ver}"
-                        elif re.match(r'^[0-9]', old_url_ver) and re.match(r'^[vV][0-9]', formatted_ver):
-                            formatted_ver = formatted_ver.lstrip("v")
-                        target_val = old_val.replace(f"/{old_url_ver}/", f"/{formatted_ver}/")
-                # If old_val is an image reference with tag, preserve tag prefix style
-                elif ":" in old_val and not (target_val.startswith("http://") or target_val.startswith("https://")) and not ("/" in target_val and ":" in target_val):
-                    m_img = re.search(r':(v?[0-9]+(?:\.[0-9]+)+(?:-[a-zA-Z0-9\._]+)?)$', old_val)
-                    if m_img:
-                        old_tag = m_img.group(1)
-                        formatted_ver = target_val
-                        if re.match(r'^[vV][0-9]', old_tag) and re.match(r'^[0-9]', formatted_ver):
-                            formatted_ver = f"v{formatted_ver}"
-                        elif re.match(r'^[0-9]', old_tag) and re.match(r'^[vV][0-9]', formatted_ver):
-                            formatted_ver = formatted_ver.lstrip("v")
-                        target_val = old_val[:m_img.start(1)] + formatted_ver
-                else:
-                    # Preserve 'v' prefix if the original value in the file had a 'v' prefix (e.g. v1.1.0 -> v1.1.1)
-                    # or strip 'v' prefix if the original value did NOT have it (e.g. 1.1.0 -> 1.1.1)
-                    if re.match(r'^[vV][0-9]', old_val) and re.match(r'^[0-9]', target_val):
-                        target_val = f"v{target_val}"
-                    elif re.match(r'^[0-9]', old_val) and re.match(r'^[vV][0-9]', target_val):
-                        target_val = target_val.lstrip("v")
+    def _select_candidate(self, package_id: str, candidate_id: Optional[str]) -> Optional[Dict[str, Any]]:
+        if candidate_id:
+            return self.store.get_candidate(candidate_id)
+        # list_candidates is newest-first
+        return next((c for c in self.store.list_candidates(package_id=package_id)
+                     if c.get("status") in APPLICABLE_CANDIDATE_STATUSES), None)
 
-                applied_val = target_val
-                if quote1:
-                    new_line = f"{prefix}{quote1}{target_val}{quote1}\n"
-                else:
-                    new_line = f"{prefix}{target_val}\n"
-                new_lines.append(new_line)
-                if new_line != line:
-                    changed = True
-            else:
-                new_lines.append(line)
+    @staticmethod
+    def _script_fallbacks(package_id: str, var_name: str, content: str, version: str, url: str) -> Optional[Tuple[str, str, str]]:
+        """
+        Package-specific in-script replacements for artifacts referenced inside shell
+        commands rather than a dedicated YAML variable. Returns (new_content, old_val, new_val).
+        (Phase 4 replaces these with declarative registry rules.)
+        """
+        vn = var_name.lower()
+        if "mft" in vn:
+            m_old = re.search(r'mft-([0-9.\-]+)-aarch64-deb', content)
+            new_base = f"mft-{version}-aarch64-deb"
+            out = re.sub(r'https://www\.mellanox\.com/downloads/MFT/mft-[0-9.\-]+-aarch64-deb\.tgz', url, content)
+            out = re.sub(r'mft-[0-9.\-]+-aarch64-deb', new_base, out)
+            return (out, m_old.group(1) if m_old else "", version) if out != content else None
 
-        return ("".join(new_lines), changed, old_val, applied_val)
+        if package_id == "miniforge" or "miniforge" in vn:
+            m_old = re.search(r'Miniforge3-([0-9.\-]+)-Linux-x86_64\.sh', content)
+            out = re.sub(
+                r'https://github\.com/conda-forge/miniforge/releases/download/[0-9.\-]+/Miniforge3-[0-9.\-]+-Linux-x86_64\.sh',
+                f'https://github.com/conda-forge/miniforge/releases/download/{version}/Miniforge3-{version}-Linux-x86_64.sh',
+                content
+            )
+            out = re.sub(r'Miniforge3-[0-9.\-]+-Linux-x86_64\.sh', f'Miniforge3-{version}-Linux-x86_64.sh', out)
+            return (out, m_old.group(1) if m_old else "", version) if out != content else None
+
+        if package_id == "nvidia-dcgm" or "dcgm" in vn or "nvidia_packages" in vn:
+            target = version if version.startswith("1:") else f"1:{version}"
+            m_old = re.search(r'datacenter-gpu-manager-4-[a-z0-9]+=([0-9.\-:]+)', content)
+            out = re.sub(r'(datacenter-gpu-manager-4-[a-z0-9]+=)[0-9.\-:]+', rf'\g<1>{target}', content)
+            return (out, m_old.group(1) if m_old else "", target) if out != content else None
+
+        if package_id == "openmpi" or "openmpi" in vn:
+            clean = version.lstrip("v")
+            parts = clean.split(".")
+            maj_min = f"v{parts[0]}.{parts[1]}" if len(parts) >= 2 else f"v{clean}"
+            m_old = re.search(r'openmpi-([0-9.]+)\.tar\.bz2', content)
+            out = re.sub(
+                r'https://download\.open-mpi\.org/release/open-mpi/v[0-9.]+/openmpi-[0-9.]+\.tar\.bz2',
+                f'https://download.open-mpi.org/release/open-mpi/{maj_min}/openmpi-{clean}.tar.bz2',
+                content
+            )
+            out = re.sub(r'(openmpi-)[0-9.]+(\.tar\.bz2)', rf'\g<1>{clean}\g<2>', out)
+            out = re.sub(r'(cd openmpi-)[0-9.]+', rf'\g<1>{clean}', out)
+            out = re.sub(r'(\s+openmpi-)[0-9.]+(\s*)$', rf'\g<1>{clean}\g<2>', out, flags=re.MULTILINE)
+            return (out, m_old.group(1) if m_old else "", clean) if out != content else None
+
+        return None
 
     def apply_update(
         self,
@@ -158,253 +215,95 @@ class OrchestratorAgent:
         wait_for_test: bool = False
     ) -> Dict[str, Any]:
         """
-        Applies qualified candidate update to all blueprint instances associated with package_id.
-        Fetches latest develop branch, checks out an update branch, modifies blueprints, commits,
-        pushes to remote, creates a GitHub Pull Request, and triggers/monitors the respective blueprint test.
+        Applies the newest applicable candidate to all selected blueprint instances of package_id.
+        Branches off the latest base branch, modifies blueprints, commits, pushes, opens a PR,
+        and triggers the mapped integration tests. Test results are recorded by
+        wait_for_test (blocking) or by the dashboard server's background poller.
         """
-        # 1. Fetch Candidate Update
-        if candidate_id:
-            cand = self.store.get_candidate(candidate_id)
-        else:
-            candidates = self.store.list_candidates(package_id=package_id)
-            valid_cands = [c for c in candidates if c.get("status") in ('UPDATE_FOUND', 'READY_FOR_REVIEW', 'QUALIFIED')]
-            cand = valid_cands[-1] if valid_cands else None
-
+        cand = self._select_candidate(package_id, candidate_id)
         if not cand:
-            return {
-                "status": "ERROR",
-                "message": f"No candidate update found for package '{package_id}' in datastore."
-            }
+            return {"status": "ERROR", "message": f"No applicable candidate update found for package '{package_id}'."}
 
         cand_id = cand["candidate_id"]
         cand_version = cand["version"]
         cand_url = cand.get("download_url", "")
         filename = os.path.basename(cand_url)
 
-        # Check if package is snoozed or blocked
-        pkg = self.store.get_package(package_id)
-        if pkg:
-            pkg_status = pkg.get("status")
-            if pkg_status == "SNOOZED":
-                snooze_until = pkg.get("snooze_until")
-                snoozed_ver = pkg.get("snoozed_version")
-                now_str = datetime.datetime.now(datetime.timezone.utc).isoformat()
-                is_expired = snooze_until and str(snooze_until) <= now_str
-                from source_agent import is_version_greater
-                if not is_expired and not is_version_greater(cand_version, snoozed_ver):
-                    snooze_date = str(snooze_until)[:10] if snooze_until else "active period"
-                    return {
-                        "status": "SNOOZED",
-                        "message": f"Package '{package_id}' is SNOOZED for version {snoozed_ver} until {snooze_date}. PR creation skipped."
-                    }
-            elif pkg_status == "BLOCKED":
-                blocked_ver = pkg.get("blocked_version")
-                from source_agent import is_version_greater
-                if not is_version_greater(cand_version, blocked_ver):
-                    return {
-                        "status": "BLOCKED",
-                        "message": f"Package '{package_id}' is BLOCKED for version {blocked_ver}. PR creation skipped (manual unblock required)."
-                    }
+        hold = policy_hold(self.store.get_package(package_id) or {}, cand_version)
+        if hold:
+            return {"status": hold[0], "message": f"'{package_id}': {hold[1]} PR creation skipped."}
 
-        # 2. Prepare atomic branch off latest develop in target workspace
-        branch_name = self.repo_manager.prepare_update_branch(package_id, cand_version)
-
-        # 3. Fetch Blueprint Instances with dynamically defined signature keywords
         instances = self.store.get_blueprints_for_package(package_id)
-
         if not instances:
-            return {
-                "status": "ERROR",
-                "message": f"No blueprint instances registered for package '{package_id}'."
-            }
-
-        selected_instances = [inst for inst in instances if inst.get("enabled", True) is not False]
+            return {"status": "ERROR", "message": f"No blueprint instances registered for package '{package_id}'."}
+        selected_instances = [inst for inst in instances if inst.get("enabled", True)]
         if not selected_instances:
-            print(f"[Orchestrator] All {len(instances)} blueprint instance(s) for package '{package_id}' are deselected. Skipping update.")
-            return {
-                "status": "SKIPPED",
-                "message": f"All {len(instances)} blueprint instance(s) for package '{package_id}' are deselected. Update skipped."
-            }
-
+            msg = f"All {len(instances)} blueprint instance(s) for package '{package_id}' are deselected. Update skipped."
+            print(f"[Orchestrator] {msg}")
+            return {"status": "SKIPPED", "message": msg}
         if len(selected_instances) < len(instances):
             print(f"[Orchestrator] Selected blueprints for '{package_id}': {len(selected_instances)}/{len(instances)} (deselected instances skipped).")
 
+        branch_name = self.repo_manager.prepare_update_branch(package_id, cand_version)
+
+        # Compute all edits in memory first (several instances may share a file).
+        file_contents: Dict[str, Dict[str, str]] = {}  # rel_path -> {"orig", "new"}
         modified_files = []
-        all_diffs = {}
 
         for inst in selected_instances:
-            inst_id = inst.get("instance_id")
             rel_path = inst.get("blueprint_path")
             var_name = inst.get("variable_name")
-            coupled_vars = inst.get("coupled_vars", [])
-            sig_keywords = inst.get("signature_keywords", [])
-
-            abs_path = os.path.join(self.repo_root, rel_path)
-            if self.repo_manager.config.repository.is_fork and rel_path:
-                self.repo_manager._run_git(["checkout", f"origin/{self.repo_manager.base_branch}", "--", rel_path], check=False)
-
-            if not os.path.exists(abs_path):
-                print(f"[WARN] Blueprint file not found: {abs_path}")
+            sig_keywords = inst.get("signature_keywords") or []
+            if not rel_path or not var_name:
                 continue
 
-            with open(abs_path, "r", encoding="utf-8") as f:
-                orig_content = f.read()
+            if rel_path not in file_contents:
+                if self.config.repository.is_fork:
+                    # Fork branches start from fork/base; take the blueprint from upstream base.
+                    self.repo_manager._run_git(["checkout", f"origin/{self.repo_manager.base_branch}", "--", rel_path], check=False)
+                abs_path = os.path.join(self.repo_root, rel_path)
+                if not os.path.exists(abs_path):
+                    print(f"[WARN] Blueprint file not found: {abs_path}")
+                    continue
+                with open(abs_path, "r", encoding="utf-8", newline="") as f:
+                    orig = f.read()
+                file_contents[rel_path] = {"orig": orig, "new": orig}
+            before = file_contents[rel_path]["new"]
 
-            # Determine primary replacement value based on variable type
+            # Primary replacement value based on variable type
             primary_val = cand_url if "url" in var_name.lower() else cand_version
             if "image" in var_name.lower() and "/" not in primary_val:
                 primary_val = f"nvidia/cuda:{primary_val}"
-
-            # Custom URL builder for CMake local installer
             if package_id == "cmake" or "cmake" in var_name.lower():
                 parts = cand_version.lstrip("v").split(".")
                 maj_min = f"v{parts[0]}.{parts[1]}" if len(parts) >= 2 else f"v{cand_version}"
-                primary_val = f"https://cmake.org/files/{maj_min}/cmake-{cand_version.lstrip('v')}-linux-x86_64.sh"
                 filename = f"cmake-{cand_version.lstrip('v')}-linux-x86_64.sh"
+                primary_val = f"https://cmake.org/files/{maj_min}/{filename}"
 
-            if isinstance(sig_keywords, str):
-                try:
-                    sig_keywords = json.loads(sig_keywords)
-                except Exception:
-                    sig_keywords = []
-
-            # Primary variable replacement
             new_content, primary_changed, old_primary_val, actual_primary_val = self._replace_variable_in_text(
-                orig_content, var_name, primary_val, signature_keywords=sig_keywords
+                before, var_name, primary_val, signature_keywords=sig_keywords
             )
-
-            # Inline script fallback for packages deployed via shell commands (e.g. MFT)
-            if not primary_changed and "mft" in var_name.lower():
-                cand_base = f"mft-{cand_version}-aarch64-deb"
-                content_after = re.sub(r'https://www.mellanox.com/downloads/MFT/mft-[0-9\.\-]+-aarch64-deb\.tgz', cand_url, orig_content)
-                content_after = re.sub(r'mft-[0-9\.\-]+-aarch64-deb', cand_base, content_after)
-                if content_after != orig_content:
-                    new_content = content_after
+            if not primary_changed:
+                fb = self._script_fallbacks(package_id, var_name, before, cand_version, cand_url)
+                if fb:
+                    new_content, old_primary_val, actual_primary_val = fb
                     primary_changed = True
-                    old_primary_val = "4.34.0-145"
-                    actual_primary_val = cand_base
-
-            # Inline script fallback for Miniforge
-            if not primary_changed and (package_id == "miniforge" or "miniforge" in var_name.lower()):
-                content_after = re.sub(
-                    r'https://github\.com/conda-forge/miniforge/releases/download/[0-9\.\-]+/Miniforge3-[0-9\.\-]+-Linux-x86_64\.sh',
-                    f'https://github.com/conda-forge/miniforge/releases/download/{cand_version}/Miniforge3-{cand_version}-Linux-x86_64.sh',
-                    orig_content
-                )
-                content_after = re.sub(
-                    r'Miniforge3-[0-9\.\-]+-Linux-x86_64\.sh',
-                    f'Miniforge3-{cand_version}-Linux-x86_64.sh',
-                    content_after
-                )
-                if content_after != orig_content:
-                    new_content = content_after
-                    primary_changed = True
-                    old_primary_val = "24.7.1-2"
-                    actual_primary_val = cand_version
-
-            # List item replacement for nvidia_packages (e.g. datacenter-gpu-manager packages)
-            if not primary_changed and (package_id == "nvidia-dcgm" or "dcgm" in var_name or "nvidia_packages" in var_name):
-                epoch_prefix = "1:" if not cand_version.startswith("1:") else ""
-                target_ver = f"{epoch_prefix}{cand_version}"
-                content_after, count = re.subn(
-                    r'(datacenter-gpu-manager-4-[a-z0-9]+=)[0-9\.\-:]+',
-                    rf'\g<1>{target_ver}',
-                    orig_content
-                )
-                if count > 0:
-                    new_content = content_after
-                    primary_changed = True
-                    old_primary_val = "1:4.6.1-1"
-                    actual_primary_val = target_ver
-
-            # Inline script fallback for OpenMPI
-            if not primary_changed and (package_id == "openmpi" or "openmpi" in var_name.lower()):
-                clean_ver = cand_version.lstrip("v")
-                parts = clean_ver.split(".")
-                maj_min = f"v{parts[0]}.{parts[1]}" if len(parts) >= 2 else f"v{clean_ver}"
-                content_after = re.sub(
-                    r'https://download\.open-mpi\.org/release/open-mpi/v[0-9\.]+/openmpi-[0-9\.]+\.tar\.bz2',
-                    f'https://download.open-mpi.org/release/open-mpi/{maj_min}/openmpi-{clean_ver}.tar.bz2',
-                    orig_content
-                )
-                content_after = re.sub(
-                    r'(openmpi-)[0-9\.]+(\.tar\.bz2)',
-                    rf'\g<1>{clean_ver}\g<2>',
-                    content_after
-                )
-                content_after = re.sub(
-                    r'(cd openmpi-)[0-9\.]+',
-                    rf'\g<1>{clean_ver}',
-                    content_after
-                )
-                content_after = re.sub(
-                    r'(\s+openmpi-)[0-9\.]+(\s*)$',
-                    rf'\g<1>{clean_ver}\g<2>',
-                    content_after,
-                    flags=re.MULTILINE
-                )
-                if content_after != orig_content:
-                    new_content = content_after
-                    primary_changed = True
-                    m_old = re.search(r'openmpi-([0-9\.]+)\.tar\.bz2', orig_content)
-                    old_primary_val = m_old.group(1) if m_old else "5.0.8"
-                    actual_primary_val = clean_ver
-
-            # Coupled variables synchronization
-            if isinstance(coupled_vars, str):
-                try:
-                    coupled_list = json.loads(coupled_vars)
-                except Exception:
-                    coupled_list = []
-            else:
-                coupled_list = coupled_vars or []
 
             coupled_changes = []
-
-            for coupled in coupled_list:
+            for coupled in inst.get("coupled_vars") or []:
                 c_var_name = coupled.get("variable_name")
-                pattern = coupled.get("pattern", "{filename}")
-                c_val = pattern.format(filename=filename, version=cand_version)
+                c_val = coupled.get("pattern", "{filename}").format(filename=filename, version=cand_version)
                 new_content, c_changed, old_c_val, actual_c_val = self._replace_variable_in_text(
                     new_content, c_var_name, c_val, signature_keywords=sig_keywords
                 )
                 if c_changed:
-                    coupled_changes.append({
-                        "variable": c_var_name,
-                        "old_value": old_c_val,
-                        "new_value": actual_c_val
-                    })
+                    coupled_changes.append({"variable": c_var_name, "old_value": old_c_val, "new_value": actual_c_val})
 
-            if not primary_changed and not coupled_changes:
+            if new_content == before:
                 continue
-
-            if new_content == orig_content:
-                continue
-
-            # 3. YAML Syntax & Integrity Validation
-            try:
-                yaml.safe_load(new_content)
-            except yaml.YAMLError as ye:
-                return {
-                    "status": "ERROR",
-                    "message": f"YAML syntax validation failed on {rel_path}: {ye}"
-                }
-
-            # 4. Atomic File Write
-            with open(abs_path, "w", encoding="utf-8") as f:
-                f.write(new_content)
-
-            # Compute unified diff
-            diff = list(difflib.unified_diff(
-                orig_content.splitlines(keepends=True),
-                new_content.splitlines(keepends=True),
-                fromfile=f"a/{rel_path}",
-                tofile=f"b/{rel_path}",
-                n=3
-            ))
-            all_diffs[rel_path] = "".join(diff)
+            file_contents[rel_path]["new"] = new_content
             modified_files.append({
-                "instance_id": inst_id,
+                "instance_id": inst.get("instance_id"),
                 "file_path": rel_path,
                 "primary_variable": var_name,
                 "old_value": old_primary_val,
@@ -412,164 +311,72 @@ class OrchestratorAgent:
                 "coupled_changes": coupled_changes
             })
 
+        changed_files = {p: c for p, c in file_contents.items() if c["new"] != c["orig"]}
+        if not changed_files:
+            return {"status": "ERROR", "message": f"No blueprint files were modified for package '{package_id}'."}
 
-        if not modified_files:
-            return {
-                "status": "ERROR",
-                "message": f"No blueprint files were modified for package '{package_id}'."
-            }
+        # Validate every file before writing any (all-or-nothing).
+        for rel_path, c in changed_files.items():
+            try:
+                yaml.safe_load(c["new"])
+            except yaml.YAMLError as ye:
+                return {"status": "ERROR", "message": f"YAML syntax validation failed on {rel_path}: {ye}"}
 
-        # 5. Commit changes to target workspace
-        rel_files = [m["file_path"] for m in modified_files]
+        all_diffs = {}
+        for rel_path, c in changed_files.items():
+            with open(os.path.join(self.repo_root, rel_path), "w", encoding="utf-8", newline="") as f:
+                f.write(c["new"])
+            all_diffs[rel_path] = "".join(difflib.unified_diff(
+                c["orig"].splitlines(keepends=True), c["new"].splitlines(keepends=True),
+                fromfile=f"a/{rel_path}", tofile=f"b/{rel_path}", n=3
+            ))
+
         commit_ok, commit_info = self.repo_manager.commit_changes(
             package_id=package_id,
             target_version=cand_version,
-            summary=cand.get("changelog_summary", ""),
-            modified_files=rel_files
+            summary=cand.get("summary", ""),
+            modified_files=list(changed_files)
         )
         if not commit_ok:
-            return {
-                "status": "ERROR",
-                "message": f"Git commit failed for package '{package_id}': {commit_info}"
-            }
+            return {"status": "ERROR", "message": f"Git commit failed for package '{package_id}': {commit_info}"}
+        head_sha = commit_info
 
-        # 6. Push branch to remote repository
         pushed = self.repo_manager.push_branch(branch_name)
         if not pushed:
-            return {
-                "status": "ERROR",
-                "message": f"Git push failed for branch '{branch_name}' on package '{package_id}'."
-            }
+            return {"status": "ERROR", "message": f"Git push failed for branch '{branch_name}' on package '{package_id}'."}
 
-        # 7. Create Pull Request on GitHub
-        pr_url = None
-        pr_number = None
-        pkg = self.store.get_package(package_id)
-        current_blueprint_ver = pkg.get("current_version") if pkg else None
+        pkg = self.store.get_package(package_id) or {}
+        current_blueprint_ver = pkg.get("current_version")
 
-        cand_for_pr = dict(cand)
-        if current_blueprint_ver and not cand_for_pr.get("current_version"):
-            cand_for_pr["current_version"] = current_blueprint_ver
-
+        pr_url = pr_number = None
         if create_pr:
             pr_res = self.repo_manager.create_pull_request(
                 package_id=package_id,
                 target_version=cand_version,
-                candidate_info=cand_for_pr,
+                candidate_info=cand,
                 modified_blueprints=modified_files
             )
-            pr_url = pr_res.get("pr_url")
-            pr_number = pr_res.get("pr_number")
+            pr_url, pr_number = pr_res.get("pr_url"), pr_res.get("pr_number")
             if not pr_url:
-                return {
-                    "status": "ERROR",
-                    "message": f"Pull request creation failed for package '{package_id}': {pr_res.get('message')}"
-                }
+                return {"status": "ERROR", "message": f"Pull request creation failed for package '{package_id}': {pr_res.get('error')}"}
 
-        # 8. Testing Stage: Trigger integration test(s) for modified blueprint(s)
-        test_name = None
-        build_id = None
-        build_url = None
-        test_status = None
-        tests = []
-        tests_summary = None
+        self.store.update_candidate(cand_id, {
+            "status": CandidateStatus.READY_FOR_REVIEW,
+            "previous_version": current_blueprint_ver,
+            "current_version": current_blueprint_ver,
+            "pr_url": pr_url,
+            "branch": branch_name,
+            "head_sha": head_sha,
+            "tests": [],
+            "tests_summary": None,
+            "test_status": None,
+        })
+        self.store.update_package(package_id, {"status": PackageStatus.READY_FOR_REVIEW, "test_status": None, "tests_summary": None})
 
+        test_res: Dict[str, Any] = {}
         if create_pr and pr_number and run_test:
-            from test_manager import get_test_manager, compute_tests_summary
-            tm = get_test_manager()
             bp_paths = [m["file_path"] for m in modified_files]
-            resolved_tests = tm.resolve_tests_for_blueprints(bp_paths)
-
-            if resolved_tests:
-                print(f"[Orchestrator] Triggering {len(resolved_tests)} integration test(s) for PR #{pr_number}...", flush=True)
-                test_results = tm.trigger_all_tests_for_pr(
-                    pr_number=pr_number,
-                    branch_name=branch_name,
-                    test_infos=resolved_tests
-                )
-                tests = test_results
-                summary_text, overall_test, overall_workflow = compute_tests_summary(tests)
-                tests_summary = summary_text
-                test_status = overall_test
-                test_name = tests[0].get("test_name") if tests else None
-                build_id = tests[0].get("build_id") if tests else None
-                build_url = tests[0].get("build_url") if tests else None
-
-                # Transition DataStore to TESTING
-                self.store.update_candidate(cand_id, {
-                    "status": "TESTING",
-                    "previous_version": current_blueprint_ver,
-                    "current_version": current_blueprint_ver,
-                    "pr_url": pr_url,
-                    "branch": branch_name,
-                    "test_name": test_name,
-                    "test_status": test_status,
-                    "build_id": build_id,
-                    "build_url": build_url,
-                    "tests": tests,
-                    "tests_summary": tests_summary
-                })
-                self.store.update_package(package_id, {
-                    "status": "TESTING",
-                    "test_status": test_status,
-                    "tests_summary": tests_summary
-                })
-
-                if wait_for_test:
-                    print(f"[Orchestrator] Waiting for {len(tests)} blueprint test(s) to complete...", flush=True)
-                    tm.wait_for_all_tests_completion(tests)
-                    summary_text, overall_test, overall_workflow = compute_tests_summary(tests)
-                    tests_summary = summary_text
-                    test_status = overall_test
-                    total = len(tests)
-
-                    if overall_test == "SUCCESS":
-                        qual_summary = f"All {total} integration test(s) PASSED on PR #{pr_number}. Ready for review."
-                    elif overall_test == "FAILURE":
-                        failed = sum(1 for t in tests if t.get("status") in ("FAILURE", "ERROR", "TIMEOUT"))
-                        qual_summary = f"{failed}/{total} integration test(s) FAILED on PR #{pr_number}."
-                    else:
-                        qual_summary = f"Tests completed: {summary_text} on PR #{pr_number}."
-
-                    primary_url = tests[0].get("build_url") if tests else build_url
-                    self.store.update_candidate(cand_id, {
-                        "status": overall_workflow,
-                        "test_status": overall_test,
-                        "tests": tests,
-                        "tests_summary": tests_summary,
-                        "build_url": primary_url
-                    })
-                    self.store.update_package(package_id, {
-                        "status": overall_workflow,
-                        "test_status": overall_test,
-                        "tests_summary": tests_summary,
-                        "qualification_summary": qual_summary
-                    })
-                else:
-                    # Async monitoring in background thread
-                    tm.start_async_tests_monitor(
-                        candidate_id=cand_id,
-                        package_id=package_id,
-                        tests=tests,
-                        pr_number=pr_number
-                    )
-            else:
-                print(f"[Orchestrator] No integration test mapped for modified blueprints: {bp_paths}", flush=True)
-
-        if not test_name or test_status is None:
-            # Baseline transition without test or if test triggering skipped
-            self.store.update_candidate(cand_id, {
-                "status": "READY_FOR_REVIEW",
-                "previous_version": current_blueprint_ver,
-                "current_version": current_blueprint_ver,
-                "pr_url": pr_url,
-                "branch": branch_name
-            })
-            self.store.update_package(package_id, {
-                "status": "READY_FOR_REVIEW"
-            })
-
-        workflow_status = "TESTING" if test_status == "RUNNING" else ("TEST_FAILED" if test_status == "FAILURE" else "READY_FOR_REVIEW")
+            test_res = self._run_tests(cand_id, package_id, pr_number, bp_paths, head_sha=head_sha, wait=wait_for_test)
 
         return {
             "status": "SUCCESS",
@@ -577,145 +384,67 @@ class OrchestratorAgent:
             "package_id": package_id,
             "target_version": cand_version,
             "download_url": cand_url,
-            "workflow_status": workflow_status,
+            "workflow_status": test_res.get("workflow_status", CandidateStatus.READY_FOR_REVIEW),
             "branch": branch_name,
             "pr_url": pr_url,
             "pr_number": pr_number,
             "pushed": pushed,
-            "test_name": test_name,
-            "test_status": test_status,
-            "tests": tests,
-            "tests_summary": tests_summary,
-            "build_id": build_id,
-            "build_url": build_url,
+            "test_status": test_res.get("test_status"),
+            "tests": test_res.get("tests", []),
+            "tests_summary": test_res.get("tests_summary"),
             "modified_files": modified_files,
             "diffs": all_diffs
         }
 
+    def _run_tests(
+        self,
+        cand_id: str,
+        package_id: str,
+        pr_number: int,
+        bp_paths: List[str],
+        head_sha: Optional[str] = None,
+        rerun_finished: bool = False,
+        wait: bool = False,
+    ) -> Dict[str, Any]:
+        """Resolves, approves/re-runs and records the integration tests for a candidate's PR."""
+        from test_manager import get_test_manager, record_test_results
+        tm = get_test_manager()
+        resolved = tm.resolve_tests_for_blueprints(bp_paths)
+        if not resolved:
+            print(f"[Orchestrator] No integration test mapped for modified blueprints: {bp_paths}", flush=True)
+            return {"status": "NO_TESTS", "tests": []}
+
+        print(f"[Orchestrator] Triggering {len(resolved)} integration test(s) for PR #{pr_number}...", flush=True)
+        tests = tm.trigger_all_tests_for_pr(pr_number, resolved, head_sha=head_sha, rerun_finished=rerun_finished)
+        summary, test_status, workflow = record_test_results(self.store, cand_id, package_id, tests, pr_number)
+
+        if wait and test_status == TestStatus.RUNNING:
+            print(f"[Orchestrator] Waiting for {len(tests)} blueprint test(s) to complete...", flush=True)
+            tm.wait_for_all_tests_completion(tests)
+            summary, test_status, workflow = record_test_results(self.store, cand_id, package_id, tests, pr_number)
+        elif test_status == TestStatus.RUNNING:
+            print("[Orchestrator] Tests are running; results will be recorded by the dashboard's background poller.", flush=True)
+
+        return {"status": "SUCCESS", "tests": tests, "tests_summary": summary,
+                "test_status": test_status, "workflow_status": workflow}
+
     def trigger_candidate_test(self, candidate_id: str, wait_for_test: bool = False) -> Dict[str, Any]:
-        """Triggers integration test for an existing candidate with an open PR."""
+        """(Re-)runs the integration tests for an existing candidate with an open PR."""
         cand = self.store.get_candidate(candidate_id)
         if not cand:
             return {"status": "ERROR", "message": f"Candidate '{candidate_id}' not found."}
-        pr_url = cand.get("pr_url")
-        if not pr_url:
+        m = re.search(r"/pull/(\d+)", cand.get("pr_url") or "")
+        if not m:
             return {"status": "ERROR", "message": "Candidate does not have an active PR."}
 
-        m = re.search(r"/pull/(\d+)", pr_url)
-        pr_number = int(m.group(1)) if m else None
-        if not pr_number:
-            return {"status": "ERROR", "message": "Could not parse PR number from PR URL."}
-
         package_id = cand["package_id"]
-        branch_name = cand.get("branch") or f"infra-update/{package_id}-{cand.get('version')}"
-
-        instances = self.store.get_blueprints_for_package(package_id)
-        selected_instances = [i for i in instances if i.get("enabled", True) is not False]
-        bp_paths = [i.get("blueprint_path") for i in selected_instances if i.get("blueprint_path")]
+        bp_paths = [i["blueprint_path"] for i in self.store.get_blueprints_for_package(package_id)
+                    if i.get("enabled", True) and i.get("blueprint_path")]
         if not bp_paths:
             return {"status": "ERROR", "message": f"No active/selected blueprints found for package '{package_id}'."}
 
-        from test_manager import get_test_manager, compute_tests_summary
-        tm = get_test_manager()
-        resolved_tests = tm.resolve_tests_for_blueprints(bp_paths)
-        if not resolved_tests:
+        res = self._run_tests(candidate_id, package_id, int(m.group(1)), bp_paths,
+                              head_sha=cand.get("head_sha"), rerun_finished=True, wait=wait_for_test)
+        if res["status"] == "NO_TESTS":
             return {"status": "ERROR", "message": f"No integration tests mapped for package '{package_id}'."}
-
-        print(f"[Orchestrator] Triggering {len(resolved_tests)} integration test(s) for PR #{pr_number}...", flush=True)
-        test_results = tm.trigger_all_tests_for_pr(
-            pr_number=pr_number,
-            branch_name=branch_name,
-            test_infos=resolved_tests
-        )
-        tests = test_results
-        summary_text, overall_test, overall_workflow = compute_tests_summary(tests)
-        primary_build_id = tests[0].get("build_id") if tests else None
-        primary_build_url = tests[0].get("build_url") if tests else None
-        primary_test_name = tests[0].get("test_name") if tests else None
-
-        self.store.update_candidate(candidate_id, {
-            "status": "TESTING",
-            "test_name": primary_test_name,
-            "test_status": overall_test,
-            "build_id": primary_build_id,
-            "build_url": primary_build_url,
-            "tests": tests,
-            "tests_summary": summary_text
-        })
-        self.store.update_package(package_id, {
-            "status": "TESTING",
-            "test_status": overall_test,
-            "tests_summary": summary_text
-        })
-
-        if wait_for_test:
-            tm.wait_for_all_tests_completion(tests)
-            summary_text, overall_test, overall_workflow = compute_tests_summary(tests)
-            total = len(tests)
-            qual_summary = f"{summary_text} on PR #{pr_number}."
-            self.store.update_candidate(candidate_id, {
-                "status": overall_workflow,
-                "test_status": overall_test,
-                "tests": tests,
-                "tests_summary": summary_text,
-                "build_url": tests[0].get("build_url") if tests else primary_build_url
-            })
-            self.store.update_package(package_id, {
-                "status": overall_workflow,
-                "test_status": overall_test,
-                "tests_summary": summary_text,
-                "qualification_summary": qual_summary
-            })
-            return {
-                "status": "SUCCESS" if overall_test == "SUCCESS" else "FAILURE",
-                "test_status": overall_test,
-                "tests": tests,
-                "tests_summary": summary_text,
-                "build_url": primary_build_url
-            }
-        else:
-            tm.start_async_tests_monitor(candidate_id, package_id, tests, pr_number)
-            return {
-                "status": "SUCCESS",
-                "test_status": "RUNNING",
-                "tests": tests,
-                "tests_summary": summary_text,
-                "build_id": primary_build_id,
-                "build_url": primary_build_url
-            }
-
-    def revert_update(self, package_id: Optional[str] = None) -> Dict[str, Any]:
-        """Reverts modified files in target workspace back to clean develop and synchronizes DataStore."""
-        try:
-            self.repo_manager.ensure_workspace(force_clean=True)
-        except Exception as e:
-            print(f"[WARN] Failed to clean target workspace: {e}")
-
-        if package_id:
-            packages = [self.store.get_package(package_id)] if self.store.get_package(package_id) else []
-        else:
-            packages = self.store.list_packages()
-
-        # Rollback DataStore candidate and package status if they were in READY_FOR_REVIEW
-        for pkg in packages:
-            pid = pkg.get("package_id")
-            if not pid:
-                continue
-            cands = self.store.list_candidates(package_id=pid)
-            prev_ver = None
-            for c in cands:
-                if c.get("status") in ("READY_FOR_REVIEW", "TESTING"):
-                    prev_ver = c.get("previous_version")
-                    self.store.update_candidate(c["candidate_id"], {"status": "UPDATE_FOUND", "pr_url": None})
-            if pkg.get("status") == "READY_FOR_REVIEW":
-                pkg_updates = {"status": "UPDATE_FOUND"}
-                if prev_ver:
-                    pkg_updates["current_version"] = prev_ver
-                self.store.update_package(pid, pkg_updates)
-
-        return {"status": "REVERTED", "message": "Target workspace reset to clean develop branch."}
-
-
-# Backwards compatibility alias
-AtomicCodeModifier = OrchestratorAgent
-
+        return res

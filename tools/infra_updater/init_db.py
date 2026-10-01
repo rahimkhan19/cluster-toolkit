@@ -27,7 +27,6 @@ Fully aligned with Section 2 of the Implementation Guide:
 import json
 import os
 import sys
-from typing import Optional, Dict, Any, List
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 if BASE_DIR not in sys.path:
@@ -547,12 +546,7 @@ def build_canonical_seed_dict() -> dict:
         )
     ]
 
-    # -------------------------------------------------------------------------
-    # Seed Learned Rules (Section 2.4 & Case 3 Multi-Blueprint Scoping)
-    # -------------------------------------------------------------------------
-    rules_data = []
-
-    # Build seed_json for updater_state.json
+    # Build seed dict (packages with embedded blueprint instances)
     pkgs = {}
     for p in packages_data:
         pkg_id = p[0]
@@ -584,25 +578,10 @@ def build_canonical_seed_dict() -> dict:
         if pkg_id in pkgs:
             pkgs[pkg_id]["blueprints"].append(bp_dict)
 
-    rules = []
-    for r in rules_data:
-        rules.append({
-            "rule_id": r[0],
-            "package_id": r[1],
-            "rule_type": r[2],
-            "version_constraint": r[3],
-            "scope": json.loads(r[4]) if isinstance(r[4], str) else r[4],
-            "action": r[5],
-            "reason": r[6],
-            "source": r[7],
-            "expires_at": r[8],
-            "created_at": "2026-09-23T06:00:00Z"
-        })
-
     return {
         "packages": pkgs,
         "candidate_updates": {},
-        "learned_rules": rules,
+        "learned_rules": [],
         "audit_runs": []
     }
 
@@ -612,43 +591,15 @@ def get_seed_data() -> dict:
     return build_canonical_seed_dict()
 
 
-def init_database(preserve_candidates: bool = False):
-    """Initializes and seeds both the JSON file and active DataStore provider."""
-    seed_json = build_canonical_seed_dict()
-
-    # Only preserve active candidates or qualified upstream versions if explicitly requested
-    if preserve_candidates and os.path.exists(JSON_PATH):
-        try:
-            with open(JSON_PATH, "r", encoding="utf-8") as f:
-                old_json = json.load(f)
-                if old_json.get("candidate_updates"):
-                    seed_json["candidate_updates"] = old_json["candidate_updates"]
-                for pid, old_pkg in old_json.get("packages", {}).items():
-                    if pid in seed_json["packages"]:
-                        if old_pkg.get("upstream_version") and old_pkg["upstream_version"] != "-":
-                            seed_json["packages"][pid]["upstream_version"] = old_pkg["upstream_version"]
-                        if old_pkg.get("qualification_summary"):
-                            seed_json["packages"][pid]["qualification_summary"] = old_pkg["qualification_summary"]
-                        if old_pkg.get("disabled_blueprints"):
-                            seed_json["packages"][pid]["disabled_blueprints"] = old_pkg["disabled_blueprints"]
-                            disabled_set = set(old_pkg["disabled_blueprints"])
-                            for bp in seed_json["packages"][pid]["blueprints"]:
-                                if bp.get("instance_id") in disabled_set:
-                                    bp["enabled"] = False
-        except Exception:
-            pass
-
-    with open(JSON_PATH, "w", encoding="utf-8") as f:
-        json.dump(seed_json, f, indent=2, ensure_ascii=False)
-    print(f"[SUCCESS] JSON state store initialized and seeded at {JSON_PATH}.")
-
-    # Synchronize configured datastore (Firestore or JSON)
-    try:
-        from datastore import get_datastore
-        store = get_datastore()
-        store.init_from_seed(force=not preserve_candidates)
-    except Exception as ex:
-        print(f"[WARN] Failed to synchronize datastore provider: {ex}")
+def init_database(reset: bool = False):
+    """
+    Seeds the configured datastore (Firestore or JSON).
+    reset=False: add new packages and refresh registry fields; keep status, snooze/block,
+                 blueprint selections, versions and candidates.
+    reset=True:  restore the seed baseline and clear all non-merged candidates.
+    """
+    from datastore import get_datastore
+    get_datastore().init_from_seed(force=reset)
 
 
 def preview_tables():
@@ -701,7 +652,7 @@ def preview_tables():
         print(f"{'Candidate ID':<15} | {'Package ID':<18} | {'Target Version':<18} | {'Workflow Status':<18} | Summary")
         print("-" * 135)
         for c in candidates:
-            s = c.get("summary") or c.get("changelog_summary", "") or "N/A"
+            s = c.get("summary") or "N/A"
             summary = (s[:65] + "...") if len(s) > 65 else s
             print(f"{c.get('candidate_id', ''):<15} | {c.get('package_id', ''):<18} | {c.get('version', ''):<18} | {c.get('status', ''):<18} | {summary}")
     print("=" * 135)
@@ -713,8 +664,8 @@ def migrate_to_firestore(json_path: str = JSON_PATH):
     from google.cloud import firestore
 
     cfg = get_config()
-    project_id = cfg.database.project_id or "hpc-toolkit-dev"
-    database_id = cfg.database.database_id or "automated-dependency-management-db"
+    project_id = cfg.database.project_id
+    database_id = cfg.database.database_id
 
     print(f"[MIGRATION] Migrating {json_path} -> Firestore ({project_id}/{database_id})...")
     db = firestore.Client(project=project_id, database=database_id)
@@ -759,9 +710,9 @@ def migrate_to_firestore(json_path: str = JSON_PATH):
 
 if __name__ == "__main__":
     import sys
-    if "--migrate-to-firestore" in sys.argv or "--migrate-to-firebase" in sys.argv:
+    if "--migrate-to-firestore" in sys.argv:
         migrate_to_firestore()
     else:
-        init_database()
+        init_database(reset=True)
     preview_tables()
 

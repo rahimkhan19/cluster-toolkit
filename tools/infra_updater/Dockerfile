@@ -40,4 +40,6 @@ ENV PORT=8080
 
 EXPOSE 8080
 
+# The server runs a background poller (PR sync + Cloud Build status). On Cloud
+# Run deploy with: --min-instances=1 --max-instances=1 --no-cpu-throttling
 CMD ["python3", "server.py"]

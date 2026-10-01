@@ -27,15 +27,10 @@ import gzip
 import json
 import os
 import re
-import subprocess
 import sys
-import time
 import uuid
-import urllib.parse
-import urllib.request
 from typing import Dict, List, Optional, Tuple, Any
 import requests
-from packaging.version import Version
 from packaging.specifiers import SpecifierSet
 from pydantic import BaseModel, Field
 
@@ -43,31 +38,23 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 if BASE_DIR not in sys.path:
     sys.path.insert(0, BASE_DIR)
 from config import get_config
-from datastore import DataStore, get_datastore
+from datastore import BaseDataStore as DataStore, get_datastore
+import http_client
+from http_client import GitHubClient
+from llm_client import LLMClient, clean_error_message, get_llm_client
+import policy
+from statuses import POLICY_STATUSES, PR_TRACKED_CANDIDATE_STATUSES, CandidateStatus, PackageStatus
+from versions import parse_semver
 from prompts import (
-    load_prompt,
     get_archive_scraper_prompt,
     get_manifest_regex_prompt,
     get_github_release_prompt,
     get_apt_repo_prompt,
-    get_compute_image_prompt,
     get_docker_hub_prompt,
     get_release_summary_prompt,
 )
 
 CONFIG = get_config()
-
-# Enable Google GenAI SDK (importing from fallback site-packages if not in current sys.path)
-hackathon_site = "/usr/local/google/home/rahimkh/miniconda3/envs/hackathon/lib/python3.10/site-packages"
-if os.path.exists(hackathon_site) and hackathon_site not in sys.path:
-    sys.path.append(hackathon_site)
-
-try:
-    from google import genai
-    from google.genai import types
-    GENAI_AVAILABLE = True
-except ImportError:
-    GENAI_AVAILABLE = False
 
 # ==============================================================================
 # Pydantic Structured Contracts for LLM Function Calling / Structured Output
@@ -82,142 +69,6 @@ class CandidateReleaseExtraction(BaseModel):
     target_architecture: Optional[str] = Field(default=None, description="Architecture name if applicable, e.g. 'arm64-sbsa' or 'x86_64'")
     reasoning: str = Field(description="Brief explanation of why this version and artifact were chosen as the latest stable GA release")
 
-
-def clean_error_message(ex: Any) -> str:
-    """Extracts a concise, user-friendly error message without dumping raw JSON or stacktraces."""
-    raw = str(ex).strip()
-    raw_lower = raw.lower()
-
-    if "429" in raw or "resource_exhausted" in raw_lower or "quota" in raw_lower or "rate_limit" in raw_lower:
-        return "Gemini API rate limit or quota exceeded (429 RESOURCE_EXHAUSTED). Please retry shortly."
-    if "decode_preempted" in raw_lower or "preempted out of decode queue" in raw_lower:
-        return "Vertex AI inference preempted by cluster capacity (DECODE_PREEMPTED). Please retry."
-    if "503" in raw or "unavailable" in raw_lower:
-        return "Gemini service temporarily unavailable (503 UNAVAILABLE). Please retry shortly."
-    if "401" in raw or "403" in raw or "permission_denied" in raw_lower:
-        return "Authentication or permission error when contacting Gemini API (401/403)."
-    if "deadline" in raw_lower or "504" in raw:
-        return "Gemini request timed out (DEADLINE_EXCEEDED). Please retry."
-
-    # Look for a clean message inside JSON-like output
-    m = re.search(r'"message":\s*"([^"]+)"', raw)
-    if m:
-        msg = m.group(1).split("\n")[0].strip()
-        if len(msg) > 95:
-            msg = msg[:92] + "..."
-        return msg
-
-    # Strip any proto type URLs and JSON braces
-    cleaned = raw.split("\n")[0].split("[type.googleapis.com")[0].split("{")[0].strip().rstrip(".:")
-    if len(cleaned) > 95:
-        cleaned = cleaned[:92] + "..."
-    return cleaned or "LLM generation encountered an unexpected error."
-
-
-def generate_content_with_retry(
-    client: Any,
-    model: str,
-    contents: Any,
-    config: Any,
-    max_retries: Optional[int] = None,
-    initial_delay: Optional[float] = None
-) -> Any:
-    """Invokes client.models.generate_content with exponential backoff on 429, 503, or preemption."""
-    retries = max_retries if max_retries is not None else 3
-    delay = initial_delay if initial_delay is not None else 2.0
-    multiplier = 2.0
-    last_ex = None
-    for attempt in range(retries):
-        try:
-            return client.models.generate_content(
-                model=model,
-                contents=contents,
-                config=config
-            )
-        except Exception as ex:
-            last_ex = ex
-            err_str = str(ex).lower()
-            is_retriable = (
-                "429" in err_str
-                or "resource_exhausted" in err_str
-                or "rate_limit" in err_str
-                or "quota" in err_str
-                or "503" in err_str
-                or "unavailable" in err_str
-                or "preempted" in err_str
-                or "deadline" in err_str
-            )
-            if is_retriable and attempt < retries - 1:
-                print(f"[WARN] Gemini LLM transient error (attempt {attempt + 1}/{retries}), retrying in {delay:.1f}s: {clean_error_message(ex)}")
-                time.sleep(delay)
-                delay *= multiplier
-            else:
-                break
-    raise last_ex
-
-
-def check_http_liveness(url: str) -> bool:
-    """Confirms artifact URL returns HTTP 200 or is a valid registry URI."""
-    if not url:
-        return False
-    if url.startswith("docker://") or url.startswith("docker.io/"):
-        return True
-    headers = {"User-Agent": "ClusterToolkitInfraUpdater/1.0"}
-    timeout = 8.0
-    try:
-        resp = requests.head(url, timeout=timeout, headers=headers, allow_redirects=True)
-        if resp.status_code == 200:
-            return True
-        if resp.status_code in (403, 405, 429):
-            resp_get = requests.get(url, timeout=timeout, headers=headers, stream=True, allow_redirects=True)
-            return resp_get.status_code == 200
-        return False
-    except Exception:
-        return False
-
-def parse_semver(v_str: str) -> Optional[Version]:
-    """Extracts a clean semver Version object from diverse version formats."""
-    try:
-        clean = re.sub(r'^[vV]', '', v_str.strip())
-        clean = re.sub(r'^[0-9]+:', '', clean)
-        clean = clean.split('_')[0]
-        clean = clean.split('-')[0]
-        return Version(clean)
-    except Exception:
-        return None
-
-def clean_version_str(v_str: str) -> str:
-    s = v_str.strip()
-    s = re.sub(r'^[vV]', '', s)
-    s = re.sub(r'^[0-9]+:', '', s)
-    s = re.sub(r'-base-ubuntu[0-9.]+', '', s)
-    return s
-
-def is_version_greater(v1: str, v2: Optional[str]) -> bool:
-    """Returns True if v1 is strictly greater than v2."""
-    if not v1:
-        return False
-    if not v2:
-        return True
-    if v1 == v2:
-        return False
-    c1 = clean_version_str(v1)
-    c2 = clean_version_str(v2)
-    if c1 == c2:
-        return False
-    s1 = parse_semver(v1)
-    s2 = parse_semver(v2)
-    if s1 and s2 and s1 != s2:
-        return s1 > s2
-    try:
-        from packaging.version import Version as PkgVersion
-        p1 = PkgVersion(re.sub(r'[^0-9.]+', '.', c1).strip('.'))
-        p2 = PkgVersion(re.sub(r'[^0-9.]+', '.', c2).strip('.'))
-        if p1 != p2:
-            return p1 > p2
-    except Exception:
-        pass
-    return c1 > c2
 
 # ==============================================================================
 # Upfront Rule Checker (Section 4.2 & Case 3 Multi-Blueprint Scoping)
@@ -284,12 +135,11 @@ class ArchiveScraperProvider:
     """Discovers latest GA release using Gemini LLM extraction over upstream release pages."""
     _cached_results = {}
 
-    def __init__(self, llm_client=None, model: str = "gemini-3.8-flash"):
-        self.llm_client = llm_client
-        self.model = model
+    def __init__(self, llm: Optional[LLMClient] = None):
+        self.llm = llm
 
     def _extract_with_llm(self, package_id: str, page_url: str, html_content: str, target_arch: str) -> Optional[Dict[str, Any]]:
-        if not self.llm_client or not GENAI_AVAILABLE:
+        if not self.llm:
             return None
 
         all_urls = set(re.findall(r"https?://[^\s\"<>\\&]+?\.(?:run|tgz|deb|rpm|tar\.gz|zip)", html_content))
@@ -316,17 +166,7 @@ class ArchiveScraperProvider:
             discovered_urls_json=json.dumps(sample_urls, indent=2)
         )
         try:
-            resp = generate_content_with_retry(
-                client=self.llm_client,
-                model=self.model,
-                contents=prompt,
-                config=types.GenerateContentConfig(
-                    response_mime_type="application/json",
-                    response_schema=CandidateReleaseExtraction,
-                    temperature=0.0
-                )
-            )
-            cand = json.loads(resp.text)
+            cand = self.llm.generate_json(prompt, CandidateReleaseExtraction).model_dump()
             dl_url = cand.get("download_url")
             version = cand.get("version")
             filename = cand.get("filename") or (os.path.basename(dl_url) if dl_url else "")
@@ -357,7 +197,7 @@ class ArchiveScraperProvider:
         if cache_key in self._cached_results:
             return self._cached_results[cache_key]
 
-        if not self.llm_client or not GENAI_AVAILABLE:
+        if not self.llm:
             raise RuntimeError(f"Gemini LLM client is required for ArchiveScraperProvider on {package_id}")
 
         target_arch = "arm64-sbsa" if "arm64" in package_id else "x86_64"
@@ -373,7 +213,7 @@ class ArchiveScraperProvider:
 
         for u in urls_to_try:
             try:
-                r = requests.get(u, timeout=8)
+                r = http_client.get(u)
                 if r.status_code == 200:
                     cand = self._extract_with_llm(package_id, u, r.text, target_arch)
                     if cand:
@@ -388,12 +228,11 @@ class ArchiveScraperProvider:
 class ManifestRegexProvider:
     """Discovers upstream version from raw Kubernetes/container manifests via Gemini LLM extraction."""
 
-    def __init__(self, llm_client=None, model: str = "gemini-3.8-flash"):
-        self.llm_client = llm_client
-        self.model = model
+    def __init__(self, llm: Optional[LLMClient] = None):
+        self.llm = llm
 
     def _extract_with_llm(self, package_id: str, manifest_url: str, content: str) -> Optional[Dict[str, Any]]:
-        if not self.llm_client or not GENAI_AVAILABLE:
+        if not self.llm:
             return None
 
         prompt = get_manifest_regex_prompt(
@@ -402,18 +241,7 @@ class ManifestRegexProvider:
             manifest_content=content[:2500]
         )
         try:
-            resp = generate_content_with_retry(
-                client=self.llm_client,
-                model=self.model,
-                contents=prompt,
-                config=types.GenerateContentConfig(
-                    response_mime_type="application/json",
-                    response_schema=CandidateReleaseExtraction,
-                    temperature=0.0
-                )
-            )
-            data = json.loads(resp.text)
-            extracted = CandidateReleaseExtraction(**data)
+            extracted = self.llm.generate_json(prompt, CandidateReleaseExtraction)
             if not extracted.version:
                 return None
 
@@ -433,10 +261,10 @@ class ManifestRegexProvider:
             raise RuntimeError(f"LLM extraction failed for manifest {manifest_url} on {package_id}: {clean_msg}")
 
     def get_candidate(self, package_id: str, manifest_url: str, current_version: Optional[str] = None) -> Optional[Dict[str, Any]]:
-        if not self.llm_client or not GENAI_AVAILABLE:
+        if not self.llm:
             raise RuntimeError(f"Gemini LLM client is required for ManifestProvider on {package_id}")
 
-        resp = requests.get(manifest_url, timeout=8)
+        resp = http_client.get(manifest_url)
         if resp.status_code != 200:
             raise RuntimeError(f"Failed to fetch manifest from {manifest_url} (HTTP {resp.status_code})")
         content = resp.text
@@ -458,9 +286,8 @@ class ManifestRegexProvider:
 class GitHubReleaseProvider:
     """Discovers latest GA release via Gemini LLM extraction over upstream releases/tags."""
 
-    def __init__(self, llm_client=None, model: str = "gemini-3.8-flash"):
-        self.llm_client = llm_client
-        self.model = model
+    def __init__(self, llm: Optional[LLMClient] = None):
+        self.llm = llm
 
     @staticmethod
     def extract_repo_from_url(url: str) -> Optional[str]:
@@ -470,7 +297,7 @@ class GitHubReleaseProvider:
     def _extract_with_llm(
         self, package_id: str, source_url: str, releases: List[Dict[str, Any]], current_version: Optional[str] = None
     ) -> Optional[Dict[str, Any]]:
-        if not self.llm_client or not GENAI_AVAILABLE:
+        if not self.llm:
             return None
 
         candidates_summary = []
@@ -493,18 +320,7 @@ class GitHubReleaseProvider:
             current_version=current_version or "-"
         )
         try:
-            resp = generate_content_with_retry(
-                client=self.llm_client,
-                model=self.model,
-                contents=prompt,
-                config=types.GenerateContentConfig(
-                    response_mime_type="application/json",
-                    response_schema=CandidateReleaseExtraction,
-                    temperature=0.0
-                )
-            )
-            data = json.loads(resp.text)
-            extracted = CandidateReleaseExtraction(**data)
+            extracted = self.llm.generate_json(prompt, CandidateReleaseExtraction)
             if not extracted.is_production_ga or not extracted.version:
                 return None
 
@@ -585,16 +401,13 @@ class GitHubReleaseProvider:
         if not repo:
             raise ValueError(f"Could not extract GitHub repository from {source_url}")
 
-        url = f"https://api.github.com/repos/{repo}/releases?per_page=15"
-        headers = {"User-Agent": "ClusterToolkitInfraUpdater/1.0"}
-        resp = requests.get(url, timeout=8, headers=headers)
-        releases = resp.json() if resp.status_code == 200 else []
+        gh = GitHubClient(CONFIG.github_token)
+        releases = gh.get(f"/repos/{repo}/releases", params={"per_page": 15})
 
-        # If no releases published, fall back to git tags (e.g. openmpi)
-        if not releases or not isinstance(releases, list):
-            tags_url = f"https://api.github.com/repos/{repo}/tags?per_page=15"
-            tags_resp = requests.get(tags_url, timeout=8, headers=headers)
-            if tags_resp.status_code == 200 and isinstance(tags_resp.json(), list):
+        # Repositories that publish no GitHub releases (e.g. openmpi) are read from git tags.
+        if not releases:
+            tags = gh.get(f"/repos/{repo}/tags", params={"per_page": 15})
+            if tags:
                 releases = [
                     {
                         "tag_name": t.get("name", ""),
@@ -604,10 +417,10 @@ class GitHubReleaseProvider:
                         "draft": False,
                         "assets": []
                     }
-                    for t in tags_resp.json()
+                    for t in tags
                 ]
 
-        if not releases or not isinstance(releases, list):
+        if not releases:
             raise RuntimeError(f"No releases or tags returned by GitHub API for {repo}")
 
         llm_cand = self._extract_with_llm(package_id, source_url, releases, current_version=current_version)
@@ -616,143 +429,11 @@ class GitHubReleaseProvider:
         return llm_cand
 
 
-class ComputeImageProvider:
-    """Discovers upstream compute engine image information via active GCP image family with Gemini LLM qualification."""
-
-    def __init__(self, llm_client=None, model: str = "gemini-3.8-flash"):
-        self.llm_client = llm_client
-        self.model = model
-
-    @staticmethod
-    def parse_family_and_project(package_id: str, source_url: str, current_version: str) -> Tuple[str, str]:
-        """Dynamically extracts GCP project and image family from source URL, version, or package metadata."""
-        clean_url = (source_url or "").strip()
-        # 1. Match full GCP resource URI: projects/<project>/global/images/family/<family>
-        m_full = re.search(r"projects/([^/]+)/(?:global/)?images/family/([^/\s]+)", clean_url)
-        if m_full:
-            return m_full.group(2), m_full.group(1)
-
-        # 2. Match standard <project>/<family> format in source_url
-        if "/" in clean_url and not clean_url.startswith("http"):
-            parts = clean_url.split("/", 1)
-            return parts[1].strip(), parts[0].strip()
-
-        # 3. Match <project>/<family> in current_version
-        clean_ver = (current_version or "").strip()
-        if "/" in clean_ver and not clean_ver.startswith("http"):
-            parts = clean_ver.split("/", 1)
-            return parts[1].strip(), parts[0].strip()
-
-        # 4. Extract project from URL if present, otherwise infer from package domain
-        m_proj = re.search(r"projects/([^/\s]+)", clean_url)
-        if m_proj:
-            project = m_proj.group(1)
-        elif "slurm" in package_id.lower():
-            project = "schedmd-slurm-public"
-        elif "accelerator" in package_id.lower() or "ubuntu" in package_id.lower():
-            project = "ubuntu-os-accelerator-images"
-        else:
-            project = "schedmd-slurm-public"
-
-        family = clean_ver if clean_ver else package_id
-        return family, project
-
-    def get_candidate(self, package_id: str, current_version: str, source_url: str = "") -> Optional[Dict[str, Any]]:
-        family, project = self.parse_family_and_project(package_id, source_url, current_version)
-
-        image_data = None
-        try:
-            cmd = [
-                "gcloud", "compute", "images", "describe-from-family",
-                family, f"--project={project}", "--format=json"
-            ]
-            res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=False)
-            if res.returncode == 0 and res.stdout.strip():
-                image_data = json.loads(res.stdout)
-        except Exception as ex:
-            print(f"[WARN] gcloud execution failed for family '{family}' in '{project}': {clean_error_message(ex)}")
-
-        if not image_data:
-            image_data = {
-                "family": family,
-                "project": project,
-                "name": f"{family}-active-build",
-                "status": "READY",
-                "creationTimestamp": datetime.datetime.now(datetime.timezone.utc).isoformat()
-            }
-
-        img_name = image_data.get("name", family)
-        creation = image_data.get("creationTimestamp", "")[:10]
-        self_link = image_data.get("selfLink", f"https://console.cloud.google.com/compute/imagesDetail/projects/{project}/global/images/{img_name}")
-
-        # Generalized LLM reasoning for image release qualification
-        if self.llm_client and GENAI_AVAILABLE:
-            try:
-                metadata_summary = {
-                    "name": img_name,
-                    "family": family,
-                    "project": project,
-                    "status": image_data.get("status", "READY"),
-                    "creationTimestamp": creation,
-                    "description": image_data.get("description", ""),
-                    "deprecated": image_data.get("deprecated"),
-                    "guestOsFeatures": [f.get("type") for f in image_data.get("guestOsFeatures", [])]
-                }
-                prompt = get_compute_image_prompt(
-                    family=family,
-                    project=project,
-                    package_id=package_id,
-                    image_metadata_json=json.dumps(metadata_summary, indent=2)
-                )
-                resp = generate_content_with_retry(
-                    client=self.llm_client,
-                    model=self.model,
-                    contents=prompt,
-                    config=types.GenerateContentConfig(
-                        response_mime_type="application/json",
-                        response_schema=CandidateReleaseExtraction,
-                        temperature=0.0
-                    )
-                )
-                cand = json.loads(resp.text)
-                extracted = CandidateReleaseExtraction(**cand)
-
-                return {
-                    "version": extracted.version or family,
-                    "image_name": extracted.filename or img_name,
-                    "download_url": extracted.download_url or self_link,
-                    "filename": extracted.filename or img_name,
-                    "channel": extracted.release_channel or "production-stable",
-                    "release_notes": extracted.reasoning or f"Google Cloud Compute Engine Image Family '{family}' in project '{project}' (Build: {img_name}, Status: READY).",
-                    "tag_name": img_name,
-                    "prerelease": not extracted.is_production_ga,
-                    "draft": False,
-                    "build_date": creation
-                }
-            except Exception as lex:
-                clean_msg = clean_error_message(lex)
-                print(f"[WARN] ComputeImageProvider LLM qualification error for {package_id}: {clean_msg}")
-
-        return {
-            "version": family,
-            "image_name": img_name,
-            "download_url": self_link,
-            "filename": img_name,
-            "channel": "production-stable",
-            "release_notes": f"Compute Engine Image Family '{family}' in project '{project}' (Build: {img_name}).",
-            "tag_name": img_name,
-            "prerelease": False,
-            "draft": False,
-            "build_date": creation
-        }
-
-
 class AptRepoProvider:
     """Discovers package versions dynamically from official APT package repository index (Packages.gz)."""
 
-    def __init__(self, llm_client=None, model: str = "gemini-3.8-flash"):
-        self.llm_client = llm_client
-        self.model = model
+    def __init__(self, llm: Optional[LLMClient] = None):
+        self.llm = llm
         self._cached_results = {}
 
     def resolve_index_url(self, source_url: str, distro: str = "debian12", arch: str = "x86_64") -> Tuple[str, str]:
@@ -773,13 +454,15 @@ class AptRepoProvider:
         if cache_key in self._cached_results:
             return self._cached_results[cache_key]
 
-        if not self.llm_client or not GENAI_AVAILABLE:
+        if not self.llm:
             raise RuntimeError(f"Gemini LLM client is required for AptRepoProvider on {package_id}")
 
         index_url, repo_base = self.resolve_index_url(source_url, distro=distro, arch=arch)
-        req = urllib.request.Request(index_url, headers={"User-Agent": "ClusterToolkitInfraUpdater/1.0"})
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            data = gzip.decompress(resp.read()).decode("utf-8", errors="ignore")
+        resp = http_client.get(index_url)
+        resp.raise_for_status()
+        raw = resp.content
+        # Packages.gz is normally served as-is; some mirrors send Content-Encoding: gzip (already decoded).
+        data = (gzip.decompress(raw) if raw[:2] == b"\x1f\x8b" else raw).decode("utf-8", errors="ignore")
 
         blocks = data.split("\n\n")
         packages_in_index = set()
@@ -819,18 +502,7 @@ class AptRepoProvider:
             available_versions_json=json.dumps(sorted(set(candidate_versions)), indent=2)
         )
         try:
-            resp = generate_content_with_retry(
-                client=self.llm_client,
-                model=self.model,
-                contents=prompt,
-                config=types.GenerateContentConfig(
-                    response_mime_type="application/json",
-                    response_schema=CandidateReleaseExtraction,
-                    temperature=0.0
-                )
-            )
-            data_json = json.loads(resp.text)
-            extracted = CandidateReleaseExtraction(**data_json)
+            extracted = self.llm.generate_json(prompt, CandidateReleaseExtraction)
             if not extracted.version:
                 raise RuntimeError(f"LLM returned empty candidate version for APT package {package_id}")
 
@@ -887,13 +559,7 @@ class MftProvider(ArchiveScraperProvider):
 
         # 2. Fallback to official downloader API endpoint
         try:
-            req = urllib.request.Request(
-                self.API_URL,
-                data=urllib.parse.urlencode({"action": "get_versions"}).encode("utf-8"),
-                headers={"User-Agent": "ClusterToolkitInfraUpdater/1.0"}
-            )
-            with urllib.request.urlopen(req, timeout=10) as resp:
-                data = json.loads(resp.read().decode("utf-8"))
+            data = http_client.post(self.API_URL, data={"action": "get_versions"}).json()
 
             latest_version = data.get("latest")
             if not latest_version and data.get("ga"):
@@ -901,19 +567,13 @@ class MftProvider(ArchiveScraperProvider):
             if not latest_version:
                 return None
 
-            req2 = urllib.request.Request(
-                self.API_URL,
-                data=urllib.parse.urlencode({
-                    "action": "get_download_info",
-                    "version": latest_version,
-                    "distro": "Linux",
-                    "os": "DEB based",
-                    "arch": arch
-                }).encode("utf-8"),
-                headers={"User-Agent": "ClusterToolkitInfraUpdater/1.0"}
-            )
-            with urllib.request.urlopen(req2, timeout=10) as resp2:
-                info = json.loads(resp2.read().decode("utf-8"))
+            info = http_client.post(self.API_URL, data={
+                "action": "get_download_info",
+                "version": latest_version,
+                "distro": "Linux",
+                "os": "DEB based",
+                "arch": arch
+            }).json()
 
             files = info.get("files", [])
             if not files:
@@ -943,9 +603,8 @@ class MftProvider(ArchiveScraperProvider):
 class DockerHubProvider:
     """Discovers upstream container image tags via Docker Hub API with Gemini LLM qualification."""
 
-    def __init__(self, llm_client=None, model: str = "gemini-3.8-flash"):
-        self.llm_client = llm_client
-        self.model = model
+    def __init__(self, llm: Optional[LLMClient] = None):
+        self.llm = llm
 
     @staticmethod
     def parse_repo_and_namespace(source_url: str) -> Tuple[str, str]:
@@ -960,7 +619,7 @@ class DockerHubProvider:
         return "library", clean.split("/")[-1]
 
     def _extract_with_llm(self, package_id: str, repo_str: str, current_version: str, candidate_tags: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
-        if not self.llm_client or not GENAI_AVAILABLE:
+        if not self.llm:
             return None
 
         prompt = get_docker_hub_prompt(
@@ -970,18 +629,7 @@ class DockerHubProvider:
             candidate_tags_json=json.dumps(candidate_tags[:25], indent=2)
         )
         try:
-            resp = generate_content_with_retry(
-                client=self.llm_client,
-                model=self.model,
-                contents=prompt,
-                config=types.GenerateContentConfig(
-                    response_mime_type="application/json",
-                    response_schema=CandidateReleaseExtraction,
-                    temperature=0.0
-                )
-            )
-            data = json.loads(resp.text)
-            extracted = CandidateReleaseExtraction(**data)
+            extracted = self.llm.generate_json(prompt, CandidateReleaseExtraction)
             if not extracted.is_production_ga or not extracted.version:
                 return None
 
@@ -1014,30 +662,20 @@ class DockerHubProvider:
         if m_flavor and m_flavor.group(1):
             flavor = m_flavor.group(1)
 
-        # Query Docker Hub tags API
-        query_params = "page_size=50"
-        if flavor:
-            query_params += f"&name={urllib.parse.quote(flavor)}"
+        # Query Docker Hub tags API (filtered by flavor first, then unfiltered)
+        api_url = f"https://hub.docker.com/v2/repositories/{namespace}/{repo}/tags"
 
-        api_url = f"https://hub.docker.com/v2/repositories/{namespace}/{repo}/tags?{query_params}"
-        headers = {"User-Agent": "ClusterToolkitInfraUpdater/1.0"}
-
-        try:
-            resp = requests.get(api_url, timeout=10, headers=headers)
-            data = resp.json() if resp.status_code == 200 else {}
-            results = data.get("results", [])
-        except Exception as e:
-            print(f"[WARN] DockerHubProvider query error: {e}")
-            results = []
-
-        if not results and flavor:
+        def _tags(params: Dict[str, Any]) -> List[Dict[str, Any]]:
             try:
-                fallback_url = f"https://hub.docker.com/v2/repositories/{namespace}/{repo}/tags?page_size=100"
-                resp = requests.get(fallback_url, timeout=10, headers=headers)
-                data = resp.json() if resp.status_code == 200 else {}
-                results = data.get("results", [])
-            except Exception:
-                results = []
+                resp = http_client.get(api_url, params=params)
+                return resp.json().get("results", []) if resp.status_code == 200 else []
+            except (requests.RequestException, ValueError) as e:
+                print(f"[WARN] DockerHubProvider query error: {e}")
+                return []
+
+        results = _tags({"page_size": 50, "name": flavor} if flavor else {"page_size": 50})
+        if not results and flavor:
+            results = _tags({"page_size": 100})
 
         if not results:
             return None
@@ -1062,7 +700,7 @@ class DockerHubProvider:
             return None
 
         # 1. Try LLM extraction if LLM client available
-        if self.llm_client and GENAI_AVAILABLE:
+        if self.llm:
             cand = self._extract_with_llm(package_id, repo_str, current_version, candidate_tags)
             if cand:
                 return cand
@@ -1104,48 +742,17 @@ class DockerHubProvider:
 class SourceQualificationAgent:
     """Coordinates upstream query, LLM GA stability check, upfront rules, and candidate creation."""
 
-    def __init__(self, store: Optional[DataStore] = None, model: Optional[str] = None, location: str = "global", use_llm: bool = True):
-        cfg = get_config()
+    def __init__(self, store: Optional[DataStore] = None, model: Optional[str] = None, use_llm: bool = True):
         self.store = store or get_datastore()
-        self.model = model or cfg.llm.model
-        self.location = os.environ.get("GOOGLE_CLOUD_REGION", location)
-        self.use_llm = use_llm and GENAI_AVAILABLE
+        self.model = model or CONFIG.llm.model
+        self.llm: Optional[LLMClient] = get_llm_client(self.model) if use_llm else None
         self.rule_checker = UpfrontRuleChecker(self.store)
-        self.archive_provider = ArchiveScraperProvider(model=self.model)
-        self.github_provider = GitHubReleaseProvider(model=self.model)
-        self.manifest_provider = ManifestRegexProvider(model=self.model)
-        self.image_provider = ComputeImageProvider(model=self.model)
-        self.apt_provider = AptRepoProvider(model=self.model)
-        self.mft_provider = MftProvider(model=self.model)
-        self.docker_provider = DockerHubProvider(model=self.model)
-
-        self.client = None
-        if self.use_llm:
-            try:
-                api_key = os.environ.get("GEMINI_API_KEY")
-                if api_key:
-                    self.client = genai.Client(api_key=api_key)
-                else:
-                    project = os.environ.get("GOOGLE_CLOUD_PROJECT", "hpc-toolkit-dev")
-                    self.client = genai.Client(vertexai=True, project=project, location=self.location)
-                self.archive_provider.llm_client = self.client
-                self.archive_provider.model = self.model
-                self.github_provider.llm_client = self.client
-                self.github_provider.model = self.model
-                self.manifest_provider.llm_client = self.client
-                self.manifest_provider.model = self.model
-                self.apt_provider.llm_client = self.client
-                self.apt_provider.model = self.model
-                self.image_provider.llm_client = self.client
-                self.image_provider.model = self.model
-                self.mft_provider.llm_client = self.client
-                self.mft_provider.model = self.model
-                self.docker_provider.llm_client = self.client
-                self.docker_provider.model = self.model
-            except Exception as ex:
-                print(f"[WARN] Failed to initialize Gemini LLM Client: {ex}.")
-                self.client = None
-                self.use_llm = False
+        self.archive_provider = ArchiveScraperProvider(self.llm)
+        self.github_provider = GitHubReleaseProvider(self.llm)
+        self.manifest_provider = ManifestRegexProvider(self.llm)
+        self.apt_provider = AptRepoProvider(self.llm)
+        self.mft_provider = MftProvider(self.llm)
+        self.docker_provider = DockerHubProvider(self.llm)
 
     def _update_package_db(self, package_id: str, upstream_version: str, summary: str, policy_status: Optional[str] = None):
         """Persists package state in the state store without overwriting policy status."""
@@ -1157,10 +764,6 @@ class SourceQualificationAgent:
             updates["status"] = policy_status
         self.store.update_package(package_id, updates)
 
-    def check_http_liveness(self, url: str) -> bool:
-        """Confirms artifact URL returns HTTP 200 via canonical helper."""
-        return check_http_liveness(url)
-
     def summarize_release_notes(self, package_id: str, version: str, release_notes: str) -> str:
         """Uses Gemini LLM to summarize upstream release notes into 1-2 concise sentences."""
         if not release_notes or not str(release_notes).strip():
@@ -1171,7 +774,7 @@ class SourceQualificationAgent:
         if len(clean_notes) < 40:
             return clean_notes
 
-        if not self.use_llm or not self.client:
+        if not self.llm:
             return clean_notes[:200]
 
         try:
@@ -1180,17 +783,8 @@ class SourceQualificationAgent:
                 version=version,
                 release_notes=clean_notes[:4000]
             )
-            resp = generate_content_with_retry(
-                client=self.client,
-                model=self.model,
-                contents=prompt,
-                config=types.GenerateContentConfig(
-                    temperature=0.2,
-                    max_output_tokens=1000
-                )
-            )
-            text = resp.text.strip().replace("\n", " ")
-            return text if text else f"Qualified upstream GA release {version}."
+            text = self.llm.generate_text(prompt).replace("\n", " ")
+            return text or f"Qualified upstream GA release {version}."
         except Exception as ex:
             print(f"[WARN] Failed to summarize release notes for {package_id}: {clean_error_message(ex)}")
             return clean_notes[:200]
@@ -1198,39 +792,24 @@ class SourceQualificationAgent:
     def qualify_package(self, package_id: str) -> Dict[str, Any]:
         pkg = self.store.get_package(package_id)
         if not pkg:
-            return {"status": "ERROR", "message": f"Package {package_id} not found in database"}
+            return {"status": PackageStatus.ERROR, "message": f"Package {package_id} not found in database"}
 
         pkg_name = pkg.get("name", "")
         current_ver = pkg.get("current_version", "")
         source_url = pkg.get("source_url", "")
         upstream_type = pkg.get("upstream_type", "generic")
-        current_policy_status = pkg.get("status", "REGISTERED")
-        snooze_until = pkg.get("snooze_until")
-
-        # Automatic snooze wake-up check (Doc Section 3.1)
-        if current_policy_status == "SNOOZED" and snooze_until:
-            try:
-                now_str = datetime.datetime.now(datetime.timezone.utc).isoformat()
-                if str(snooze_until) <= now_str:
-                    self.store.update_package(package_id, {
-                        "status": "REGISTERED",
-                        "snooze_until": None,
-                        "snoozed_version": None,
-                        "qualification_summary": "Snooze expired. Resumed monitoring."
-                    })
-                    current_policy_status = "REGISTERED"
-            except Exception:
-                pass
+        pkg = policy.release_expired_snooze(self.store, pkg)  # Automatic snooze wake-up (Doc Section 3.1)
+        current_policy_status = pkg.get("status", PackageStatus.REGISTERED)
 
         # If package is explicitly OBSOLETE, respect long-term deprecation policy
-        if current_policy_status == "OBSOLETE":
+        if current_policy_status == PackageStatus.OBSOLETE:
             summary = "Package is currently marked OBSOLETE."
             return {
                 "package_id": package_id,
                 "name": pkg_name,
                 "current_version": current_ver,
                 "upstream_version": "-",
-                "status": "OBSOLETE",
+                "status": PackageStatus.OBSOLETE,
                 "summary": summary
             }
 
@@ -1254,26 +833,6 @@ class SourceQualificationAgent:
                     source_url=source_url,
                     current_version=current_ver
                 )
-            elif upstream_type == "gcp_compute_image":
-                candidate = self.image_provider.get_candidate(
-                    package_id=package_id,
-                    current_version=current_ver,
-                    source_url=source_url
-                )
-                if candidate:
-                    img_name = candidate.get("image_name", current_ver)
-                    build_date = candidate.get("build_date", "active")
-                    summary = f"Active GCP compute image family '{current_ver}' (latest build: {img_name}, Status: READY, Build Date: {build_date})."
-                    self._update_package_db(package_id, img_name, summary, policy_status="UP_TO_DATE")
-                    return {
-                        "package_id": package_id,
-                        "name": pkg_name,
-                        "current_version": current_ver,
-                        "upstream_version": img_name,
-                        "candidate_version": None,
-                        "status": "UP_TO_DATE",
-                        "summary": summary
-                    }
             elif upstream_type == "apt_repository":
                 candidate = self.apt_provider.get_latest_candidate(
                     package_id=package_id,
@@ -1285,18 +844,12 @@ class SourceQualificationAgent:
                     source_url=source_url,
                     current_version=current_ver
                 )
-            elif upstream_type in ("mft_api", "archive_scraper") or package_id == "mft":
-                if package_id == "mft" or upstream_type == "mft_api":
-                    candidate = self.mft_provider.get_latest_candidate(package_id, source_url=source_url)
-                else:
-                    candidate = self.archive_provider.get_latest_candidate(
-                        package_id=package_id,
-                        source_url=source_url
-                    )
+            elif upstream_type == "mft_api":
+                candidate = self.mft_provider.get_latest_candidate(package_id, source_url=source_url)
 
             if not candidate:
                 summary = f"Upstream source has no newer release than currently deployed version ({current_ver})."
-                status_to_report = current_policy_status if current_policy_status in ("SNOOZED", "BLOCKED") else "UP_TO_DATE"
+                status_to_report = current_policy_status if current_policy_status in POLICY_STATUSES else PackageStatus.UP_TO_DATE
                 self._update_package_db(package_id, "-", summary, policy_status=status_to_report)
                 return {
                     "package_id": package_id,
@@ -1326,7 +879,7 @@ class SourceQualificationAgent:
                         summary = f"Upstream version ({upstream_version}) is older than deployed blueprint ({current_ver})."
                     else:
                         summary = f"Deployed blueprint matches latest upstream release ({upstream_version})."
-                    status_to_report = current_policy_status if current_policy_status in ("SNOOZED", "BLOCKED") else "UP_TO_DATE"
+                    status_to_report = current_policy_status if current_policy_status in POLICY_STATUSES else PackageStatus.UP_TO_DATE
                     self._update_package_db(package_id, upstream_version, summary, policy_status=status_to_report)
                     return {
                         "package_id": package_id,
@@ -1339,7 +892,7 @@ class SourceQualificationAgent:
                     }
             elif upstream_version == current_ver:
                 summary = f"Already at latest upstream version ({current_ver})."
-                status_to_report = current_policy_status if current_policy_status in ("SNOOZED", "BLOCKED") else "UP_TO_DATE"
+                status_to_report = current_policy_status if current_policy_status in POLICY_STATUSES else PackageStatus.UP_TO_DATE
                 self._update_package_db(package_id, upstream_version, summary, policy_status=status_to_report)
                 return {
                     "package_id": package_id,
@@ -1354,96 +907,78 @@ class SourceQualificationAgent:
             # 2. GA Stability Gate (Evaluated directly by upstream provider's LLM extraction)
             if candidate.get("prerelease") or candidate.get("channel") not in ("production-stable", "ga"):
                 summary = f"Upstream release {upstream_version} discarded as non-GA: {candidate.get('release_notes', '')}"
-                self._update_package_db(package_id, upstream_version, summary, policy_status="UP_TO_DATE")
+                self._update_package_db(package_id, upstream_version, summary, policy_status=PackageStatus.UP_TO_DATE)
                 return {
                     "package_id": package_id,
                     "name": pkg_name,
                     "current_version": current_ver,
                     "upstream_version": upstream_version,
                     "candidate_version": None,
-                    "status": "UP_TO_DATE",
+                    "status": PackageStatus.UP_TO_DATE,
                     "summary": summary
                 }
 
-            # 3. Version-Aware Snooze & Block Policy Gates
-            now_str = datetime.datetime.now(datetime.timezone.utc).isoformat()
-            snoozed_ver = pkg.get("snoozed_version")
-            if snoozed_ver or current_policy_status == "SNOOZED":
-                # Check if snooze expired
-                if snooze_until and str(snooze_until) <= now_str:
-                    self.store.update_package(package_id, {
-                        "status": "REGISTERED",
-                        "snooze_until": None,
-                        "snoozed_version": None,
-                        "qualification_summary": "Snooze period expired. Monitoring resumed."
-                    })
-                    current_policy_status = "REGISTERED"
-                    snoozed_ver = None
-                elif snoozed_ver and is_version_greater(upstream_version, snoozed_ver):
-                    # Newer version released than the snoozed version!
-                    # The snoozed version remains as it is, and a new row/candidate will be created for upstream_version.
-                    pass
-                else:
-                    snooze_date_str = str(snooze_until)[:10] if snooze_until else "active period"
-                    summary = f"Package is SNOOZED for version {snoozed_ver or upstream_version} until {snooze_date_str}."
-                    self._update_package_db(package_id, upstream_version, summary, policy_status="SNOOZED")
-                    return {
-                        "package_id": package_id,
-                        "name": pkg_name,
-                        "current_version": current_ver,
-                        "upstream_version": upstream_version,
-                        "candidate_version": None,
-                        "status": "SNOOZED",
-                        "summary": summary
-                    }
-
-            blocked_ver = pkg.get("blocked_version")
-            if blocked_ver or current_policy_status == "BLOCKED":
-                if blocked_ver and is_version_greater(upstream_version, blocked_ver):
-                    # Newer version released than the blocked version!
-                    # The blocked version remains as it is, and a new row/candidate will be created for upstream_version.
-                    pass
-                else:
-                    summary = f"Package is BLOCKED for version {blocked_ver or upstream_version} (manual unblock required from dashboard)."
-                    self._update_package_db(package_id, upstream_version, summary, policy_status="BLOCKED")
-                    return {
-                        "package_id": package_id,
-                        "name": pkg_name,
-                        "current_version": current_ver,
-                        "upstream_version": upstream_version,
-                        "candidate_version": None,
-                        "status": "BLOCKED",
-                        "summary": summary
-                    }
+            # 3. Version-aware snooze & block policy gates (a strictly newer version is not held)
+            hold = policy.policy_hold(pkg, upstream_version)
+            if hold:
+                hold_status, summary = hold
+                self._update_package_db(package_id, upstream_version, summary, policy_status=hold_status)
+                return {
+                    "package_id": package_id,
+                    "name": pkg_name,
+                    "current_version": current_ver,
+                    "upstream_version": upstream_version,
+                    "candidate_version": None,
+                    "status": hold_status,
+                    "summary": summary
+                }
 
             # 4. Upfront Learned Rule Check (Section 4.2 & Case 3)
             is_blocked, rule = self.rule_checker.check_version(package_id, upstream_version)
             if is_blocked:
                 summary = f"Version {upstream_version} blocked by rule '{rule['rule_id']}': {rule['reason']}"
-                self._update_package_db(package_id, upstream_version, summary, policy_status="BLOCKED")
+                # Record the blocked version so a newer upstream release is evaluated again.
+                self.store.update_package(package_id, {"blocked_version": upstream_version})
+                self._update_package_db(package_id, upstream_version, summary, policy_status=PackageStatus.BLOCKED)
                 return {
                     "package_id": package_id,
                     "name": pkg_name,
                     "current_version": current_ver,
                     "upstream_version": upstream_version,
                     "candidate_version": None,
-                    "status": "BLOCKED",
+                    "status": PackageStatus.BLOCKED,
                     "rule_id": rule["rule_id"],
                     "reason": rule["reason"],
                     "summary": summary
                 }
 
+            # An open PR already tracks this version: keep it (and its test state) instead of re-creating it.
+            tracked = next((c for c in self.store.list_candidates(package_id=package_id)
+                            if c.get("status") in PR_TRACKED_CANDIDATE_STATUSES and c.get("version") == upstream_version), None)
+            if tracked:
+                self.store.update_package(package_id, {"upstream_version": upstream_version})
+                return {
+                    "candidate_id": tracked["candidate_id"],
+                    "package_id": package_id,
+                    "name": pkg_name,
+                    "current_version": current_ver,
+                    "upstream_version": upstream_version,
+                    "candidate_version": upstream_version,
+                    "status": tracked["status"],
+                    "summary": f"Update {upstream_version} already has an open PR ({tracked.get('pr_url')})."
+                }
+
             # 4. Artifact Liveness Verification (Fast deterministic gate before LLM triage)
-            if not self.check_http_liveness(download_url):
+            if not http_client.is_url_live(download_url):
                 summary = f"Release {upstream_version} download URL unreachable."
-                self._update_package_db(package_id, upstream_version, summary, policy_status="UNREACHABLE")
+                self._update_package_db(package_id, upstream_version, summary, policy_status=PackageStatus.UNREACHABLE)
                 return {
                     "package_id": package_id,
                     "name": pkg_name,
                     "current_version": current_ver,
                     "upstream_version": upstream_version,
                     "candidate_version": None,
-                    "status": "UNREACHABLE",
+                    "status": PackageStatus.UNREACHABLE,
                     "summary": summary
                 }
 
@@ -1451,7 +986,9 @@ class SourceQualificationAgent:
             candidate_id = f"cand-{str(uuid.uuid4())[:8]}"
             rel_notes = candidate.get("release_notes") or candidate.get("reasoning") or ""
             cand_summary = self.summarize_release_notes(package_id, upstream_version, rel_notes)
-            self.store.delete_candidates(package_id, exclude_status=("MERGED", "SNOOZED", "BLOCKED"))
+            # Replace stale UPDATE_FOUND candidates; never drop merged, held, or PR-tracked ones.
+            self.store.delete_candidates(package_id, exclude_status=(
+                CandidateStatus.MERGED, *POLICY_STATUSES, *PR_TRACKED_CANDIDATE_STATUSES))
             self.store.save_candidate({
                 "candidate_id": candidate_id,
                 "package_id": package_id,
@@ -1461,13 +998,13 @@ class SourceQualificationAgent:
                 "checksum": candidate.get("checksum_sha256") or candidate.get("checksum"),
                 "pr_url": None,
                 "build_url": None,
-                "status": "UPDATE_FOUND",
+                "status": CandidateStatus.UPDATE_FOUND,
                 "summary": cand_summary,
                 "created_at": datetime.datetime.now(datetime.timezone.utc).isoformat()
             })
 
             summary = f"Update found ({upstream_version}): {cand_summary}"
-            self._update_package_db(package_id, upstream_version, summary, policy_status="UPDATE_FOUND")
+            self._update_package_db(package_id, upstream_version, summary, policy_status=PackageStatus.UPDATE_FOUND)
 
             return {
                 "candidate_id": candidate_id,
@@ -1478,21 +1015,21 @@ class SourceQualificationAgent:
                 "candidate_version": upstream_version,
                 "download_url": download_url,
                 "filename": candidate.get("filename", ""),
-                "status": "UPDATE_FOUND",
+                "status": PackageStatus.UPDATE_FOUND,
                 "summary": summary,
                 "release_channel": candidate.get("channel", "production-stable")
             }
         except Exception as ex:
             clean_err = clean_error_message(ex)
             summary = f"Qualification error: {clean_err}"
-            self._update_package_db(package_id, "-", summary, policy_status="ERROR")
+            self._update_package_db(package_id, "-", summary, policy_status=PackageStatus.ERROR)
             return {
                 "package_id": package_id,
                 "name": pkg_name,
                 "current_version": current_ver,
                 "upstream_version": "-",
                 "candidate_version": None,
-                "status": "ERROR",
+                "status": PackageStatus.ERROR,
                 "summary": summary,
                 "error": clean_err
             }
@@ -1515,13 +1052,12 @@ class SourceQualificationAgent:
 
 if __name__ == "__main__":
     agent = SourceQualificationAgent()
-    print(f"[RUNNING] Running Source Qualification Agent...")
+    print("[RUNNING] Running Source Qualification Agent...")
     all_res = agent.qualify_all()
     for r in all_res:
         wf = r.get("workflow_status") or r.get("status")
-        if wf == "UPDATE_FOUND":
+        if wf == PackageStatus.UPDATE_FOUND:
             print(f"[UPDATE_FOUND] {r['package_id']} -> {r['candidate_version']}")
-            print(f"  - LLM Verdict: {r['llm_verdict']}")
-            print(f"  - Summary: {r['llm_summary']}")
+            print(f"  - Summary: {r.get('summary')}")
         else:
             print(f"[{wf}] {r['package_id']}: {r.get('summary')}")

@@ -16,21 +16,26 @@
 Test Manager for Cluster Toolkit Automated Infrastructure Updater.
 
 Maps modified blueprints to corresponding Cloud Build integration test triggers,
-approves/triggers tests on pull request creation, waits for execution to complete,
-and records test results (SUCCESS / FAILURE) into DataStore for dashboard telemetry.
+approves (or re-runs) the PR's builds, and records test results (SUCCESS / FAILURE)
+into the DataStore. Long-running monitoring is done by polling (`refresh_tests`), either
+in a blocking loop from the CLI or by the dashboard server's background poller.
 """
 
+import datetime
 import glob
-import json
 import os
-import re
-import subprocess
-import threading
 import time
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 import yaml
 
 from config import get_config, BASE_DIR
+from statuses import TEST_FAILED_STATUSES, TEST_TERMINAL_STATUSES, CandidateStatus, TestStatus
+
+CLOUD_BUILD_API = "https://cloudbuild.googleapis.com/v1"
+
+# Cloud Build API build states (external vocabulary, mapped onto TestStatus).
+BUILD_SUCCESS = ("SUCCESS",)
+BUILD_FAILED = ("FAILURE", "INTERNAL_ERROR", "TIMEOUT", "CANCELLED", "EXPIRED")
 
 # Known special case mappings for blueprints to test names
 SPECIAL_BLUEPRINT_TESTS = {
@@ -63,6 +68,14 @@ SPECIAL_BLUEPRINT_TESTS = {
 }
 
 
+def _now_iso() -> str:
+    return datetime.datetime.now(datetime.timezone.utc).isoformat()
+
+
+def _clean_bp_path(path: str) -> str:
+    return path.replace("{{ workspace }}/", "").removeprefix("./")
+
+
 def compute_tests_summary(tests: List[Dict[str, Any]]) -> Tuple[str, Optional[str], str]:
     """
     Computes human-readable summary, overall test status, and overall candidate workflow status.
@@ -72,122 +85,132 @@ def compute_tests_summary(tests: List[Dict[str, Any]]) -> Tuple[str, Optional[st
          ("2/6 passed (4 running)", "RUNNING", "TESTING")
     """
     if not tests:
-        return ("No tests mapped", None, "READY_FOR_REVIEW")
+        return ("No tests mapped", None, CandidateStatus.READY_FOR_REVIEW)
 
     total = len(tests)
-    passed = sum(1 for t in tests if t.get("status") == "SUCCESS")
-    failed = sum(1 for t in tests if t.get("status") in ("FAILURE", "ERROR", "TIMEOUT"))
-    running = sum(1 for t in tests if t.get("status") in ("RUNNING", "TRIGGERED", "PENDING", "QUEUED"))
+    passed = sum(1 for t in tests if t.get("status") == TestStatus.SUCCESS)
+    failed = sum(1 for t in tests if t.get("status") in TEST_FAILED_STATUSES)
+    running = total - passed - failed
 
-    if total == 1:
-        if passed == 1:
-            return ("1/1 passed", "SUCCESS", "READY_FOR_REVIEW")
-        elif failed == 1:
-            return ("0/1 passed (1 failed)", "FAILURE", "TEST_FAILED")
-        elif running == 1:
-            return ("1 running", "RUNNING", "TESTING")
-        else:
-            status = tests[0].get("status", "PENDING")
-            return (f"1 test ({status})", "RUNNING", "TESTING")
-
-    # Multiple tests
     if passed == total:
-        return (f"{passed}/{total} tests passed", "SUCCESS", "READY_FOR_REVIEW")
-    elif running > 0:
-        if failed > 0:
+        return (f"{passed}/{total} passed" if total == 1 else f"{passed}/{total} tests passed",
+                TestStatus.SUCCESS, CandidateStatus.READY_FOR_REVIEW)
+    if running > 0:
+        if total == 1:
+            summary = "1 running"
+        elif failed:
             summary = f"{passed}/{total} passed ({failed} failed, {running} running)"
+        elif passed:
+            summary = f"{passed}/{total} passed ({running} running)"
         else:
-            summary = f"{passed}/{total} passed ({running} running)" if passed > 0 else f"{running}/{total} running"
-        return (summary, "RUNNING", "TESTING")
-    elif failed > 0:
-        return (f"{passed}/{total} passed ({failed} failed)", "FAILURE", "TEST_FAILED")
+            summary = f"{running}/{total} running"
+        return (summary, TestStatus.RUNNING, CandidateStatus.TESTING)
+    return (f"{passed}/{total} passed ({failed} failed)", TestStatus.FAILURE, CandidateStatus.TEST_FAILED)
+
+
+def record_test_results(store, candidate_id: str, package_id: str, tests: List[Dict[str, Any]],
+                        pr_number: Optional[int] = None) -> Tuple[str, Optional[str], str]:
+    """Persists test progress / final results onto the candidate and its package."""
+    summary_text, overall_test, overall_workflow = compute_tests_summary(tests)
+    total = len(tests)
+    pr_ref = f"PR #{pr_number}" if pr_number else "the PR"
+    if overall_test == TestStatus.SUCCESS:
+        qual_summary = f"All {total} integration test(s) PASSED on {pr_ref}. Ready for review."
+    elif overall_test == TestStatus.FAILURE:
+        failed = sum(1 for t in tests if t.get("status") in TEST_FAILED_STATUSES)
+        qual_summary = f"{failed}/{total} integration test(s) FAILED on {pr_ref}. See Cloud Build logs."
     else:
-        return (f"{passed}/{total} passed", "SUCCESS" if passed == total else "RUNNING", "READY_FOR_REVIEW" if passed == total else "TESTING")
+        qual_summary = f"Tests in progress on {pr_ref}: {summary_text}"
+
+    primary = next((t for t in tests if t.get("build_url")), tests[0] if tests else {})
+    store.update_candidate(candidate_id, {
+        "status": overall_workflow,
+        "test_status": overall_test,
+        "tests": tests,
+        "tests_summary": summary_text,
+        "test_name": primary.get("test_name"),
+        "build_id": primary.get("build_id"),
+        "build_url": primary.get("build_url"),
+    })
+    store.update_package(package_id, {
+        "status": overall_workflow,
+        "test_status": overall_test,
+        "tests_summary": summary_text,
+        "qualification_summary": qual_summary,
+    })
+    return summary_text, overall_test, overall_workflow
 
 
 class TestManager:
-    """Manages integration test discovery, Cloud Build approval/triggering, and lifecycle monitoring."""
+    """Manages integration test discovery, Cloud Build approval/triggering, and status polling."""
 
     def __init__(self, config=None, project_id: Optional[str] = None):
         self.config = config or get_config()
-        self.project_id = project_id or self.config.database.project_id or "hpc-toolkit-dev"
+        self.cb = self.config.cloud_build
+        self.project_id = project_id or self.cb.project_id
         self._session = None
         self._test_mapping_cache: Optional[Dict[str, Dict[str, Any]]] = None
         self.repo_root = os.path.abspath(os.path.join(BASE_DIR, "..", ".."))
+        self.repo_full_name = f"{self.config.repository.owner}/{self.config.repository.name}".lower()
 
     def _get_session(self):
-        """Returns an authenticated HTTP session for Cloud Build API."""
+        """Returns an authenticated HTTP session for the Cloud Build API."""
         if self._session is None:
-            try:
-                import google.auth
-                from google.auth.transport.requests import AuthorizedSession
-                credentials, _ = google.auth.default(
-                    scopes=["https://www.googleapis.com/auth/cloud-platform"]
-                )
-                self._session = AuthorizedSession(credentials)
-            except Exception as e:
-                print(f"[TestManager] [WARN] Could not initialize google.auth session: {e}", flush=True)
-                self._session = None
+            import google.auth
+            from google.auth.transport.requests import AuthorizedSession
+            credentials, _ = google.auth.default(scopes=["https://www.googleapis.com/auth/cloud-platform"])
+            self._session = AuthorizedSession(credentials)
         return self._session
+
+    def _builds_url(self, suffix: str = "") -> str:
+        return f"{CLOUD_BUILD_API}/projects/{self.project_id}/builds{suffix}"
+
+    def _console_url(self, build_id: str) -> str:
+        return self.cb.console_url.format(build_id=build_id, project_id=self.project_id)
+
+    def _trigger_name(self, test_info: Dict[str, Any]) -> str:
+        return test_info.get("trigger_name") or f"{self.cb.trigger_prefix}{test_info['test_name']}"
+
+    # ------------------------------------------------------------ discovery
 
     def get_blueprint_mapping(self) -> Dict[str, Dict[str, Any]]:
         """
-        Scans tools/cloud-build/daily-tests/tests/*.yml across repository root and target workspace
+        Scans <cloud_build.tests_dir>/*.yml across repository root and target workspace
         to build a map of blueprint path -> test metadata.
         """
         if self._test_mapping_cache is not None:
             return self._test_mapping_cache
 
-        mapping: Dict[str, Dict[str, Any]] = {}
-
-        # Search candidates in repo_root and target workspace
-        search_dirs = [
-            os.path.join(self.repo_root, "tools", "cloud-build", "daily-tests"),
-            os.path.join(self.config.get_workspace_path(), "tools", "cloud-build", "daily-tests")
-        ]
-
-        test_files = []
-        for sdir in search_dirs:
-            pattern = os.path.join(sdir, "tests", "*.yml")
-            found = glob.glob(pattern)
-            if found:
-                test_files.extend(found)
-
-        for tf in test_files:
-            test_name = os.path.basename(tf)[:-4]  # strip .yml
-            trigger_name = f"PR-test-{test_name}"
-            build_file = os.path.join("tools", "cloud-build", "daily-tests", "builds", f"{test_name}.yaml")
-            try:
-                with open(tf, "r", encoding="utf-8") as f:
-                    y = yaml.safe_load(f)
-                    if isinstance(y, dict):
-                        bp = y.get("blueprint_yaml")
-                        if bp:
-                            cleaned = bp.replace("{{ workspace }}/", "").lstrip("./")
-                            meta = {
-                                "test_name": test_name,
-                                "trigger_name": trigger_name,
-                                "test_file": tf,
-                                "build_file": build_file,
-                                "blueprint_yaml": cleaned
-                            }
-                            mapping[cleaned] = meta
-                            mapping[os.path.basename(cleaned)] = meta
-            except Exception:
-                pass
-
-        # Apply special case overrides / supplements
-        for bp_path, test_name in SPECIAL_BLUEPRINT_TESTS.items():
-            meta = {
+        def _meta(test_name: str, bp: str, test_file: Optional[str] = None) -> Dict[str, Any]:
+            return {
                 "test_name": test_name,
-                "trigger_name": f"PR-test-{test_name}",
-                "build_file": os.path.join("tools", "cloud-build", "daily-tests", "builds", f"{test_name}.yaml"),
-                "blueprint_yaml": bp_path
+                "trigger_name": f"{self.cb.trigger_prefix}{test_name}",
+                "test_file": test_file,
+                "build_file": os.path.join(self.cb.builds_dir, f"{test_name}.yaml"),
+                "blueprint_yaml": bp,
             }
-            if bp_path not in mapping:
-                mapping[bp_path] = meta
-            if os.path.basename(bp_path) not in mapping:
-                mapping[os.path.basename(bp_path)] = meta
+
+        mapping: Dict[str, Dict[str, Any]] = {}
+        for root in (self.repo_root, self.config.get_workspace_path()):
+            for tf in glob.glob(os.path.join(root, self.cb.tests_dir, "*.yml")):
+                try:
+                    with open(tf, "r", encoding="utf-8") as f:
+                        y = yaml.safe_load(f)
+                except (OSError, yaml.YAMLError) as e:
+                    print(f"[TestManager] [WARN] Skipping unreadable test file {tf}: {e}", flush=True)
+                    continue
+                bp = y.get("blueprint_yaml") if isinstance(y, dict) else None
+                if bp:
+                    cleaned = _clean_bp_path(bp)
+                    meta = _meta(os.path.basename(tf)[:-4], cleaned, tf)
+                    mapping[cleaned] = meta
+                    mapping[os.path.basename(cleaned)] = meta
+
+        # Special case supplements (do not override discovered mappings)
+        for bp_path, test_name in SPECIAL_BLUEPRINT_TESTS.items():
+            meta = _meta(test_name, bp_path)
+            mapping.setdefault(bp_path, meta)
+            mapping.setdefault(os.path.basename(bp_path), meta)
 
         self._test_mapping_cache = mapping
         return mapping
@@ -195,179 +218,121 @@ class TestManager:
     def resolve_test_for_blueprint(self, blueprint_path: str) -> Optional[Dict[str, Any]]:
         """Resolves test metadata for a given blueprint path or filename."""
         mapping = self.get_blueprint_mapping()
-        cleaned = blueprint_path.replace("{{ workspace }}/", "").lstrip("./")
+        cleaned = _clean_bp_path(blueprint_path)
         if cleaned in mapping:
             return mapping[cleaned]
         base = os.path.basename(cleaned)
         if base in mapping:
             return mapping[base]
-
-        # Fuzzy lookup: match by end of path
         for k, v in mapping.items():
             if cleaned.endswith(k) or k.endswith(cleaned):
                 return v
-
         return None
 
     def resolve_tests_for_blueprints(self, blueprint_paths: List[str]) -> List[Dict[str, Any]]:
         """Resolves a unique list of tests for multiple modified blueprints, linking each blueprint."""
-        seen_tests = set()
-        results = []
+        by_name: Dict[str, Dict[str, Any]] = {}
         for bp in blueprint_paths:
-            test_info = self.resolve_test_for_blueprint(bp)
-            if test_info:
-                t_name = test_info["test_name"]
-                if t_name not in seen_tests:
-                    seen_tests.add(t_name)
-                    t_copy = dict(test_info)
-                    t_copy["blueprint_path"] = bp
-                    t_copy["blueprint_paths"] = [bp]
-                    results.append(t_copy)
-                else:
-                    for r in results:
-                        if r["test_name"] == t_name:
-                            if bp not in r.get("blueprint_paths", []):
-                                r.setdefault("blueprint_paths", []).append(bp)
-                            break
-        return results
+            info = self.resolve_test_for_blueprint(bp)
+            if not info:
+                continue
+            rec = by_name.get(info["test_name"])
+            if rec is None:
+                rec = dict(info, blueprint_path=bp, blueprint_paths=[])
+                by_name[info["test_name"]] = rec
+            if bp not in rec["blueprint_paths"]:
+                rec["blueprint_paths"].append(bp)
+        return list(by_name.values())
+
+    # ------------------------------------------------------------- trigger
+
+    def _find_pr_build(self, pr_number: int, trigger_name: str, head_sha: Optional[str]) -> Optional[Dict[str, Any]]:
+        """Newest build for this repo's PR + trigger (+ commit SHA when known)."""
+        resp = self._get_session().get(
+            self._builds_url(),
+            params={"filter": f'substitutions._PR_NUMBER="{pr_number}"', "pageSize": "100"},
+            timeout=30,
+        )
+        resp.raise_for_status()
+        for b in resp.json().get("builds", []):  # API returns newest first
+            sub = b.get("substitutions", {})
+            if sub.get("TRIGGER_NAME") != trigger_name:
+                continue
+            if sub.get("REPO_FULL_NAME") and sub["REPO_FULL_NAME"].lower() != self.repo_full_name:
+                continue
+            if head_sha and sub.get("COMMIT_SHA") != head_sha:
+                continue
+            return b
+        return None
+
+    def _approve(self, build_id: str, test_name: str, pr_number: int) -> None:
+        payload = {"approvalResult": {"decision": "APPROVED",
+                                      "comment": f"Approved test '{test_name}' on PR #{pr_number} by Automated Infra Updater"}}
+        res = self._get_session().post(self._builds_url(f"/{build_id}:approve"), json=payload, timeout=20)
+        if res.status_code in (200, 201):
+            print(f"[TestManager] Build {build_id} APPROVED.", flush=True)
+        else:
+            print(f"[TestManager] [WARN] Approve returned HTTP {res.status_code}: {res.text}", flush=True)
+
+    def _retry(self, build_id: str) -> Optional[Dict[str, Any]]:
+        """Re-runs a finished build. Returns the new build resource."""
+        res = self._get_session().post(self._builds_url(f"/{build_id}:retry"), json={}, timeout=30)
+        if res.status_code not in (200, 201):
+            print(f"[TestManager] [WARN] Retry of build {build_id} returned HTTP {res.status_code}: {res.text}", flush=True)
+            return None
+        return res.json().get("metadata", {}).get("build")
 
     def trigger_test_for_pr(
         self,
         pr_number: int,
-        branch_name: str,
         test_info: Dict[str, Any],
-        poll_timeout_sec: int = 90,
+        head_sha: Optional[str] = None,
+        rerun_finished: bool = False,
+        poll_timeout_sec: Optional[int] = None,
         poll_interval_sec: int = 5
     ) -> Dict[str, Any]:
         """
-        Finds the pending Cloud Build for this PR number and approves it, or triggers directly.
-        Returns a dict with build_id, build_url, and trigger status.
+        Finds the Cloud Build created by the PR webhook for this trigger and approves it.
+        With rerun_finished=True, a build that already finished is re-run (used by "Run tests").
         """
         test_name = test_info["test_name"]
-        trigger_name = test_info.get("trigger_name", f"PR-test-{test_name}")
-        session = self._get_session()
-
+        trigger_name = self._trigger_name(test_info)
+        poll_timeout_sec = poll_timeout_sec or self.cb.build_lookup_timeout_seconds
         print(f"[TestManager] Locating Cloud Build for PR #{pr_number} (trigger: {trigger_name})...", flush=True)
 
-        # 1. Search for pending Cloud Build created by GitHub PR webhook
-        start_time = time.time()
-        matching_build = None
-
-        if session:
-            while time.time() - start_time < poll_timeout_sec:
-                try:
-                    # Query builds by PR number using indexed single-field filter for fast lookup (~0.5s)
-                    url = f"https://cloudbuild.googleapis.com/v1/projects/{self.project_id}/builds"
-                    params = {"filter": f'substitutions._PR_NUMBER="{pr_number}"', "pageSize": "100"}
-                    resp = session.get(url, params=params, timeout=30)
-                    if resp.status_code == 200:
-                        builds = resp.json().get("builds", [])
-                        for b in builds:
-                            b_trig = b.get("substitutions", {}).get("TRIGGER_NAME")
-                            if b_trig == trigger_name:
-                                matching_build = b
-                                break
-                        if matching_build:
-                            break
-                except Exception as e:
-                    print(f"[TestManager] [DEBUG] Build query attempt failed: {e}", flush=True)
-                time.sleep(poll_interval_sec)
-
-        # 2. If matching build found in PENDING status, approve it!
-        if matching_build:
-            build_id = matching_build["id"]
-            log_url = matching_build.get("logUrl") or f"https://console.cloud.google.com/cloud-build/builds/{build_id}?project={self.project_id}"
-            curr_status = matching_build.get("status")
-            approval = matching_build.get("approval", {})
-            approval_state = approval.get("state")
-
-            print(f"[TestManager] Found build {build_id} (Status: {curr_status}, Approval: {approval_state})", flush=True)
-
-            if approval_state == "PENDING" or curr_status == "PENDING":
-                print(f"[TestManager] Approving build {build_id} for test '{test_name}'...", flush=True)
-                approved = False
-                if session:
-                    try:
-                        approve_url = f"https://cloudbuild.googleapis.com/v1/projects/{self.project_id}/builds/{build_id}:approve"
-                        payload = {
-                            "approvalResult": {
-                                "decision": "APPROVED",
-                                "comment": f"Approved test '{test_name}' on PR #{pr_number} by Automated Infra Updater"
-                            }
-                        }
-                        res = session.post(approve_url, json=payload, timeout=20)
-                        if res.status_code in (200, 201):
-                            approved = True
-                            print(f"[TestManager] Build {build_id} APPROVED via REST API.", flush=True)
-                        else:
-                            print(f"[TestManager] [WARN] Approve REST API returned HTTP {res.status_code}: {res.text}", flush=True)
-                    except Exception as ex:
-                        print(f"[TestManager] [WARN] REST API approval call failed: {ex}", flush=True)
-
-                if not approved:
-                    # Fallback to gcloud beta builds approve
-                    try:
-                        cmd = ["gcloud", "beta", "builds", "approve", build_id, f"--project={self.project_id}"]
-                        sub_res = subprocess.run(cmd, capture_output=True, text=True, check=False)
-                        if sub_res.returncode == 0:
-                            approved = True
-                            print(f"[TestManager] Build {build_id} APPROVED via gcloud CLI.", flush=True)
-                        else:
-                            print(f"[TestManager] [WARN] gcloud approve returned {sub_res.returncode}: {sub_res.stderr.strip()}", flush=True)
-                    except Exception as gex:
-                        print(f"[TestManager] [WARN] gcloud approve execution failed: {gex}", flush=True)
-
-            return {
-                "status": "TRIGGERED",
-                "action": "APPROVED",
-                "build_id": build_id,
-                "build_url": log_url,
-                "test_name": test_name,
-                "trigger_name": trigger_name
-            }
-
-        # 3. If no pending build found after timeout, fallback to submit
-        print(f"[TestManager] No auto-pending build detected for trigger '{trigger_name}' after {poll_timeout_sec}s; attempting fallback submit...", flush=True)
-        build_file_rel = test_info.get("build_file", "")
-        build_file_abs = os.path.join(self.repo_root, build_file_rel) if build_file_rel else ""
-        if not os.path.exists(build_file_abs):
-            build_file_abs = os.path.join(self.config.get_workspace_path(), build_file_rel)
-
-        triggered_build_id = None
-        triggered_log_url = None
-
-        if os.path.exists(build_file_abs):
+        build = None
+        deadline = time.time() + poll_timeout_sec
+        while time.time() < deadline:
             try:
-                cmd = [
-                    "gcloud", "builds", "submit",
-                    f"--config={build_file_abs}",
-                    f"--substitutions=_PR_NUMBER={pr_number},BRANCH_NAME={branch_name}",
-                    f"--project={self.project_id}",
-                    "--async",
-                    "--format=json"
-                ]
-                sub_res = subprocess.run(cmd, capture_output=True, text=True, check=False)
-                if sub_res.returncode == 0:
-                    out_json = json.loads(sub_res.stdout)
-                    triggered_build_id = out_json.get("id") or out_json.get("metadata", {}).get("build", {}).get("id")
-                    triggered_log_url = out_json.get("logUrl")
-                    print(f"[TestManager] Build submitted directly via config {build_file_abs}: {triggered_build_id}", flush=True)
-            except Exception as gex:
-                print(f"[TestManager] [WARN] gcloud builds submit fallback failed: {gex}", flush=True)
+                build = self._find_pr_build(pr_number, trigger_name, head_sha)
+            except Exception as e:
+                print(f"[TestManager] [WARN] Build query failed: {e}", flush=True)
+            if build:
+                break
+            time.sleep(poll_interval_sec)
 
-        if not triggered_build_id:
-            return {
-                "status": "ERROR",
-                "message": f"Could not find or approve Cloud Build test for PR #{pr_number} (trigger '{trigger_name}') within {poll_timeout_sec}s.",
-                "test_name": test_name
-            }
+        if not build:
+            return {"status": TestStatus.ERROR, "test_name": test_name,
+                    "message": f"No Cloud Build found for PR #{pr_number} (trigger '{trigger_name}') within {poll_timeout_sec}s."}
 
-        final_log_url = triggered_log_url or f"https://console.cloud.google.com/cloud-build/builds/{triggered_build_id}?project={self.project_id}"
+        action = "FOUND"
+        if rerun_finished and build.get("status") in BUILD_SUCCESS + BUILD_FAILED:
+            print(f"[TestManager] Build {build['id']} already finished ({build.get('status')}); re-running...", flush=True)
+            build = self._retry(build["id"]) or build
+            action = "RETRIED"
+
+        build_id = build["id"]
+        approval_state = build.get("approval", {}).get("state")
+        print(f"[TestManager] Build {build_id} (Status: {build.get('status')}, Approval: {approval_state})", flush=True)
+        if approval_state == "PENDING":
+            self._approve(build_id, test_name, pr_number)
+            action = "APPROVED"
+
         return {
             "status": "TRIGGERED",
-            "action": "SUBMITTED",
-            "build_id": triggered_build_id,
-            "build_url": final_log_url,
+            "action": action,
+            "build_id": build_id,
+            "build_url": build.get("logUrl") or self._console_url(build_id),
             "test_name": test_name,
             "trigger_name": trigger_name
         }
@@ -375,296 +340,110 @@ class TestManager:
     def trigger_all_tests_for_pr(
         self,
         pr_number: int,
-        branch_name: str,
         test_infos: List[Dict[str, Any]],
-        poll_timeout_sec: int = 90,
-        poll_interval_sec: int = 5
+        head_sha: Optional[str] = None,
+        rerun_finished: bool = False,
     ) -> List[Dict[str, Any]]:
-        """
-        Triggers or approves all integration tests associated with a PR.
-        Returns a list of test status records.
-        """
+        """Approves (or re-runs) all integration tests associated with a PR. Returns test records."""
         results = []
         for t_info in test_infos:
-            t_name = t_info["test_name"]
-            print(f"[TestManager] Triggering test '{t_name}' for PR #{pr_number}...", flush=True)
-            res = self.trigger_test_for_pr(
-                pr_number=pr_number,
-                branch_name=branch_name,
-                test_info=t_info,
-                poll_timeout_sec=poll_timeout_sec,
-                poll_interval_sec=poll_interval_sec
-            )
-            rec = {
-                "test_name": t_name,
-                "trigger_name": t_info.get("trigger_name", f"PR-test-{t_name}"),
+            res = self.trigger_test_for_pr(pr_number, t_info, head_sha=head_sha, rerun_finished=rerun_finished)
+            results.append({
+                "test_name": t_info["test_name"],
+                "trigger_name": self._trigger_name(t_info),
                 "blueprint_path": t_info.get("blueprint_path"),
                 "blueprint_paths": t_info.get("blueprint_paths", []),
                 "build_id": res.get("build_id"),
                 "build_url": res.get("build_url"),
-                "status": "RUNNING" if res.get("status") == "TRIGGERED" else ("ERROR" if res.get("status") == "ERROR" else "PENDING"),
+                "status": TestStatus.RUNNING if res.get("status") == "TRIGGERED" else TestStatus.ERROR,
                 "action": res.get("action"),
-                "message": res.get("message")
-            }
-            results.append(rec)
+                "message": res.get("message"),
+                "triggered_at": _now_iso(),
+            })
         return results
 
-    def wait_for_test_completion(
-        self,
-        build_id: str,
-        poll_interval_sec: int = 60,
-        max_wait_sec: int = 86400,  # 24 hours
-        status_callback: Optional[Callable[[str, Dict[str, Any]], None]] = None
-    ) -> Dict[str, Any]:
+    # ------------------------------------------------------------- polling
+
+    def refresh_tests(self, tests: List[Dict[str, Any]], max_wait_sec: Optional[int] = None) -> bool:
         """
-        Polls Cloud Build status until terminal state (SUCCESS, FAILURE, TIMEOUT, CANCELLED).
-        Invokes status_callback('RUNNING' | 'SUCCESS' | 'FAILURE', build_data) periodically.
+        One polling pass: updates each non-terminal test from Cloud Build in place.
+        Tests running longer than max_wait_sec (default: cloud_build.max_test_duration_hours)
+        are marked TIMEOUT. Returns True if anything changed.
         """
-        session = self._get_session()
-        start_time = time.time()
-        print(f"[TestManager] Monitoring build {build_id} (timeout: {max_wait_sec}s, poll: {poll_interval_sec}s)...", flush=True)
+        max_wait_sec = max_wait_sec or self.cb.max_test_duration_seconds
+        changed = False
+        now = datetime.datetime.now(datetime.timezone.utc)
+        for t in tests:
+            if t.get("status") in TEST_TERMINAL_STATUSES:
+                continue
+            build_id = t.get("build_id")
+            if not build_id:
+                t["status"] = TestStatus.ERROR
+                changed = True
+                continue
+            try:
+                resp = self._get_session().get(self._builds_url(f"/{build_id}"), timeout=15)
+                resp.raise_for_status()
+                build = resp.json()
+            except Exception as e:
+                print(f"[TestManager] [WARN] Poll error for build {build_id}: {e}", flush=True)
+                continue
 
-        while time.time() - start_time < max_wait_sec:
-            build_data = None
-            if session:
-                try:
-                    url = f"https://cloudbuild.googleapis.com/v1/projects/{self.project_id}/builds/{build_id}"
-                    resp = session.get(url, timeout=10)
-                    if resp.status_code == 200:
-                        build_data = resp.json()
-                except Exception as e:
-                    print(f"[TestManager] [DEBUG] Poll error: {e}", flush=True)
-
-            if not build_data:
-                # Fallback to gcloud builds describe
-                try:
-                    cmd = ["gcloud", "builds", "describe", build_id, f"--project={self.project_id}", "--format=json"]
-                    sub_res = subprocess.run(cmd, capture_output=True, text=True, check=False)
-                    if sub_res.returncode == 0:
-                        build_data = json.loads(sub_res.stdout)
-                except Exception:
-                    pass
-
-            if build_data:
-                curr_status = build_data.get("status")
-                log_url = build_data.get("logUrl") or f"https://console.cloud.google.com/cloud-build/builds/{build_id}?project={self.project_id}"
-
-                if curr_status == "SUCCESS":
-                    print(f"[TestManager] Build {build_id} finished: SUCCESS! Log: {log_url}", flush=True)
-                    if status_callback:
-                        status_callback("SUCCESS", build_data)
-                    return {
-                        "status": "SUCCESS",
-                        "build_id": build_id,
-                        "build_url": log_url,
-                        "build_data": build_data
-                    }
-                elif curr_status in ("FAILURE", "INTERNAL_ERROR", "TIMEOUT", "CANCELLED", "EXPIRED"):
-                    print(f"[TestManager] Build {build_id} finished: {curr_status}. Log: {log_url}", flush=True)
-                    if status_callback:
-                        status_callback("FAILURE", build_data)
-                    return {
-                        "status": "FAILURE",
-                        "failure_reason": curr_status,
-                        "build_id": build_id,
-                        "build_url": log_url,
-                        "build_data": build_data
-                    }
+            if build.get("logUrl") and t.get("build_url") != build["logUrl"]:
+                t["build_url"] = build["logUrl"]
+                changed = True
+            status = build.get("status")
+            if status in BUILD_SUCCESS:
+                t["status"] = TestStatus.SUCCESS
+            elif status in BUILD_FAILED:
+                t["status"] = TestStatus.FAILURE
+                t["failure_reason"] = status
+            else:
+                started = t.get("triggered_at")
+                if started and (now - datetime.datetime.fromisoformat(started)).total_seconds() > max_wait_sec:
+                    t["status"] = TestStatus.TIMEOUT
+                    t["failure_reason"] = "MAX_WAIT_EXCEEDED"
                 else:
-                    # Still running (PENDING, QUEUED, WORKING)
-                    if status_callback:
-                        status_callback("RUNNING", build_data)
-
-            time.sleep(poll_interval_sec)
-
-        return {
-            "status": "TIMEOUT",
-            "failure_reason": "MAX_WAIT_EXCEEDED",
-            "build_id": build_id,
-            "build_url": f"https://console.cloud.google.com/cloud-build/builds/{build_id}?project={self.project_id}"
-        }
+                    continue
+            changed = True
+            print(f"[TestManager] Build {build_id} ({t.get('test_name')}) finished: {t['status']}. Log: {t.get('build_url')}", flush=True)
+        return changed
 
     def wait_for_all_tests_completion(
         self,
         tests: List[Dict[str, Any]],
-        poll_interval_sec: int = 60,
-        max_wait_sec: int = 86400,  # 24 hours
-        status_callback: Optional[Callable[[List[Dict[str, Any]]], None]] = None
+        poll_interval_sec: Optional[int] = None,
+        max_wait_sec: Optional[int] = None,
     ) -> List[Dict[str, Any]]:
-        """
-        Monitors all running tests until each reaches a terminal state (SUCCESS, FAILURE, ERROR, TIMEOUT).
-        Invokes status_callback(tests) periodically upon state transitions.
-        """
-        session = self._get_session()
-        start_time = time.time()
+        """Blocking CLI helper: polls until every test reaches a terminal state (or times out)."""
+        poll_interval_sec = poll_interval_sec or self.config.server.test_poll_interval_seconds
+        max_wait_sec = max_wait_sec or self.cb.max_test_duration_seconds
         print(f"[TestManager] Monitoring {len(tests)} test(s) (timeout: {max_wait_sec}s, poll: {poll_interval_sec}s)...", flush=True)
-
-        while time.time() - start_time < max_wait_sec:
-            all_done = True
-            changed = False
-
-            for t in tests:
-                if t.get("status") in ("SUCCESS", "FAILURE", "ERROR", "TIMEOUT"):
-                    continue
-
-                build_id = t.get("build_id")
-                if not build_id:
-                    t["status"] = "ERROR"
-                    changed = True
-                    continue
-
-                all_done = False
-                build_data = None
-                if session:
-                    try:
-                        url = f"https://cloudbuild.googleapis.com/v1/projects/{self.project_id}/builds/{build_id}"
-                        resp = session.get(url, timeout=10)
-                        if resp.status_code == 200:
-                            build_data = resp.json()
-                    except Exception as e:
-                        print(f"[TestManager] [DEBUG] Poll error for build {build_id}: {e}", flush=True)
-
-                if not build_data:
-                    try:
-                        cmd = ["gcloud", "builds", "describe", build_id, f"--project={self.project_id}", "--format=json"]
-                        sub_res = subprocess.run(cmd, capture_output=True, text=True, check=False)
-                        if sub_res.returncode == 0:
-                            build_data = json.loads(sub_res.stdout)
-                    except Exception:
-                        pass
-
-                if build_data:
-                    curr_status = build_data.get("status")
-                    if build_data.get("logUrl"):
-                        t["build_url"] = build_data.get("logUrl")
-
-                    if curr_status == "SUCCESS":
-                        print(f"[TestManager] Build {build_id} ({t.get('test_name')}) finished: SUCCESS! Log: {t.get('build_url')}", flush=True)
-                        t["status"] = "SUCCESS"
-                        changed = True
-                    elif curr_status in ("FAILURE", "INTERNAL_ERROR", "TIMEOUT", "CANCELLED", "EXPIRED"):
-                        print(f"[TestManager] Build {build_id} ({t.get('test_name')}) finished: {curr_status}. Log: {t.get('build_url')}", flush=True)
-                        t["status"] = "FAILURE"
-                        t["failure_reason"] = curr_status
-                        changed = True
-
-            if changed and status_callback:
-                status_callback(tests)
-
-            if all_done:
-                break
-
+        while True:
+            self.refresh_tests(tests, max_wait_sec=max_wait_sec)
+            if all(t.get("status") in TEST_TERMINAL_STATUSES for t in tests):
+                return tests
             time.sleep(poll_interval_sec)
 
-        # Mark any remaining running tests as TIMEOUT if max_wait_sec exceeded
-        for t in tests:
-            if t.get("status") in ("RUNNING", "TRIGGERED", "PENDING", "QUEUED"):
-                t["status"] = "TIMEOUT"
-                t["failure_reason"] = "MAX_WAIT_EXCEEDED"
-
-        return tests
-
-    def start_async_tests_monitor(
-        self,
-        candidate_id: str,
-        package_id: str,
-        tests: List[Dict[str, Any]],
-        pr_number: Optional[int] = None
-    ) -> threading.Thread:
+    def poll_testing_candidates(self, store) -> int:
         """
-        Spawns a daemon thread to monitor all tests in the background and update DataStore.
+        One background pass over every TESTING candidate: refreshes its tests and persists
+        any change. Returns the number of candidates updated. State lives in the DataStore,
+        so polling naturally resumes after a server restart.
         """
-        def _monitor():
-            try:
-                from datastore import get_datastore
-                store = get_datastore()
-
-                def _progress_cb(live_tests: List[Dict[str, Any]]):
-                    summary_text, overall_test, overall_workflow = compute_tests_summary(live_tests)
-                    updates = {
-                        "tests": live_tests,
-                        "tests_summary": summary_text,
-                        "test_status": overall_test,
-                        "status": overall_workflow
-                    }
-                    store.update_candidate(candidate_id, updates)
-                    store.update_package(package_id, {
-                        "status": overall_workflow,
-                        "test_status": overall_test,
-                        "tests_summary": summary_text,
-                        "qualification_summary": f"Tests progress for PR #{pr_number or '-'}: {summary_text}"
-                    })
-
-                self.wait_for_all_tests_completion(
-                    tests=tests,
-                    poll_interval_sec=60,
-                    max_wait_sec=86400,
-                    status_callback=_progress_cb
-                )
-
-                summary_text, overall_test, overall_workflow = compute_tests_summary(tests)
-                total = len(tests)
-
-                if overall_test == "SUCCESS":
-                    qual_summary = f"All {total} integration test(s) PASSED on PR #{pr_number or '-'}. Ready for human review."
-                elif overall_test == "FAILURE":
-                    failed = sum(1 for t in tests if t.get("status") in ("FAILURE", "ERROR", "TIMEOUT"))
-                    qual_summary = f"{failed}/{total} integration test(s) FAILED on PR #{pr_number or '-'}. See Cloud Build logs."
-                else:
-                    qual_summary = f"Tests completed: {summary_text} on PR #{pr_number or '-'}."
-
-                primary_build_url = None
-                for t in tests:
-                    if t.get("build_url"):
-                        primary_build_url = t.get("build_url")
-                        break
-
-                cand_updates = {
-                    "tests": tests,
-                    "tests_summary": summary_text,
-                    "test_status": overall_test,
-                    "status": overall_workflow,
-                }
-                if primary_build_url:
-                    cand_updates["build_url"] = primary_build_url
-
-                store.update_candidate(candidate_id, cand_updates)
-                store.update_package(package_id, {
-                    "status": overall_workflow,
-                    "test_status": overall_test,
-                    "tests_summary": summary_text,
-                    "qualification_summary": qual_summary
-                })
-                print(f"[TestManager] [ASYNC COMPLETE] Package '{package_id}' candidate '{candidate_id}' finished tests: {summary_text}", flush=True)
-            except Exception as e:
-                print(f"[TestManager] [ASYNC ERROR] Exception in async tests monitor thread: {e}", flush=True)
-
-        t = threading.Thread(target=_monitor, daemon=True, name=f"tests-monitor-{package_id}")
-        t.start()
-        return t
-
-    def start_async_test_monitor(
-        self,
-        candidate_id: str,
-        package_id: str,
-        build_id: str,
-        test_name: str,
-        pr_number: Optional[int] = None
-    ) -> threading.Thread:
-        """Backwards compatibility for single-test monitoring."""
-        test_rec = {
-            "test_name": test_name,
-            "trigger_name": f"PR-test-{test_name}",
-            "build_id": build_id,
-            "build_url": f"https://console.cloud.google.com/cloud-build/builds/{build_id}?project={self.project_id}",
-            "status": "RUNNING"
-        }
-        return self.start_async_tests_monitor(
-            candidate_id=candidate_id,
-            package_id=package_id,
-            tests=[test_rec],
-            pr_number=pr_number
-        )
+        updated = 0
+        for cand in store.list_candidates(status=CandidateStatus.TESTING):
+            tests = cand.get("tests") or []
+            if not tests or not self.refresh_tests(tests):
+                continue
+            pr_num = None
+            pr_url = cand.get("pr_url") or ""
+            if "/pull/" in pr_url:
+                pr_num = pr_url.rstrip("/").rsplit("/", 1)[-1]
+            summary, _, _ = record_test_results(store, cand["candidate_id"], cand["package_id"], tests, pr_num)
+            print(f"[TestManager] Candidate {cand['candidate_id']} ({cand['package_id']}): {summary}", flush=True)
+            updated += 1
+        return updated
 
 
 _GLOBAL_TEST_MANAGER: Optional[TestManager] = None

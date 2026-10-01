@@ -83,4 +83,6 @@ test-kueue-cluster
 tools/infra_updater/target_repo/
 tools/infra_updater/workspace/
 tools/infra_updater/.env
+tools/infra_updater/updater_state.json
+tools/infra_updater/server.log
 .env

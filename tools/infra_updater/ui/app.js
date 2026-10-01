@@ -37,6 +37,26 @@ let latestInstances = [];
 let latestCandidates = [];
 let latestRules = [];
 let lastRenderedSignature = "";
+// Server-provided settings (config.yaml); defaults apply until the first /api/state response.
+let appConfig = { trigger_prefix: 'PR-test-', snooze_days_default: 30 };
+
+function triggerNameFor(testName) {
+  return testName ? `${appConfig.trigger_prefix}${testName}` : 'Integration Test';
+}
+
+function applySnoozeDefault(days) {
+  const select = document.getElementById('snooze-days-select');
+  if (!select || select.dataset.defaultDays === String(days)) return;
+  if (![...select.options].some(o => o.value === String(days))) {
+    select.add(new Option(`${days} Days`, String(days)));
+    [...select.options].sort((a, b) => Number(a.value) - Number(b.value)).forEach(o => select.add(o));
+  }
+  [...select.options].forEach(o => {
+    o.textContent = `${o.value} Days${o.value === String(days) ? ' (Default)' : ''}`;
+    o.selected = o.value === String(days);
+  });
+  select.dataset.defaultDays = String(days);
+}
 
 async function fetchState() {
   try {
@@ -53,12 +73,11 @@ async function fetchState() {
 
     // 1. Update Metrics
     const stats = data.stats || {};
-    const pendingCount = stats.pending_updates !== undefined ? stats.pending_updates : (stats.qualified_candidates || 0);
-    const readyCount = stats.ready_updates !== undefined ? stats.ready_updates : (stats.applied_candidates || 0);
-
-    const totalPkg = stats.total_packages !== undefined ? stats.total_packages : latestPackages.length;
-    const totalInst = stats.total_instances !== undefined ? stats.total_instances : latestInstances.length;
-    const totalRules = stats.total_rules !== undefined ? stats.total_rules : latestRules.length;
+    const pendingCount = stats.pending_updates || 0;
+    const readyCount = stats.ready_updates || 0;
+    const totalPkg = stats.total_packages ?? latestPackages.length;
+    const totalInst = stats.total_instances ?? latestInstances.length;
+    const totalRules = stats.total_rules ?? latestRules.length;
 
     const elPkg = document.getElementById('metric-packages');
     if (elPkg) elPkg.textContent = totalPkg;
@@ -99,6 +118,10 @@ async function fetchState() {
 
     // 2. Update Status Pill & Target Repo Badge
     if (data.config) {
+      appConfig = { ...appConfig, ...data.config };
+      applySnoozeDefault(appConfig.snooze_days_default);
+      const projEl = document.getElementById('test-modal-project-id');
+      if (projEl) projEl.textContent = data.config.cloud_build_project_id || data.config.project_id || '-';
       const badgeText = document.getElementById('repo-badge-text');
       if (badgeText) {
         if (data.config.is_fork && data.config.fork_owner) {
@@ -121,13 +144,6 @@ async function fetchState() {
       }
     }
 
-    // Disable action buttons if running
-    document.querySelectorAll('.btn').forEach(btn => {
-      if (btn.id !== 'btn-clear') {
-        btn.disabled = !!data.is_running;
-      }
-    });
-
     // 3. Skip full DOM rebuild if state hasn't changed (prevents DOM trashing & scroll jump)
     const currentSignature = JSON.stringify({
       p: latestPackages,
@@ -145,6 +161,18 @@ async function fetchState() {
       try { renderCandidates(latestCandidates, latestPackages); } catch (e) { console.error('Error in renderCandidates:', e); }
       try { renderDynamicApplyButtons(latestCandidates, latestPackages); } catch (e) { console.error('Error in renderDynamicApplyButtons:', e); }
     }
+
+    // 4. While an action runs, disable enabled buttons and remember which ones we disabled;
+    //    afterwards re-enable only those, so buttons that are disabled by design stay disabled.
+    document.querySelectorAll('.btn').forEach(btn => {
+      if (btn.id === 'btn-clear') return;
+      if (data.is_running) {
+        if (!btn.disabled) { btn.disabled = true; btn.dataset.busy = '1'; }
+      } else if (btn.dataset.busy) {
+        btn.disabled = false;
+        delete btn.dataset.busy;
+      }
+    });
 
     if (data.is_running && !isPollingLogs) {
       startLogPolling();
@@ -201,7 +229,7 @@ function getCandidateTests(candidate) {
     const status = isSuccess ? 'SUCCESS' : (isFailure ? 'FAILURE' : (isRunning ? 'RUNNING' : 'UNKNOWN'));
     return [{
       test_name: candidate.test_name || 'Integration Test',
-      trigger_name: candidate.trigger_name || (candidate.test_name ? `PR-test-${candidate.test_name}` : 'Integration Test'),
+      trigger_name: candidate.trigger_name || triggerNameFor(candidate.test_name),
       blueprint_path: candidate.blueprint_path || '',
       blueprint_paths: candidate.blueprint_paths || [],
       build_id: candidate.build_id || '',
@@ -391,7 +419,7 @@ function renderCandidates(candidates, packages) {
             <span>Re-run Tests</span>
           </button>
         ` : ''}
-        <button class="btn btn-secondary" onclick="openSnoozeModal('${escapeHtml(c.package_id)}', '${escapeHtml(c.version)}')" title="Snooze updates for this version (default: 30 days)">
+        <button class="btn btn-secondary" onclick="openSnoozeModal('${escapeHtml(c.package_id)}', '${escapeHtml(c.version)}')" title="Snooze updates for this version (default: ${appConfig.snooze_days_default} days)">
           <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
           <span>Snooze</span>
         </button>
@@ -484,7 +512,7 @@ function renderPackageTableRow(p, { effectiveStatus, upstreamVersion, summary, c
   } else if (effectiveStatus === 'UP_TO_DATE') {
     badgeClass = 'badge-green';
     statusLabel = 'UP-TO-DATE';
-  } else if (effectiveStatus === 'BLOCKED' || effectiveStatus === 'BLOCKED_BY_RULE') {
+  } else if (effectiveStatus === 'BLOCKED') {
     badgeClass = 'badge-red';
     statusLabel = 'BLOCKED';
   } else if (effectiveStatus === 'ERROR') {
@@ -595,7 +623,7 @@ function renderPackages(packages, candidates) {
   list.forEach(p => {
     const pkgCands = candList.filter(c => c.package_id === p.package_id);
     const snoozedOrBlockedCand = pkgCands.find(c => c.status === 'SNOOZED' || c.status === 'BLOCKED');
-    const activeCand = pkgCands.find(c => ['UPDATE_FOUND', 'READY_FOR_REVIEW', 'TESTING', 'TEST_FAILED', 'QUALIFIED'].includes(c.status));
+    const activeCand = pkgCands.find(c => ['UPDATE_FOUND', 'READY_FOR_REVIEW', 'TESTING', 'TEST_FAILED'].includes(c.status));
 
     const isSnoozedOrBlocked = (p.status === 'SNOOZED' || p.status === 'BLOCKED' || !!snoozedOrBlockedCand || (p.snoozed_version && (!p.snooze_until || new Date(p.snooze_until) > new Date())) || !!p.blocked_version);
 
@@ -715,7 +743,7 @@ function renderDynamicApplyButtons(candidates, packages) {
   (packages || latestPackages || []).forEach(p => { pkgMap[p.package_id] = p; });
 
   const pendingCandidates = (candidates || []).filter(c => {
-    return c.status === 'UPDATE_FOUND' || c.status === 'QUALIFIED';
+    return c.status === 'UPDATE_FOUND';
   });
 
   if (pendingCandidates.length === 0) {
@@ -1139,7 +1167,7 @@ function closeSnoozeModal(event) {
 async function submitSnooze() {
   const packageId = document.getElementById('snooze-package-id')?.value;
   const version = document.getElementById('snooze-version-val')?.value;
-  const days = parseInt(document.getElementById('snooze-days-select')?.value || '30', 10);
+  const days = parseInt(document.getElementById('snooze-days-select')?.value || appConfig.snooze_days_default, 10);
 
   if (!packageId) return;
 
@@ -1285,7 +1313,7 @@ function openTestResultsModal(candidateId, event) {
     if (cand.pr_url) {
       prLinkBox.innerHTML = `
         <a href="${escapeHtml(cand.pr_url)}" target="_blank" class="btn btn-secondary btn-sm" style="color: #22c55e; border-color: rgba(34, 197, 94, 0.4); text-decoration: none; display: inline-flex; align-items: center; gap: 6px;">
-          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="18" cy="18" r="3"/><circle cx="6" cy="6" r="3"/><path d="M13 6h3a2 2 0 0 1 2 2v7"/><line x1="6" y1="9" x2="21"/></svg>
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="18" cy="18" r="3"/><circle cx="6" cy="6" r="3"/><path d="M13 6h3a2 2 0 0 1 2 2v7"/><line x1="6" y1="9" x2="6" y2="21"/></svg>
           <span>View GitHub PR #${escapeHtml(String(cand.pr_url).split('/').pop())}</span>
           <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
         </a>
@@ -1331,7 +1359,7 @@ function openTestResultsModal(candidateId, event) {
             <div class="test-item-header">
               <div class="test-name-box">
                 <span class="test-title">${escapeHtml(t.test_name)}</span>
-                <span class="code-pill" style="font-size: 11px; color: var(--text-secondary);">${escapeHtml(t.trigger_name || `PR-test-${t.test_name}`)}</span>
+                <span class="code-pill" style="font-size: 11px; color: var(--text-secondary);">${escapeHtml(t.trigger_name || triggerNameFor(t.test_name))}</span>
               </div>
               <span class="badge ${badgeClass}" style="font-weight: 700; letter-spacing: 0.5px;">${escapeHtml(statusLabel)}</span>
             </div>
@@ -1419,27 +1447,8 @@ document.addEventListener('keydown', (e) => {
   }
 });
 
-function restoreCachedStats() {
-  try {
-    const raw = localStorage.getItem('infra_updater_stats');
-    if (!raw) return;
-    const stats = JSON.parse(raw);
-    const elPkg = document.getElementById('metric-packages');
-    if (elPkg && stats.total_packages !== undefined) elPkg.textContent = stats.total_packages;
-    const elInst = document.getElementById('metric-instances');
-    if (elInst && stats.total_instances !== undefined) elInst.textContent = stats.total_instances;
-    const elRules = document.getElementById('metric-rules');
-    if (elRules && stats.total_rules !== undefined) elRules.textContent = stats.total_rules;
-    const elCand = document.getElementById('metric-candidates');
-    if (elCand && stats.pending_updates !== undefined) elCand.textContent = stats.pending_updates;
-    const counterEl = document.getElementById('counter-candidates');
-    if (counterEl && stats.pending_updates !== undefined) counterEl.textContent = stats.pending_updates;
-  } catch (e) {}
-}
-
-// Initial setup
+// Initial setup (cached counters are restored by the inline script in index.html)
 document.addEventListener('DOMContentLoaded', () => {
-  restoreCachedStats();
   fetchState();
   setInterval(fetchState, 3000);
 });

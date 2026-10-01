@@ -15,336 +15,223 @@
 """
 Central Configuration Loader for Cluster Toolkit Automated Infrastructure Updater.
 
-Loads environment variables from tools/infra_updater/.env and parameters from config.yaml:
-  - repository: url, branch
-  - llm: model (defaults to gemini-3.8-flash)
-  - server: port
+Loads environment variables from tools/infra_updater/.env and parameters from config.yaml.
+Environment variables always take precedence over config.yaml values.
+Environment-specific values (project, database, repository, model) live only in config.yaml;
+the defaults below are behavioral defaults that are the same for every deployment.
 """
 
-import json
 import os
 import re
+import subprocess
 from typing import Any, Dict, Optional, Tuple
+
 import yaml
+from dotenv import load_dotenv
+
+import http_client
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 CONFIG_YAML_PATH = os.path.join(BASE_DIR, "config.yaml")
 DOTENV_PATH = os.path.join(BASE_DIR, ".env")
 
+# Load .env into os.environ on module import (existing env vars win).
+load_dotenv(DOTENV_PATH, override=False)
 
-def load_env_file():
-    """Loads environment variables from tools/infra_updater/.env if present."""
-    if not os.path.exists(DOTENV_PATH):
-        return
-    try:
-        from dotenv import load_dotenv
-        load_dotenv(DOTENV_PATH, override=False)
-    except Exception:
-        pass
-
-    # Ensure manual fallback if dotenv did not populate
-    try:
-        with open(DOTENV_PATH, "r", encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                if line and not line.startswith("#") and "=" in line:
-                    k, v = line.split("=", 1)
-                    k, v = k.strip(), v.strip().strip("'\"")
-                    if k not in os.environ:
-                        os.environ[k] = v
-    except Exception:
-        pass
-
-# Load .env into os.environ on module import
-load_env_file()
+GITHUB_REPO_RE = re.compile(r"github\.com[/:]([^/]+)/([^/.]+)")
+TOKEN_SECRET_NAME = "infra-updater-github-token"
 
 
-class ConfigNode:
-    """Wrapper that enables dot-notation attribute access over nested dictionaries."""
-    def __init__(self, data: Dict[str, Any]):
-        for key, value in data.items():
-            if isinstance(value, dict):
-                setattr(self, key, ConfigNode(value))
-            else:
-                setattr(self, key, value)
-
-    def to_dict(self) -> Dict[str, Any]:
-        result = {}
-        for key, value in self.__dict__.items():
-            if isinstance(value, ConfigNode):
-                result[key] = value.to_dict()
-            else:
-                result[key] = value
-        return result
-
-    def get(self, key: str, default: Any = None) -> Any:
-        return getattr(self, key, default)
-
-    def __getitem__(self, key: str) -> Any:
-        return getattr(self, key)
-
-    def __getattr__(self, name: str) -> Any:
-        return None
+class ConfigError(ValueError):
+    pass
 
 
-def _find_system_github_token() -> Optional[str]:
-    """Auto-detects GitHub personal access token from env or active container processes."""
+def _required(raw: Dict[str, Any], section: str, key: str, env: Optional[str] = None) -> str:
+    val = (os.environ.get(env) if env else None) or raw.get(key)
+    if not val:
+        hint = f" (or env {env})" if env else ""
+        raise ConfigError(f"Missing required setting '{section}.{key}' in {CONFIG_YAML_PATH}{hint}.")
+    return str(val)
+
+
+def _resolve_github_token(project_id: str) -> Optional[str]:
+    """Returns the GitHub token from the environment, falling back to Secret Manager."""
     for var in ("GITHUB_TOKEN", "GH_TOKEN", "GITHUB_PERSONAL_ACCESS_TOKEN"):
-        val = os.environ.get(var)
-        if val and val.strip():
-            return val.strip()
-
-    try:
-        import subprocess
-        ps = subprocess.run(["ps", "-eo", "pid,args"], capture_output=True, text=True, check=False)
-        for line in ps.stdout.splitlines():
-            if "github-mcp-server" in line and "grep" not in line:
-                m_pid = re.match(r'^\s*([0-9]+)', line)
-                if m_pid:
-                    pid = m_pid.group(1)
-                    env_path = f"/proc/{pid}/environ"
-                    if os.path.exists(env_path):
-                        try:
-                            with open(env_path, "rb") as f:
-                                env_bytes = f.read().split(b'\0')
-                                for eb in env_bytes:
-                                    s = eb.decode("utf-8", errors="ignore")
-                                    if s.startswith("GITHUB_PERSONAL_ACCESS_TOKEN=") or s.startswith("GITHUB_TOKEN="):
-                                        tok = s.split("=", 1)[1].strip()
-                                        if tok:
-                                            return tok
-                        except Exception:
-                            pass
-    except Exception:
-        pass
+        val = (os.environ.get(var) or "").strip()
+        if val:
+            return val
 
     try:
         from google.cloud import secretmanager
-        project_id = os.environ.get("GOOGLE_CLOUD_PROJECT") or "hpc-toolkit-dev"
         client = secretmanager.SecretManagerServiceClient()
-        name = f"projects/{project_id}/secrets/infra-updater-github-token/versions/latest"
-        response = client.access_secret_version(name=name)
-        sec_tok = response.payload.data.decode("UTF-8").strip()
-        if sec_tok:
-            return sec_tok
-    except Exception:
-        pass
-
-    return None
+        name = f"projects/{project_id}/secrets/{TOKEN_SECRET_NAME}/versions/latest"
+        return client.access_secret_version(name=name).payload.data.decode("utf-8").strip() or None
+    except Exception as e:  # Secret missing / no ADC: run unauthenticated.
+        print(f"[Config] [WARN] No GitHub token in env and Secret Manager lookup failed: {e}", flush=True)
+        return None
 
 
-class RepositoryConfig:
-    def __init__(self, raw: Dict[str, Any]):
-        self.url: str = raw.get("url", "https://github.com/GoogleCloudPlatform/cluster-toolkit.git")
-        self.branch: str = raw.get("branch") or raw.get("base_branch", "develop")
-        self.base_branch: str = self.branch
-
-        # Derive owner and repo name from upstream url
-        m = re.search(r"github\.com[/:]([^/]+)/([^/\.]+)", self.url)
-        self.owner: str = m.group(1) if m else "GoogleCloudPlatform"
-        self.name: str = m.group(2) if m else "cluster-toolkit"
-
-        # Optional fork repository to push update branches to
-        self.fork_url: Optional[str] = raw.get("fork_url")
-        if self.fork_url and str(self.fork_url).strip():
-            self.fork_url = str(self.fork_url).strip()
-            m_fork = re.search(r"github\.com[/:]([^/]+)/([^/\.]+)", self.fork_url)
-            self.fork_owner: Optional[str] = m_fork.group(1) if m_fork else None
-            self.fork_name: Optional[str] = m_fork.group(2) if m_fork else None
-        else:
-            self.fork_url = None
-            self.fork_owner = None
-            self.fork_name = None
-
-    @property
-    def push_url(self) -> str:
-        """Returns the URL of the repository where update branches should be pushed."""
-        return self.fork_url or self.url
-
-    @property
-    def push_owner(self) -> str:
-        """Returns the owner/org where update branches are pushed."""
-        return self.fork_owner or self.owner
-
-    @property
-    def push_name(self) -> str:
-        """Returns the repository name where update branches are pushed."""
-        return self.fork_name or self.name
-
-    @property
-    def is_fork(self) -> bool:
-        """Returns True if branches are pushed to a fork rather than the upstream repository."""
-        return bool(self.fork_owner and self.fork_owner.lower() != self.owner.lower())
-
-
-def resolve_dynamic_git_author(token: Optional[str] = None) -> Tuple[str, str]:
+def _resolve_git_author(raw: Dict[str, Any], token: Optional[str]) -> Tuple[str, str]:
     """
-    Dynamically resolves git author name and email without hardcoding:
-    1. Checks environment variables GIT_AUTHOR_NAME and GIT_AUTHOR_EMAIL.
-    2. Queries GitHub API (GET /user) using the provided or auto-detected GitHub token.
-    3. Queries local/global git config (`git config --get user.name`, `git config --get user.email`).
-    4. Falls back cleanly to GitHub's standard noreply email format if email is hidden on profile.
+    Resolves the git author once, in order:
+    env (GIT_AUTHOR_NAME/EMAIL) -> config.yaml git.* -> GitHub /user -> local git config -> defaults.
     """
-    author_name = os.environ.get("GIT_AUTHOR_NAME")
-    author_email = os.environ.get("GIT_AUTHOR_EMAIL")
+    name = os.environ.get("GIT_AUTHOR_NAME") or raw.get("author_name")
+    email = os.environ.get("GIT_AUTHOR_EMAIL") or raw.get("author_email")
+    if name and email:
+        return name.strip(), email.strip()
 
-    if author_name and author_email:
-        return author_name.strip(), author_email.strip()
-
-    gh_token = token or os.environ.get("GITHUB_TOKEN") or _find_system_github_token()
-    gh_login = None
-
-    if gh_token:
+    login = None
+    if token:
         try:
-            import urllib.request
-            req = urllib.request.Request(
-                "https://api.github.com/user",
-                headers={
-                    "Authorization": f"token {gh_token}",
-                    "User-Agent": "cluster-toolkit-infra-updater",
-                    "Accept": "application/vnd.github.v3+json"
-                }
-            )
-            with urllib.request.urlopen(req, timeout=5) as resp:
-                if resp.status == 200:
-                    data = json.loads(resp.read().decode("utf-8"))
-                    gh_login = data.get("login")
-                    if not author_name and data.get("name"):
-                        author_name = data.get("name")
-                    if not author_email and data.get("email"):
-                        author_email = data.get("email")
-        except Exception:
-            pass
+            data = http_client.GitHubClient(token).get("/user")
+            login = data.get("login")
+            name = name or data.get("name")
+            email = email or data.get("email")
+        except (http_client.GitHubError, OSError, ValueError) as e:
+            print(f"[Config] [WARN] Could not resolve git author from GitHub: {e}", flush=True)
 
-    # Fallback to local git config if name or email still not determined
-    if not author_name or not author_email:
-        try:
-            import subprocess
-            if not author_name:
-                res_name = subprocess.run(["git", "config", "--get", "user.name"], capture_output=True, text=True, check=False)
-                if res_name.stdout.strip():
-                    author_name = res_name.stdout.strip()
-            if not author_email:
-                res_email = subprocess.run(["git", "config", "--get", "user.email"], capture_output=True, text=True, check=False)
-                if res_email.stdout.strip():
-                    author_email = res_email.stdout.strip()
-        except Exception:
-            pass
+    def _git_cfg(key: str) -> Optional[str]:
+        res = subprocess.run(["git", "config", "--get", key], capture_output=True, text=True, check=False)
+        return res.stdout.strip() or None
 
-    # Fallback if still not determined
-    if not author_name:
-        author_name = gh_login or "Cluster Toolkit Updater"
-
-    if not author_email:
-        if gh_login:
-            author_email = f"{gh_login}@users.noreply.github.com"
-        else:
-            author_email = "infra-updater@google.com"
-
-    return author_name, author_email
-
-
-class GitConfig:
-    def __init__(self, raw: Dict[str, Any], token: Optional[str] = None):
-        dyn_name, dyn_email = resolve_dynamic_git_author(token)
-        self.author_name: str = os.environ.get("GIT_AUTHOR_NAME") or raw.get("author_name") or dyn_name
-        self.author_email: str = os.environ.get("GIT_AUTHOR_EMAIL") or raw.get("author_email") or dyn_email
-
-
-class LLMConfig:
-    def __init__(self, raw: Dict[str, Any]):
-        self.model: str = raw.get("model", "gemini-3.8-flash")
+    name = name or _git_cfg("user.name") or login or "Cluster Toolkit Updater"
+    email = email or _git_cfg("user.email") or (f"{login}@users.noreply.github.com" if login else "infra-updater@google.com")
+    return name, email
 
 
 class DatabaseConfig:
     def __init__(self, raw: Dict[str, Any]):
-        self.provider: str = os.environ.get("UPDATER_DB_PROVIDER") or raw.get("provider", "firestore")
-        self.project_id: str = os.environ.get("GOOGLE_CLOUD_PROJECT") or os.environ.get("FIREBASE_PROJECT_ID") or raw.get("project_id", "hpc-toolkit-dev")
-        self.database_id: str = os.environ.get("FIRESTORE_DATABASE_ID") or raw.get("database_id", "automated-dependency-management-db")
+        self.provider: str = (os.environ.get("UPDATER_DB_PROVIDER") or raw.get("provider") or "firestore").lower()
+        self.project_id: str = _required(raw, "database", "project_id", "GOOGLE_CLOUD_PROJECT")
+        self.database_id: Optional[str] = (
+            _required(raw, "database", "database_id", "FIRESTORE_DATABASE_ID") if self.provider == "firestore" else None
+        )
+
+
+class RepositoryConfig:
+    def __init__(self, raw: Dict[str, Any]):
+        self.url: str = _required(raw, "repository", "url", "UPDATER_TARGET_REPO")
+        self.branch: str = os.environ.get("UPDATER_BASE_BRANCH") or raw.get("branch", "develop")
+        self.base_branch: str = self.branch
+
+        m = GITHUB_REPO_RE.search(self.url)
+        if not m:
+            raise ConfigError(f"repository.url must be a GitHub repository URL, got '{self.url}'.")
+        self.owner: str = m.group(1)
+        self.name: str = m.group(2)
+
+        # Optional fork repository to push update branches to
+        fork = (os.environ.get("UPDATER_FORK_REPO") or raw.get("fork_url") or "").strip()
+        m_fork = GITHUB_REPO_RE.search(fork) if fork else None
+        self.fork_url: Optional[str] = fork or None
+        self.fork_owner: Optional[str] = m_fork.group(1) if m_fork else None
+        self.fork_name: Optional[str] = m_fork.group(2) if m_fork else None
+
+    @property
+    def push_url(self) -> str:
+        """URL of the repository where update branches are pushed."""
+        return self.fork_url or self.url
+
+    @property
+    def push_owner(self) -> str:
+        return self.fork_owner or self.owner
+
+    @property
+    def push_name(self) -> str:
+        return self.fork_name or self.name
+
+    @property
+    def is_fork(self) -> bool:
+        """True if branches are pushed to a fork rather than the upstream repository."""
+        return bool(self.fork_owner and self.fork_owner.lower() != self.owner.lower())
+
+
+class PullRequestConfig:
+    """Branch naming and commit / PR title templates. Placeholders: {package_id}, {version}."""
+
+    def __init__(self, raw: Dict[str, Any]):
+        self.branch_prefix: str = raw.get("branch_prefix", "infra-update/")
+        self.commit_title: str = raw.get("commit_title", "[infra-update] Upgrade {package_id} to {version}")
+        self.pr_title: str = raw.get("pr_title", "[Infra Update] Upgrade {package_id} to {version}")
+
+
+class CloudBuildConfig:
+    def __init__(self, raw: Dict[str, Any], default_project: str):
+        self.project_id: str = os.environ.get("CLOUD_BUILD_PROJECT") or raw.get("project_id") or default_project
+        self.trigger_prefix: str = raw.get("trigger_prefix", "PR-test-")
+        self.tests_dir: str = raw.get("tests_dir", "tools/cloud-build/daily-tests/tests")
+        self.builds_dir: str = raw.get("builds_dir", "tools/cloud-build/daily-tests/builds")
+        self.console_url: str = raw.get(
+            "console_url", "https://console.cloud.google.com/cloud-build/builds/{build_id}?project={project_id}")
+        # Integration tests can run for about a day; after this a running test is marked TIMEOUT.
+        self.max_test_duration_seconds: int = int(float(raw.get("max_test_duration_hours", 24)) * 3600)
+        # How long to wait for the PR webhook to create a build before reporting ERROR.
+        self.build_lookup_timeout_seconds: int = int(raw.get("build_lookup_timeout_seconds", 90))
+
+
+class GitConfig:
+    def __init__(self, raw: Dict[str, Any], token: Optional[str]):
+        self.author_name, self.author_email = _resolve_git_author(raw, token)
+
+
+class LLMConfig:
+    def __init__(self, raw: Dict[str, Any], default_project: str):
+        self.model: str = _required(raw, "llm", "model", "GEMINI_MODEL")
+        self.project_id: str = raw.get("project_id") or default_project
+        self.location: str = os.environ.get("GOOGLE_CLOUD_REGION") or raw.get("location", "global")
+
+
+class HttpConfig:
+    def __init__(self, raw: Dict[str, Any]):
+        self.timeout_seconds: int = int(raw.get("timeout_seconds", 20))
+        self.user_agent: str = raw.get("user_agent", "ClusterToolkitInfraUpdater/1.0")
+
+
+class PolicyConfig:
+    def __init__(self, raw: Dict[str, Any]):
+        self.default_snooze_days: int = int(raw.get("default_snooze_days", 30))
 
 
 class ServerConfig:
     def __init__(self, raw: Dict[str, Any]):
-        port_val = os.environ.get("PORT") or os.environ.get("UPDATER_SERVER_PORT") or raw.get("port", 8080)
-        self.port: int = int(port_val)
+        self.port: int = int(os.environ.get("PORT") or os.environ.get("UPDATER_SERVER_PORT") or raw.get("port", 8080))
         self.host: str = raw.get("host", "0.0.0.0")
         self.pr_sync_interval_seconds: int = int(raw.get("pr_sync_interval_seconds", 60))
+        self.test_poll_interval_seconds: int = int(raw.get("test_poll_interval_seconds", 60))
 
 
 class UpdaterConfig:
     def __init__(self, config_path: str = CONFIG_YAML_PATH):
-        self.config_path = config_path
-        self._raw_data = self._load_file()
-        self._apply_env_overrides()
+        raw: Dict[str, Any] = {}
+        if os.path.exists(config_path):
+            with open(config_path, "r", encoding="utf-8") as f:
+                raw = yaml.safe_load(f) or {}
 
-        self.github_token: Optional[str] = self.get_github_token()
-        self.database = DatabaseConfig(self._raw_data.get("database", {}))
-        self.repository = RepositoryConfig(self._raw_data.get("repository", {}))
-        self.git = GitConfig(self._raw_data.get("git", {}), token=self.github_token)
-        self.llm = LLMConfig(self._raw_data.get("llm", {}))
-        self.server = ServerConfig(self._raw_data.get("server", {}))
-        self.node = ConfigNode(self._raw_data)
+        self.http = HttpConfig(raw.get("http", {}))
+        http_client.configure(self.http.user_agent, self.http.timeout_seconds)
 
-    def _load_file(self) -> Dict[str, Any]:
-        if os.path.exists(self.config_path):
-            with open(self.config_path, "r", encoding="utf-8") as f:
-                return yaml.safe_load(f) or {}
-        return {}
+        self.database = DatabaseConfig(raw.get("database", {}))
+        self.repository = RepositoryConfig(raw.get("repository", {}))
+        self.pull_request = PullRequestConfig(raw.get("pull_request", {}))
+        self.cloud_build = CloudBuildConfig(raw.get("cloud_build", {}), self.database.project_id)
+        self.llm = LLMConfig(raw.get("llm", {}), self.database.project_id)
+        self.policy = PolicyConfig(raw.get("policy", {}))
+        self.server = ServerConfig(raw.get("server", {}))
 
-    def _apply_env_overrides(self):
-        db = self._raw_data.setdefault("database", {})
-        if os.environ.get("UPDATER_DB_PROVIDER"):
-            db["provider"] = os.environ["UPDATER_DB_PROVIDER"]
-        if os.environ.get("GOOGLE_CLOUD_PROJECT") or os.environ.get("FIREBASE_PROJECT_ID"):
-            db["project_id"] = os.environ.get("GOOGLE_CLOUD_PROJECT") or os.environ.get("FIREBASE_PROJECT_ID")
-        if os.environ.get("FIRESTORE_DATABASE_ID"):
-            db["database_id"] = os.environ["FIRESTORE_DATABASE_ID"]
+        self.github_token: Optional[str] = _resolve_github_token(self.database.project_id)
+        self.git = GitConfig(raw.get("git", {}), self.github_token)
 
-        repo = self._raw_data.setdefault("repository", {})
-        if os.environ.get("UPDATER_TARGET_REPO"):
-            repo["url"] = os.environ["UPDATER_TARGET_REPO"]
-        if os.environ.get("UPDATER_BASE_BRANCH"):
-            repo["branch"] = os.environ["UPDATER_BASE_BRANCH"]
-        if os.environ.get("UPDATER_FORK_REPO"):
-            repo["fork_url"] = os.environ["UPDATER_FORK_REPO"]
-
-        git = self._raw_data.setdefault("git", {})
-        if os.environ.get("GIT_AUTHOR_NAME"):
-            git["author_name"] = os.environ["GIT_AUTHOR_NAME"]
-        if os.environ.get("GIT_AUTHOR_EMAIL"):
-            git["author_email"] = os.environ["GIT_AUTHOR_EMAIL"]
-
-        token = _find_system_github_token()
-        if token:
-            os.environ["GITHUB_TOKEN"] = token
-            os.environ["GH_TOKEN"] = token
-
-        llm = self._raw_data.setdefault("llm", {})
-        if os.environ.get("GEMINI_MODEL"):
-            llm["model"] = os.environ["GEMINI_MODEL"]
-
-        server = self._raw_data.setdefault("server", {})
-        if os.environ.get("PORT"):
-            try:
-                server["port"] = int(os.environ["PORT"])
-            except ValueError:
-                pass
-        elif os.environ.get("UPDATER_SERVER_PORT"):
-            try:
-                server["port"] = int(os.environ["UPDATER_SERVER_PORT"])
-            except ValueError:
-                pass
+        # Export resolved values so git and child CLI processes reuse them
+        # without repeating Secret Manager / GitHub lookups.
+        if self.github_token:
+            os.environ["GITHUB_TOKEN"] = self.github_token
+        os.environ["GIT_AUTHOR_NAME"] = self.git.author_name
+        os.environ["GIT_AUTHOR_EMAIL"] = self.git.author_email
 
     def get_workspace_path(self) -> str:
-        """Returns the absolute path to the target repository workspace directory."""
-        if os.environ.get("UPDATER_WORKSPACE_DIR"):
-            return os.path.abspath(os.environ["UPDATER_WORKSPACE_DIR"])
-        if os.environ.get("K_SERVICE"):
-            return "/tmp/target_repo"
-        return os.path.abspath(os.path.join(BASE_DIR, "target_repo"))
-
-    def get_github_token(self) -> Optional[str]:
-        return os.environ.get("GITHUB_TOKEN") or _find_system_github_token()
+        """Absolute path of the target repository workspace (UPDATER_WORKSPACE_DIR overrides)."""
+        return os.path.abspath(os.environ.get("UPDATER_WORKSPACE_DIR") or os.path.join(BASE_DIR, "target_repo"))
 
 
 _GLOBAL_CONFIG: Optional[UpdaterConfig] = None

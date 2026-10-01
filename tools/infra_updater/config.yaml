@@ -1,10 +1,11 @@
 # ==============================================================================
 # Cluster Toolkit Automated Infrastructure Updater Configuration
+# Environment variables override these values (see config.py).
 # ==============================================================================
 
 # Database Backend (Cloud Firestore in Native Mode or local JSON)
 database:
-  provider: "firestore"
+  provider: "firestore"            # "firestore" or "json"
   project_id: "hpc-toolkit-dev"
   database_id: "automated-dependency-management-db"
 
@@ -16,18 +17,44 @@ repository:
   # Fork repository where update branches will be pushed
   fork_url: "https://github.com/rahimkhan19/cluster-toolkit.git"
 
+# Update branch naming and commit / PR titles. Placeholders: {package_id}, {version}
+pull_request:
+  branch_prefix: "infra-update/"
+  commit_title: "[infra-update] Upgrade {package_id} to {version}"
+  pr_title: "[Infra Update] Upgrade {package_id} to {version}"
+
+# Cloud Build integration tests run for each update PR
+cloud_build:
+  # project_id: "hpc-toolkit-dev"   # Defaults to database.project_id
+  trigger_prefix: "PR-test-"
+  tests_dir: "tools/cloud-build/daily-tests/tests"
+  builds_dir: "tools/cloud-build/daily-tests/builds"
+  console_url: "https://console.cloud.google.com/cloud-build/builds/{build_id}?project={project_id}"
+  max_test_duration_hours: 24
+  build_lookup_timeout_seconds: 90
+
 # Git Commit Author (Optional overrides; defaults are dynamically resolved from GitHub token and git config)
 # git:
 #   author_name: "rahimkhan19"
 #   author_email: "rahimkh@google.com"
 
-# Gemini LLM Model
+# Gemini LLM (GEMINI_API_KEY in env switches from Vertex AI to the Gemini API)
 llm:
   model: "gemini-3.8-flash"
+  location: "global"
+  # project_id: "hpc-toolkit-dev"   # Vertex AI project; defaults to database.project_id
+
+# Outbound HTTP requests
+http:
+  timeout_seconds: 20
+  user_agent: "ClusterToolkitInfraUpdater/1.0"
+
+# Snooze / block policy
+policy:
+  default_snooze_days: 30
 
 # Web Dashboard Server Port & Settings
 server:
   port: 8080
   pr_sync_interval_seconds: 60
-
-
+  test_poll_interval_seconds: 60
