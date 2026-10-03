@@ -8,3 +8,4 @@ updater_state.json
 .git
 *.tmp
 .DS_Store
+*.log

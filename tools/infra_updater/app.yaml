@@ -18,8 +18,9 @@ instance_class: F2
 
 # The server runs a background poller (PR sync + Cloud Build status), so it
 # needs exactly one always-on instance.
-manual_scaling:
-  instances: 1
+automatic_scaling:
+  min_instances: 1
+  max_instances: 1
 
 entrypoint: python3 server.py
 

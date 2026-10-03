@@ -10,3 +10,4 @@ target_repo/
 updater_state.json
 *.tmp
 .DS_Store
+*.log
