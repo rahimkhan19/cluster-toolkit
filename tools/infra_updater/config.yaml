@@ -15,7 +15,7 @@ repository:
   url: "https://github.com/GoogleCloudPlatform/cluster-toolkit.git"
   branch: "develop"
   # Fork repository where update branches will be pushed (omit to push to the target repository)
-  fork_url: "https://github.com/rahimkhan19/cluster-toolkit.git"
+  fork_url: "https://github.com/ctk-pr-bot/cluster-toolkit.git"
 
 # Update branch naming and commit / PR titles. Placeholders: {package_id}, {version}
 pull_request:
@@ -34,9 +34,9 @@ cloud_build:
   build_lookup_timeout_seconds: 90
 
 # Git Commit Author (Optional overrides; defaults are dynamically resolved from GitHub token and git config)
-# git:
-#   author_name: "rahimkhan19"
-#   author_email: "rahimkh@google.com"
+git:
+  author_name: "ctk-pr-bot"
+  author_email: "ctk-pr-bot@google.com"
 
 # Gemini LLM (GEMINI_API_KEY in env switches from Vertex AI to the Gemini API)
 llm:
