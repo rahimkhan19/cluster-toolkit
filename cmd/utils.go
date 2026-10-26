@@ -55,6 +55,20 @@ func addAutoApproveFlag(c *cobra.Command) *cobra.Command {
 	return c
 }
 
+var flagParallelism int
+
+func addParallelismFlag(c *cobra.Command) *cobra.Command {
+	c.Flags().IntVar(&flagParallelism, "parallelism", 0, "Limit the number of concurrent operations in Terraform (default: 10, or GCLUSTER_TERRAFORM_PARALLELISM)")
+	return c
+}
+
+func validateParallelismFlag() error {
+	if flagParallelism < 0 {
+		return fmt.Errorf("--parallelism must be a non-negative integer (got %d)", flagParallelism)
+	}
+	return nil
+}
+
 func checkExists(cmd *cobra.Command, args []string) error {
 	path := args[0]
 	if _, err := os.Lstat(path); err != nil {
@@ -137,4 +151,13 @@ func isGroupSelected(g config.GroupName) bool {
 		return !slices.Contains(flagSkipGroups, string(g))
 	}
 	return true
+}
+
+func hasSelectedGroupOfKind(bp config.Blueprint, kind config.ModuleKind) bool {
+	for _, g := range bp.Groups {
+		if isGroupSelected(g.Name) && g.Kind() == kind {
+			return true
+		}
+	}
+	return false
 }

@@ -15,6 +15,7 @@
 package job
 
 import (
+	"fmt"
 	"hpc-toolkit/pkg/orchestrator"
 
 	"github.com/spf13/cobra"
@@ -33,7 +34,7 @@ var mainOnly bool
 
 func init() {
 	LogsCmd.Flags().BoolVarP(&follow, "follow", "f", false, "Stream logs continuously")
-	LogsCmd.Flags().BoolVar(&mainOnly, "main-only", false, "Fetch logs only for the main replicated job (main-job or pathways-head)")
+	LogsCmd.Flags().BoolVar(&mainOnly, "main-only", false, "Fetch logs only from the rank-0 pod of the JobSet's first replicated job (main-job or pathways-head), using its default container")
 }
 
 func runLogsCmd(cmd *cobra.Command, args []string) error {
@@ -48,6 +49,7 @@ func runLogsCmd(cmd *cobra.Command, args []string) error {
 		ClusterName:     clusterName,
 		ClusterLocation: location,
 		ProjectID:       projectID,
+		GKENamespace:    gkeNamespace,
 		Follow:          follow,
 		MainOnly:        mainOnlyPtr,
 	}
@@ -57,7 +59,7 @@ func runLogsCmd(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	cmd.Println(output)
+	_, err = fmt.Fprintln(cmd.OutOrStdout(), output)
+	return err
 
-	return nil
 }

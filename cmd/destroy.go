@@ -43,7 +43,8 @@ func init() {
 	rootCmd.AddCommand(
 		addGroupSelectionFlags(
 			addAutoApproveFlag(
-				addArtifactsDirFlag(destroyCmd))))
+				addArtifactsDirFlag(
+					addParallelismFlag(destroyCmd)))))
 	destroyCmd.Flags().BoolVar(&robustDestroy, "robust", false, "Perform a robust destroy, including firewall rule cleanup.")
 }
 
@@ -54,8 +55,11 @@ var (
 		Long:              "destroy all resources in a Toolkit deployment directory.",
 		Args:              cobra.MatchAll(cobra.ExactArgs(1), checkDir),
 		ValidArgsFunction: matchDirs,
-		Run:               runDestroyCmd,
-		SilenceUsage:      true,
+		PreRunE: func(cmd *cobra.Command, args []string) error {
+			return validateParallelismFlag()
+		},
+		Run:          runDestroyCmd,
+		SilenceUsage: true,
 	}
 )
 
@@ -72,6 +76,7 @@ var (
 var errUserAborted = errors.New("user declined state cleanup")
 
 func runDestroyCmd(cmd *cobra.Command, args []string) {
+	shell.SetTerraformParallelism(flagParallelism)
 	deplRoot := args[0]
 	artifactsDir := getArtifactsDir(deplRoot)
 
@@ -81,6 +86,11 @@ func runDestroyCmd(cmd *cobra.Command, args []string) {
 
 	bp, ctx := artifactBlueprintOrDie(artifactsDir)
 	checkErr(validateGroupSelectionFlags(bp), ctx)
+
+	if hasSelectedGroupOfKind(bp, config.TerraformKind) {
+		checkDependencies(cmd, "terraform")
+	}
+
 	checkErr(shell.ValidateDeploymentDirectory(bp.Groups, deplRoot), ctx)
 
 	destroyRunner(deplRoot, artifactsDir, bp, ctx)
@@ -236,16 +246,17 @@ func destroyTerraformGroup(groupDir string) error {
 				applyBehavior := getApplyBehavior()
 				forceDestroyApproved := false
 
-				if applyBehavior == shell.PromptBeforeApply {
+				switch applyBehavior {
+				case shell.PromptBeforeApply:
 					promptMsg := "GKE cluster is unreachable. Do you want to force destroy the remaining infrastructure by removing GKE resources from the state? [y/n]: "
 					if confirmActionFunc(promptMsg) {
 						forceDestroyApproved = true
 					} else {
 						return errUserAborted
 					}
-				} else if applyBehavior == shell.AutomaticApply {
+				case shell.AutomaticApply:
 					forceDestroyApproved = true
-				} else {
+				default:
 					return err
 				}
 

@@ -32,7 +32,7 @@ by adding the following to ${HOME}/.enroot/.credentials:
 
   machine us-docker.pkg.dev login oauth2accesstoken password \$(gcloud auth print-access-token)
 
-And will clone ramble (https://github.com/GoogleCloudPlatform/ramble.git)
+And will clone ramble (https://github.com/Ramble-Project/ramble.git)
 to "${SOFTWARE_INSTALL}"/, and it will create an enroot "sqsh" file located
 in your ${HOME}/.enroot/ folder. Afterwards it will create a ramble workspace
 to run a number of NCCL tests in $(readlink -f "${TEST_DIR}"/).
@@ -77,7 +77,7 @@ EOF
 fi
 
 # Install ramble and make world read/writeable.
-sudo git clone -c feature.manyFiles=true https://github.com/GoogleCloudPlatform/ramble.git "${SOFTWARE_INSTALL}"/ramble || true
+sudo git clone -c feature.manyFiles=true https://github.com/Ramble-Project/ramble.git "${SOFTWARE_INSTALL}"/ramble || true
 sudo git -C "${SOFTWARE_INSTALL}"/ramble checkout 2a020babedd68be15448f3893d2a245fcaa8bd73
 sudo chmod -R a+w "${SOFTWARE_INSTALL}"/ramble
 
@@ -119,8 +119,8 @@ ramble:
     hostlist: \${SLURM_JOB_NODELIST}
 
     container_dir: "${SOFTWARE_INSTALL}/ramble/sqsh"
-    container_name: nccl-plugin-gib-diagnostic-v1.1.0
-    container_uri: docker://us-docker.pkg.dev#gce-ai-infra/gpudirect-gib/nccl-plugin-gib-diagnostic:v1.1.0
+    container_name: nccl-plugin-gib-diagnostic-v1.1.2
+    container_uri: docker://us-docker.pkg.dev#gce-ai-infra/gpudirect-gib/nccl-plugin-gib-diagnostic:v1.1.2
     processes_per_node: 8
     processes_per_node: '{gpus_per_node}'
     gpus_per_node: '8'

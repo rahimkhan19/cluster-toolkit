@@ -605,14 +605,14 @@ class Image(CloudResource):
         max_length=60,
         help_text="Enter a source image project",
         blank=False,
-        default="schedmd-slurm-public",
+        default="advanced-compute-images",
     )
 
     source_image_family = models.CharField(
         max_length=60,
         help_text="Enter a source image family",
         blank=False,
-        default="slurm-gcp-6-12-hpc-rocky-linux-9",
+        default="aci-cpu-rocky-linux-9-slurm-2605-amd64",
     )
 
     startup_script = models.ManyToManyField(
@@ -709,6 +709,14 @@ class Cluster(CloudResource):
         choices=CLUSTER_STATUS,
         default="n",
         help_text="Status of this cluster",
+    )
+    initialization_started = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text=(
+            "When the cluster last entered the initialising state. Used to "
+            "detect a bootstrap that has stalled with no error."
+        ),
     )
     spackdir = models.CharField(
         max_length=4096,
@@ -817,7 +825,7 @@ class Cluster(CloudResource):
         ),        
     )
     enable_slurm_auth = models.BooleanField(
-        default=False,
+        default=True,
         help_text=(
             "Enable Slurm native authentication instead of MUNGE."
         ),

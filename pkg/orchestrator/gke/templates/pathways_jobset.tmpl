@@ -5,6 +5,9 @@ metadata:
   labels:
     gcluster.google.com/workload: {{.WorkloadName}}
     kueue.x-k8s.io/queue-name: {{.KueueQueueName}}
+{{- if .MLDiagnosticsEnabled }}
+    managed-mldiagnostics-gke: "true"
+{{- end }}
   annotations:
     jobset.sigs.k8s.io/hack: "true"
 spec:
@@ -158,9 +161,6 @@ spec:
               securityContext:
                 privileged: true
               resources:
-                limits:
-                  cpu: "24"
-                  memory: "100Gi"
                 requests:
                   cpu: "2"
                   memory: "8Gi"
@@ -182,38 +182,28 @@ spec:
                 value: {{ printf "%q" .Value }}
               {{- end }}
               command:
-              - "/bin/bash"
-              - "-c"
-              - |
-                echo "GCluster Start: $(date)"
-                _sigterm() {
-                  if [ -n "$PID" ]; then
-                    kill -SIGTERM $PID 2>/dev/null
-                    wait $PID
-                  fi
-                  exit 143
-                }
-                trap _sigterm SIGTERM
-                (
-                  {{.CommandToRun}}
-                ) & PID=$!
-                wait $PID
-                EXIT_CODE=$?
-                echo "GCluster End: $(date)"
-                echo "Exit code: $EXIT_CODE"
-                exit $EXIT_CODE
+              {{- range $.Command }}
+              - {{ printf "%q" . }}
+              {{- end }}
               volumeMounts:
-              - name: shared-tmp
-                mountPath: /tmp
+                - name: shared-tmp
+                  mountPath: /tmp
+                - name: dshm
+                  mountPath: /dev/shm
 {{- if .VolumeMountsYAML }}
 {{(StructuralData .VolumeMountsYAML)}}
 {{- end }}
             {{- end}}
             volumes:
-            - name: shared-tmp
-              hostPath:
-                path: /tmp
-                type: DirectoryOrCreate
+              - name: shared-tmp
+                hostPath:
+                  path: /tmp
+                  type: DirectoryOrCreate
+{{- if not .Pathways.Headless }}
+              - name: dshm
+                emptyDir:
+                  medium: Memory
+{{- end }}
 {{- if .VolumesYAML }}
 {{(StructuralData .VolumesYAML)}}
 {{- end }}
@@ -228,13 +218,9 @@ spec:
         parallelism: {{.NodesPerSlice}}
         completions: {{.NodesPerSlice}}
         backoffLimit: {{.WorkerBackoffLimit}}
-        backoffLimitPerIndex: 4000
+        backoffLimitPerIndex: {{.WorkerBackoffLimitPerIndex}}
         podReplacementPolicy: Failed
         maxFailedIndexes: 0
-{{- if .PodFailurePolicy }}
-        podFailurePolicy:
-{{(StructuralData .PodFailurePolicy)}}
-{{- end }}
         template:
           metadata:
             labels:
@@ -285,11 +271,11 @@ spec:
               volumeMounts:
               - name: shared-tmp
                 mountPath: /tmp
-              {{- if .Pathways.MTCEnabled}}
-              - name: cache
-                mountPath: {{.Pathways.RamdiskDirectory}}
               - name: sidecar-shared-memory
                 mountPath: /tmp/sidecar
+              {{- if .GKEMTCEnabled}}
+              - name: cache
+                mountPath: {{.GKEMTCRamdiskDirectory}}
               {{- end}}
             {{- end}}
             containers:
@@ -305,7 +291,7 @@ spec:
                 - --server_port=29005
                 - --resource_manager_address=$(PATHWAYS_HEAD):29001
                 - "--gcs_scratch_location={{.Pathways.GCSLocation}}"
-                {{- if .Pathways.MTCEnabled}}
+                {{- if .GKEMTCEnabled}}
                 - --cloud_pathways_sidecar_shm_directory=/tmp/sidecar
                 {{- end}}
                 {{- range .WorkerArgsList }}
@@ -354,30 +340,16 @@ spec:
               {{- end }}
 {{(StructuralData .ResourcesString)}}
               volumeMounts:
-              - name: shared-tmp
-                mountPath: /tmp
-              {{- if .Pathways.MTCEnabled}}
-              - name: cache
-                mountPath: {{.Pathways.RamdiskDirectory}}
-              - name: sidecar-shared-memory
-                mountPath: /tmp/sidecar
-              {{- end}}
+                - name: shared-tmp
+                  mountPath: /tmp
 {{- if .VolumeMountsYAML }}
 {{(StructuralData .VolumeMountsYAML)}}
 {{- end }}
             volumes:
-            - name: shared-tmp
-              hostPath:
-                path: /tmp
-                type: DirectoryOrCreate
-            {{- if .Pathways.MTCEnabled}}
-            - name: cache
-              csi:
-                driver: multitier-checkpoint.csi.storage.gke.io
-            - name: sidecar-shared-memory
-              emptyDir:
-                medium: Memory
-            {{- end}}
+              - name: shared-tmp
+                hostPath:
+                  path: /tmp
+                  type: DirectoryOrCreate
 {{- if .VolumesYAML }}
 {{(StructuralData .VolumesYAML)}}
 {{- end }}

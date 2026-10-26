@@ -21,10 +21,15 @@ import (
 	"hpc-toolkit/pkg/shell"
 	"strings"
 	"testing"
+	"time"
+
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 )
 
 func TestCancelCmd_Success(t *testing.T) {
-	resetSubmitCmdFlags() // Reset shared flags
+	setupSubmitTestEnv(t) // Reset shared flags
 
 	// Mock the orchestrator factory
 	oldFactory := gkeOrchestratorFactory
@@ -52,7 +57,14 @@ func TestCancelCmd_Success(t *testing.T) {
 type mockCancelExecutor struct{}
 
 func (m *mockCancelExecutor) ExecuteCommand(name string, args ...string) shell.CommandResult {
+	if name == "gcloud" && len(args) >= 3 && args[0] == "container" && args[1] == "clusters" && args[2] == "describe" {
+		return shell.CommandResult{ExitCode: 0, Stdout: "{}"}
+	}
 	return shell.CommandResult{ExitCode: 0}
+}
+
+func (m *mockCancelExecutor) ExecuteCommandWithTimeout(_ time.Duration, name string, args ...string) shell.CommandResult {
+	return m.ExecuteCommand(name, args...)
 }
 
 func (m *mockCancelExecutor) ExecuteCommandStream(name string, args ...string) error {
@@ -64,10 +76,6 @@ type mockKubeClient struct {
 	err       error
 }
 
-func (m *mockKubeClient) GetJobNamespace(workloadName string) (string, error) {
-	return m.namespace, m.err
-}
-
 func (m *mockKubeClient) ListWorkloads(namespace string, workloadName string) ([]string, error) {
 	return nil, nil
 }
@@ -76,11 +84,23 @@ func (m *mockKubeClient) DeleteJobSet(namespace string, name string) error {
 	return m.err
 }
 
-func (m *mockKubeClient) ListJobSets(labelSelector string) ([]orchestrator.JobStatus, error) {
+func (m *mockKubeClient) ListResources(gvr schema.GroupVersionResource, namespace, labelSelector string) ([]unstructured.Unstructured, error) {
+	return nil, m.err
+}
+
+func (m *mockKubeClient) GetResource(gvr schema.GroupVersionResource, namespace, name string) (*unstructured.Unstructured, error) {
+	return nil, m.err
+}
+
+func (m *mockKubeClient) DeleteResource(gvr schema.GroupVersionResource, namespace, name string, pre *metav1.Preconditions) error {
+	return m.err
+}
+
+func (m *mockKubeClient) ListJobSets(namespace string, labelSelector string) ([]orchestrator.JobStatus, error) {
 	return []orchestrator.JobStatus{}, m.err
 }
 
-func (m *mockKubeClient) GetCurrentNamespace() (string, error) {
+func (m *mockKubeClient) GetCurrentNamespace(clusterName, location, projectID string) (string, error) {
 	if m.namespace != "" {
 		return m.namespace, nil
 	}
@@ -88,7 +108,7 @@ func (m *mockKubeClient) GetCurrentNamespace() (string, error) {
 }
 
 func TestCancelCmd_MissingArgs(t *testing.T) {
-	resetSubmitCmdFlags()
+	setupSubmitTestEnv(t)
 
 	_, err := executeCommand(JobCmd, "cancel")
 	if err == nil {
@@ -101,7 +121,7 @@ func TestCancelCmd_MissingArgs(t *testing.T) {
 }
 
 func TestCancelCmd_JobNotFound(t *testing.T) {
-	resetSubmitCmdFlags()
+	setupSubmitTestEnv(t)
 
 	oldFactory := gkeOrchestratorFactory
 	defer func() { gkeOrchestratorFactory = oldFactory }()

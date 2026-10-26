@@ -5,8 +5,8 @@
   * [Pinning Specific Images](#pinning-specifics-images)
 * [Cluster Toolkit Supported Images](#cluster-toolkit-supported-images)
   * [HPC Rocky Linux 9](#hpc-rocky-linux-9)
-  * [Debian 11](#debian-11)
-  * [Ubuntu 22.04 LTS](#ubuntu-2204-lts)
+  * [Debian 12](#debian-12)
+  * [Ubuntu 24.04 LTS](#ubuntu-2404-lts)
   * [Windows](#windows)
   * [Other Images](#other-images)
   * [Slurm on GCP](#slurm-on-gcp)
@@ -27,7 +27,7 @@ Please see the [blueprint catalog](https://cloud.google.com/hpc-toolkit/docs/set
 > modules that have their own image specification. Please read the
 > documentation for any module utilized.
 
-When an Cluster Toolkit blueprint points to a predefined source module (e.g.
+When a Cluster Toolkit blueprint points to a predefined source module (e.g.
 `community/modules/compute/schedmd-slurm-gcp-v6-nodeset`), generally the
 module has a default image defined. In order to override this default image, a
 user may specify the `instance_image` setting in the yaml blueprint, within
@@ -43,7 +43,7 @@ instance_image:
 
 The `project` setting defines the space where the image will be found. Either
 this is set to a known project where HPC images are hosted (e.g
-`cloud-hpc-image-public`, `schedmd-slurm-public`, etc.) or a private project
+`cloud-hpc-image-public`, `schedmd-slurm-public`, `advanced-compute-images`, etc.) or a private project
 owned by you or your team.
 
 The `family` setting defines a group of images built with the same label, and
@@ -71,11 +71,11 @@ blueprint:
         project: cloud-hpc-image-public
 
       instance_image:
-        family: debian-11
+        family: debian-12
         project: debian-cloud
 
       instance_image:
-        family: ubuntu-2204-lts
+        family: ubuntu-2404-lts
         project: ubuntu-os-cloud
 ```
 
@@ -109,14 +109,14 @@ project and the new image name in the `instance_image` field discussed in
 
 HPC Rocky Linux 9 is the primary supported VM image for HPC workloads on Google Cloud.
 
-### Debian 11
+### Debian 12
 
-The Cluster Toolkit officially supports Debian 11 based VM images in the majority of
+The Cluster Toolkit officially supports Debian 12 based VM images in the majority of
 our modules, with a couple of exceptions.
 
-### Ubuntu 22.04 LTS
+### Ubuntu 24.04 LTS
 
-The Cluster Toolkit officially supports Ubuntu 22.04 LTS based VM images in the
+The Cluster Toolkit officially supports Ubuntu 24.04 LTS based VM images in the
 majority of our modules, with a couple of exceptions.
 
 ### Windows
@@ -173,7 +173,7 @@ description of our support for Windows images.
   <td></td>
   <td>✓</td>
   <td><a href="../examples/hpc-slurm.yaml">✓</a></td>
-  <td><a href="../community/examples/hpc-slurm-ubuntu2204.yaml">✓</a></td>
+  <td><a href="../community/examples/hpc-slurm-ubuntu2404.yaml">✓</a></td>
 </tr>
 <tr>
   <th>Startup script</th>
@@ -282,7 +282,7 @@ These instructions apply to the following modules:
 [batch-job]: ../modules/scheduler/batch-job-template
 [batch-login]: ../modules/scheduler/batch-login-node
 [htcondor-setup]: ../community/modules/scheduler/htcondor-setup
-[hpc-slurm-ubuntu2204.yaml]: ../community/examples/hpc-slurm-ubuntu2204.yaml
+[hpc-slurm-ubuntu2404.yaml]: ../community/examples/hpc-slurm-ubuntu2404.yaml
 
 [htc-htcondor.yaml]: ../community/examples/htc-htcondor.yaml
 [vm-startup.yaml]: ../tools/validate_configs/os_compatibility_tests/vm-startup.yaml

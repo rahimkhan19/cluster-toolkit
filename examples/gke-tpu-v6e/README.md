@@ -11,7 +11,16 @@ Key parameters when working with TPUs:
 
 Before you start, make sure you have performed the following tasks:
 
-* Enable the Google Kubernetes Engine API.
+* Enable the required Google Cloud APIs (`compute.googleapis.com`, `container.googleapis.com`, `iam.googleapis.com`, `storage.googleapis.com`):
+
+  ```sh
+  gcloud services enable \
+    compute.googleapis.com \
+    container.googleapis.com \
+    iam.googleapis.com \
+    storage.googleapis.com \
+    --project=<PROJECT_ID>
+  ```
 
 * If you want to use the Google Cloud CLI for this task, [install](https://cloud.google.com/sdk/docs/install) and then [initialize](https://cloud.google.com/sdk/docs/initializing) the gcloud CLI. If you previously installed the gcloud CLI, get the latest version by running gcloud components update.
   > **NOTE:** For existing gcloud CLI installations, make sure to set the compute/region and compute/zone properties. By setting default locations, you can avoid errors in gcloud CLI like the following: One of [--zone, --region] must be supplied: Please specify location.
@@ -31,17 +40,10 @@ This section guides you through the cluster creation process, ensuring that your
 
 1. [Launch Cloud Shell](https://cloud.google.com/shell/docs/launching-cloud-shell). You can use a different environment; however, we recommend Cloud Shell because the dependencies are already pre-installed for Cluster Toolkit. If you don't want to use Cloud Shell, follow the instructions to [install dependencies](https://cloud.google.com/cluster-toolkit/docs/setup/install-dependencies) to prepare a different environment.
 
-1. Clone the Cluster Toolkit from the git repository:
+1. From the root of the [`cluster-toolkit`](https://github.com/GoogleCloudPlatform/cluster-toolkit) repository, build `./gcluster` (if not already built):
 
     ```sh
-    cd ~
-    git clone https://github.com/GoogleCloudPlatform/cluster-toolkit.git
-    ```
-
-1. Install the Cluster Toolkit:
-
-    ```sh
-    cd cluster-toolkit && git checkout main && make
+    test -x ./gcluster || make
     ```
 
 1. Create a Cloud Storage bucket to store the state of the Terraform deployment:
@@ -69,17 +71,13 @@ This section guides you through the cluster creation process, ensuring that your
    * `machine_type`: the machine type of the TPU.
    * `tpu_topology`: the TPU placement topology for pod slice node pool.
    * `authorized_cidr`: The IP address range that you want to allow to connect with the cluster. This CIDR block must include the IP address of the machine to call Terraform.
-   * `reservation`: the name of the compute engine reservation of TPU v6e nodes.
+   * `reservation_affinity`: the reservation settings (by default, specify the reservation name under Option 1, or uncomment an alternative consumption model such as DWS Flex Start, DWS Flex Start + Queued Provisioning, Spot, or On-Demand).
 
     > **Note:** The `static_node_count` is now automatically calculated from `machine_type`, `num_slices` and `tpu_topology`. It is derived using the formula: `(total_chips_in_topology / chips_per_machine)`.
 
     To modify advanced settings, edit `examples/gke-tpu-v6e/gke-tpu-v6e.yaml`.
 
-1. To use on-demand capacity, you can remove the reservation usage by making the following changes.
-   1. Remove the `reservation` variable from the [`gke-tpu-v6e-deployment.yaml`](https://github.com/GoogleCloudPlatform/cluster-toolkit/blob/main/examples/gke-tpu-v6e/gke-tpu-v6e-deployment.yaml) file.
-   1. Remove the `reservation_affinity` block from the nodepool module.
-
-1. To utilize spot instances, remove the reservation variable from gke-tpu-v6e-deployment.yaml and add spot: true. In gke-tpu-v6e.yaml, replace the reservation_affinity block under gke-tpu-v6e-pool module with spot: $(vars.spot)
+    > **Note:** Queued provisioning (Option 3) is only supported on multi-host TPU slices. For more information, see [About flex-start provisioning mode](https://cloud.google.com/kubernetes-engine/docs/concepts/dws).
 
 1. Generate [Application Default Credentials (ADC)](https://cloud.google.com/docs/authentication/provide-credentials-adc#google-idp) to provide access to Terraform.
 
@@ -87,7 +85,6 @@ This section guides you through the cluster creation process, ensuring that your
     using TPU v6e machine types:
 
    ```sh
-    cd ~/cluster-toolkit
     ./gcluster deploy -d \
     examples/gke-tpu-v6e/gke-tpu-v6e-deployment.yaml \
     examples/gke-tpu-v6e/gke-tpu-v6e.yaml
@@ -107,12 +104,11 @@ This repository also includes an advanced blueprint, `gke-tpu-v6e-advanced.yaml`
 
 The process is nearly identical to the basic deployment.
 
-1. Ensure you have completed steps 1-7 from the "Create a cluster" section above. The same `gke-tpu-v6e-deployment.yaml` file can be used.
+1. Ensure you have completed steps 1-6 from the "Create a cluster" section above. The same `gke-tpu-v6e-deployment.yaml` file can be used.
 
 1. In the final deploy command, simply point to the `gke-tpu-v6e-advanced.yaml` blueprint instead.
 
     ```sh
-    cd ~/cluster-toolkit
     ./gcluster deploy -d \
     examples/gke-tpu-v6e/gke-tpu-v6e-deployment.yaml \
     examples/gke-tpu-v6e/gke-tpu-v6e-advanced.yaml
@@ -124,16 +120,24 @@ The process is nearly identical to the basic deployment.
 
 This blueprint supports [Kueue](https://kueue.sigs.k8s.io/), a kubernetes-native system for managing quotas and job queuing. This is enabled by default in the advanced blueprint (`gke-tpu-v6e-advanced.yaml`).
 
-1. **Quota:** The blueprint automatically calculates and sets a `google.com/tpu` quota in the `ClusterQueue`. The node count is automatically derived from your `machine_type` and `tpu_topology`, and the quota is calculated as: `num_slices` × `(total_chips_in_topology / chips_per_machine)` × `chips_per_machine`.
-2. **Submit a Job:** To submit a job to the queue, add the label `kueue.x-k8s.io/queue-name: user-queue` to your Job or JobSet manifest.
+**NOTE**:
+By default, the toolkit dynamically applies an embedded kueue configuration based on your **Pathways** and **Dynamic Slicing** settings.
+
+1. **Custom Configurations:**
+   * If you explicitly disable both Pathways and Dynamic Slicing, the toolkit will still install the Kueue engine/controllers, but it leaves them unconfigured(no default queues or resource flavors are created).
+   * If you want to override the default embedded configurations, or apply configuration in the scenario above, you can uncomment and set `config_path` in the `kueue` section of the `workload-manager-install` module in the blueprint.
+   * For more details on default configurations and variables, see the [`kubectl-apply` documentation](https://github.com/GoogleCloudPlatform/cluster-toolkit/tree/main/modules/management/kubectl-apply#inputs).
+
+2. **Quota:** The blueprint automatically calculates and sets a `google.com/tpu` quota in the `ClusterQueue`. The node count is automatically derived from your `machine_type` and `tpu_topology`, and the quota is calculated as: `num_slices` × `(total_chips_in_topology / chips_per_machine)` × `chips_per_machine`.
+3. **Submit a Job:** To submit a job to the queue, add the label `kueue.x-k8s.io/queue-name: user-queue` to your Job or JobSet manifest.
 
     A sample job file is provided: `kueue-job-sample.yaml`.
 
     ```sh
-    kubectl create -f ~/cluster-toolkit/examples/gke-tpu-v6e/kueue-job-sample.yaml
+    kubectl create -f examples/gke-tpu-v6e/kueue-job-sample.yaml
     ```
 
-3. **Validation:** Check the status of your workload.
+4. **Validation:** Check the status of your workload.
 
     ```sh
     kubectl get workloads
@@ -146,10 +150,10 @@ The [tpu-multislice.yaml](https://github.com/GoogleCloudPlatform/cluster-toolkit
 1. Connect to your cluster:
 
     ```sh
-    gcloud container clusters get-credentials gke-tpu-v6e --region=REGION --project=PROJECT_ID
+    gcloud container clusters get-credentials DEPLOYMENT_NAME --region=REGION --project=PROJECT_ID
     ```
 
-    Replace the `REGION` and `PROJECT_ID` with the ones used in the blueprint.
+    Replace `DEPLOYMENT_NAME`, `REGION`, and `PROJECT_ID` with the ones used in the blueprint.
 
 1. Update the nodeSelector under the template spec of tpu-multislice.yaml file. The values depend on the tpu accelerator and tpu topology used in the blueprint.
 
@@ -162,7 +166,7 @@ The [tpu-multislice.yaml](https://github.com/GoogleCloudPlatform/cluster-toolkit
 1. Create the resources:
 
     ```sh
-    kubectl create -f ~/cluster-toolkit/examples/gke-tpu-v6e/tpu-multislice.yaml
+    kubectl create -f examples/gke-tpu-v6e/tpu-multislice.yaml
     ```
 
     This command returns a service and a job name.
@@ -206,6 +210,8 @@ To avoid recurring charges for the resources used on this page, clean up the res
    ```sh
    ./gcluster destroy gke-tpu-v6e/
    ```
+
+**Note:** GCS buckets created for Terraform state are not deleted by the `./gcluster destroy` command and must be deleted manually.
 
 ## Appendix
 

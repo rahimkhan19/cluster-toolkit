@@ -13,7 +13,9 @@ package validators
 
 import (
 	"fmt"
+	"net"
 	"regexp"
+	"sort"
 	"strings"
 
 	"hpc-toolkit/pkg/config"
@@ -22,11 +24,231 @@ import (
 	"github.com/zclconf/go-cty/cty"
 )
 
+// CIDRValidator implements the RuleValidator interface for the 'cidr' type.
+// It verifies that a given string is a valid IP CIDR block.
+// Used in a module's metadata.yaml via `- validator: cidr`.
+type CIDRValidator struct{}
+
+func extractCIDRValue(val cty.Value, objectKey string, allowNull bool, path config.Path) (cty.Value, error) {
+	if val.IsNull() {
+		return cty.NullVal(cty.String), nil
+	}
+	if val.Type() == cty.String {
+		return val, nil
+	}
+	if val.Type().IsObjectType() {
+		if objectKey == "" {
+			return cty.NilVal, config.BpError{Err: fmt.Errorf("object_key is required when validating an object"), Path: path}
+		}
+		if !val.Type().HasAttribute(objectKey) {
+			if !allowNull {
+				return cty.NilVal, config.BpError{Err: fmt.Errorf("missing key %q in object", objectKey), Path: path}
+			}
+			return cty.NilVal, nil
+		}
+		return val.GetAttr(objectKey), nil
+	}
+	if val.Type().IsMapType() {
+		if objectKey == "" {
+			return cty.NilVal, config.BpError{Err: fmt.Errorf("object_key is required when validating a map"), Path: path}
+		}
+		if !val.HasIndex(cty.StringVal(objectKey)).True() {
+			if !allowNull {
+				return cty.NilVal, config.BpError{Err: fmt.Errorf("missing key %q in map", objectKey), Path: path}
+			}
+			return cty.NilVal, nil
+		}
+		return val.Index(cty.StringVal(objectKey)), nil
+	}
+	return cty.NilVal, config.BpError{Err: fmt.Errorf("unsupported type %s for CIDR validation", val.Type().FriendlyName()), Path: path}
+}
+
+func validateCIDRValue(cidrVal cty.Value, rule modulereader.ValidationRule, allowNull bool, path config.Path) error {
+	if cidrVal == cty.NilVal {
+		return nil
+	}
+	if cidrVal.IsNull() {
+		if allowNull {
+			return nil
+		}
+		msg := rule.ErrorMessage
+		if msg == "" {
+			msg = "CIDR block cannot be null or empty"
+		}
+		return config.BpError{Err: fmt.Errorf("%s", msg), Path: path}
+	}
+	if cidrVal.Type() != cty.String {
+		return config.BpError{Err: fmt.Errorf("CIDR block must be a string, got %s", cidrVal.Type().FriendlyName()), Path: path}
+	}
+	if !cidrVal.IsKnown() {
+		return nil
+	}
+	str := cidrVal.AsString()
+	if _, _, err := net.ParseCIDR(str); err != nil {
+		msg := rule.ErrorMessage
+		if msg == "" {
+			msg = fmt.Sprintf("invalid CIDR address: %s", str)
+		}
+		return config.BpError{Err: fmt.Errorf("%s", msg), Path: path}
+	}
+	return nil
+}
+
+// Validate checks if the variables specified in the rule are valid CIDR addresses.
+func (c *CIDRValidator) Validate(
+	bp config.Blueprint,
+	mod config.Module,
+	rule modulereader.ValidationRule,
+	group config.Group,
+	modIdx int) error {
+
+	allowNull, err := parseBoolInput(rule.Inputs, "allow_null", false)
+	if err != nil {
+		modPath := config.Root.Groups.At(bp.GroupIndex(group.Name)).Modules.At(modIdx).Source
+		return config.BpError{Err: fmt.Errorf("validation rule for module %q: %v", mod.ID, err), Path: modPath}
+	}
+	objectKey, _ := parseString(rule.Inputs["object_key"])
+
+	return IterateRuleTargets(bp, mod, rule, group, modIdx, func(t Target) error {
+		for _, val := range t.Values {
+			if !val.IsKnown() {
+				continue
+			}
+			cidrVal, err := extractCIDRValue(val, objectKey, allowNull, t.Path)
+			if err != nil {
+				return err
+			}
+			if err := validateCIDRValue(cidrVal, rule, allowNull, t.Path); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
 // RegexValidator implements the Validator interface for 'regex' type.
 type RegexValidator struct{}
 
+func resolveSettingToString(
+	bp config.Blueprint,
+	group config.Group,
+	modIdx int,
+	mod config.Module,
+	settingName string,
+	optional bool,
+	allowNull bool,
+) (string, bool, config.Path, error) {
+	val, path := getSettingWithFallback(bp, group, modIdx, mod, settingName)
+	if val == cty.NilVal {
+		if optional {
+			return "", false, path, nil
+		}
+		return "", false, path, config.BpError{
+			Err:  fmt.Errorf("setting %q not found in module %q settings", settingName, mod.ID),
+			Path: path,
+		}
+	}
+	if val.Type() != cty.String {
+		return "", false, path, config.BpError{Err: fmt.Errorf("setting %q must be a string", settingName), Path: path}
+	}
+	if !val.IsKnown() {
+		return "", false, path, nil
+	}
+	if val.IsNull() {
+		if !allowNull {
+			return "", false, path, config.BpError{Err: fmt.Errorf("setting %q cannot be null", settingName), Path: path}
+		}
+		return "", true, path, nil
+	}
+	return val.AsString(), true, path, nil
+}
+
+func (r *RegexValidator) validateConcat(
+	bp config.Blueprint,
+	mod config.Module,
+	rule modulereader.ValidationRule,
+	group config.Group,
+	modIdx int,
+	re *regexp.Regexp,
+	patternRaw string,
+	optional bool,
+) error {
+	varsList, _ := parseStringList(rule.Inputs["vars"])
+	separator, _ := parseString(rule.Inputs["separator"])
+	allowNullList, _ := parseStringList(rule.Inputs["allow_null"])
+	allowNullMap := make(map[string]struct{})
+	for _, v := range allowNullList {
+		allowNullMap[v] = struct{}{}
+	}
+
+	var parts []string
+	var targetPath config.Path
+	first := true
+
+	for _, varName := range varsList {
+		_, allowNull := allowNullMap[varName]
+		val, known, path, err := resolveSettingToString(bp, group, modIdx, mod, varName, optional, allowNull)
+		if err != nil {
+			return err
+		}
+		if !known {
+			return nil
+		}
+		if first {
+			targetPath = path
+			first = false
+		}
+		if val != "" {
+			parts = append(parts, val)
+		}
+	}
+
+	if len(parts) == 0 {
+		return nil
+	}
+
+	joined := strings.Join(parts, separator)
+	if !re.MatchString(joined) {
+		msg := rule.ErrorMessage
+		if msg == "" {
+			msg = fmt.Sprintf("concatenated value %q does not match pattern %q", joined, patternRaw)
+		}
+		return config.BpError{Err: fmt.Errorf("%s", msg), Path: targetPath}
+	}
+	return nil
+}
+
+func (r *RegexValidator) validateStandard(
+	bp config.Blueprint,
+	mod config.Module,
+	rule modulereader.ValidationRule,
+	group config.Group,
+	modIdx int,
+	re *regexp.Regexp,
+	patternRaw string,
+) error {
+	validateValues := func(values []cty.Value, path config.Path) error {
+		for _, val := range values {
+			if val == cty.NilVal || !val.IsKnown() || val.IsNull() || val.Type() != cty.String {
+				continue
+			}
+			if !re.MatchString(val.AsString()) {
+				msg := rule.ErrorMessage
+				if msg == "" {
+					msg = fmt.Sprintf("value %q does not match pattern %q", val.AsString(), patternRaw)
+				}
+				return config.BpError{Err: fmt.Errorf("%s", msg), Path: path}
+			}
+		}
+		return nil
+	}
+
+	return IterateRuleTargets(bp, mod, rule, group, modIdx, func(t Target) error {
+		return validateValues(t.Values, t.Path)
+	})
+}
+
 // Validate checks if the variables specified in the rule match the provided regex pattern.
-// This function focuses on the predicate and uses IterateRuleTargets from targets.go to resolve targets.
 func (r *RegexValidator) Validate(
 	bp config.Blueprint,
 	mod config.Module,
@@ -53,28 +275,26 @@ func (r *RegexValidator) Validate(
 		}
 	}
 
-	// helper: validate flattened cty.Values against regex, returning first error
-	validateValues := func(values []cty.Value, path config.Path) error {
-		for _, val := range values {
-			if val.Type() != cty.String {
-				continue
-			}
-			if !re.MatchString(val.AsString()) {
-				msg := rule.ErrorMessage
-				if msg == "" {
-					msg = fmt.Sprintf("value %q does not match pattern %q", val.AsString(), patternRaw)
-				}
-				return config.BpError{Err: fmt.Errorf("%s", msg), Path: path}
-			}
+	concat, err := parseBoolInput(rule.Inputs, "concat", false)
+	if err != nil {
+		return config.BpError{
+			Err:  fmt.Errorf("failed to parse 'concat' input: %w", err),
+			Path: config.Root.Groups.At(bp.GroupIndex(group.Name)).Modules.At(modIdx).Source,
 		}
-		return nil
 	}
 
-	// iterate targets using shared logic
-	err = IterateRuleTargets(bp, mod, rule, group, modIdx, func(t Target) error {
-		return validateValues(t.Values, t.Path)
-	})
-	return err
+	optional, err := parseBoolInput(rule.Inputs, "optional", true)
+	if err != nil {
+		return config.BpError{
+			Err:  fmt.Errorf("failed to parse 'optional' input: %w", err),
+			Path: config.Root.Groups.At(bp.GroupIndex(group.Name)).Modules.At(modIdx).Source,
+		}
+	}
+
+	if concat {
+		return r.validateConcat(bp, mod, rule, group, modIdx, re, patternRaw, optional)
+	}
+	return r.validateStandard(bp, mod, rule, group, modIdx, re, patternRaw)
 }
 
 type AllowedEnumValidator struct{}
@@ -101,6 +321,9 @@ func (v *AllowedEnumValidator) normalizeAllowed(allowedRaw interface{}) ([]strin
 // checkValues iterates through cty.Values to ensure they exist within the allowed set, handling nulls and casing.
 func (v *AllowedEnumValidator) checkValues(values []cty.Value, path config.Path, allowedSet map[string]struct{}, allowedList []string, caseSensitive bool, allowNull bool, errMsg string) error {
 	for _, val := range values {
+		if val == cty.NilVal || !val.IsKnown() {
+			continue
+		}
 		if val.IsNull() {
 			if allowNull {
 				continue
@@ -228,7 +451,7 @@ func (r *RangeValidator) validateTarget(
 	}
 
 	for _, val := range values {
-		if val.IsNull() || !val.IsKnown() {
+		if val == cty.NilVal || !val.IsKnown() || val.IsNull() {
 			continue
 		}
 		if val.Type() == cty.Number {
@@ -388,27 +611,25 @@ func (r *RequiredValidator) Validate(
 // It enforces that a 'dependent' variable is set or matches a value when a 'trigger' variable condition is met.
 type ConditionalValidator struct{}
 
-// Validate checks if the dependent variable satisfies the condition when the trigger variable is set.
-func (c *ConditionalValidator) Validate(
+// evalLegacyTrigger evaluates a single legacy 'trigger' variable condition.
+func evalLegacyTrigger(
 	bp config.Blueprint,
+	group config.Group,
+	modIdx int,
 	mod config.Module,
 	rule modulereader.ValidationRule,
-	group config.Group,
-	modIdx int) error {
-
-	optional, _ := parseBoolInput(rule.Inputs, "optional", true)
-
-	modPath := config.Root.Groups.At(bp.GroupIndex(group.Name)).Modules.At(modIdx).Source
-
+	optional bool,
+	modPath config.Path,
+) (bool, string, error) {
 	triggerName, ok := parseString(rule.Inputs["trigger"])
 	if !ok {
-		return config.BpError{Err: fmt.Errorf("validation rule for module %q is missing 'trigger'", mod.ID), Path: modPath}
+		return false, "", config.BpError{Err: fmt.Errorf("validation rule for module %q is missing 'trigger' or 'triggers'", mod.ID), Path: modPath}
 	}
 
 	triggerVal, _, err := getModuleSettingValues(bp, group, modIdx, mod, triggerName)
 	if err != nil {
 		if !optional {
-			return config.BpError{
+			return false, "", config.BpError{
 				Err:  fmt.Errorf("setting %q not found in module %q settings", triggerName, mod.ID),
 				Path: config.Root.Groups.At(bp.GroupIndex(group.Name)).Modules.At(modIdx).Settings.Dot(triggerName),
 			}
@@ -420,11 +641,62 @@ func (c *ConditionalValidator) Validate(
 	expectedRawVal, isExpectedGiven := rule.Inputs["trigger_value"]
 	triggerExpectedVal := convertToCty(expectedRawVal)
 
-	conditionMet := false
 	if !isExpectedGiven {
-		conditionMet = isVarSet(triggerVal)
-	} else {
-		conditionMet = ValuesMatch(triggerVal, evaluateAndFlatten(triggerExpectedVal))
+		return isVarSet(triggerVal), triggerName, nil
+	}
+	return ValuesMatch(triggerVal, evaluateAndFlatten(triggerExpectedVal)), triggerName, nil
+}
+
+// evalTrigger evaluates either compound 'triggers' or a legacy single 'trigger'.
+func (c *ConditionalValidator) evalTrigger(
+	bp config.Blueprint,
+	group config.Group,
+	modIdx int,
+	mod config.Module,
+	rule modulereader.ValidationRule,
+	modPath config.Path,
+) (bool, string, error) {
+	triggersRaw, hasTriggers := rule.Inputs["triggers"].(map[string]interface{})
+	if hasTriggers {
+		if !evalTriggers(bp, group, modIdx, mod, triggersRaw) {
+			return false, "", nil
+		}
+		var triggerDescs []string
+		for k, v := range triggersRaw {
+			triggerDescs = append(triggerDescs, fmt.Sprintf("%s=%v", k, v))
+		}
+		sort.Strings(triggerDescs)
+		return true, fmt.Sprintf("[%s]", strings.Join(triggerDescs, ", ")), nil
+	}
+
+	optional, _ := parseBoolInput(rule.Inputs, "optional", true)
+	met, name, err := evalLegacyTrigger(bp, group, modIdx, mod, rule, optional, modPath)
+	if err != nil {
+		return false, "", err
+	}
+	return met, fmt.Sprintf("%q", name), nil
+}
+
+func formatMissingDependentMsg(rule modulereader.ValidationRule, dependentName, triggerDesc string) string {
+	if rule.ErrorMessage != "" {
+		return rule.ErrorMessage
+	}
+	return fmt.Sprintf("variable %q is required when %s condition is met", dependentName, triggerDesc)
+}
+
+// Validate checks if the dependent variable satisfies the condition when the trigger variable is set.
+func (c *ConditionalValidator) Validate(
+	bp config.Blueprint,
+	mod config.Module,
+	rule modulereader.ValidationRule,
+	group config.Group,
+	modIdx int) error {
+
+	modPath := config.Root.Groups.At(bp.GroupIndex(group.Name)).Modules.At(modIdx).Source
+
+	conditionMet, triggerDesc, err := c.evalTrigger(bp, group, modIdx, mod, rule, modPath)
+	if err != nil {
+		return err
 	}
 	if !conditionMet {
 		return nil // Condition not met; skip validation for the dependent variable.
@@ -446,10 +718,7 @@ func (c *ConditionalValidator) Validate(
 
 	if !isDepExpectedGiven {
 		if !isVarSet(dependentVal) {
-			msg := rule.ErrorMessage
-			if msg == "" {
-				msg = fmt.Sprintf("variable %q is required when %q condition is met", dependentName, triggerName)
-			}
+			msg := formatMissingDependentMsg(rule, dependentName, triggerDesc)
 			return config.BpError{Err: fmt.Errorf("%s", msg), Path: depPath}
 		}
 		return nil
@@ -489,19 +758,36 @@ func (c *ConditionalRegexValidator) Validate(
 		return nil
 	}
 
-	dependentVal, depPath := getSettingWithFallback(bp, group, modIdx, mod, dependent)
-	if dependentVal.IsNull() || dependentVal == cty.NilVal || dependentVal.Type() != cty.String {
+	rawVal, _ := getSettingWithFallback(bp, group, modIdx, mod, dependent)
+	if rawVal != cty.NilVal && !rawVal.IsKnown() {
+		// Defer validation when the value is dynamically computed or unknown at validation time
 		return nil
 	}
 
-	matched := re.MatchString(dependentVal.AsString())
+	dependentVal, known, depPath, err := resolveSettingToString(bp, group, modIdx, mod, dependent, true, true)
+	if err != nil {
+		return err
+	}
+	required, _ := parseBoolInput(rule.Inputs, "required", false)
+	if !known || dependentVal == "" {
+		if required {
+			msg := rule.ErrorMessage
+			if msg == "" {
+				msg = fmt.Sprintf("variable %q is required when conditions are met", dependent)
+			}
+			return config.BpError{Err: fmt.Errorf("%s", msg), Path: depPath}
+		}
+		return nil
+	}
+
+	matched := re.MatchString(dependentVal)
 	if matched != matchExpected {
 		msg := rule.ErrorMessage
 		if msg == "" {
 			if matchExpected {
-				msg = fmt.Sprintf("variable %q value %q must match pattern %q when conditions are met", dependent, dependentVal.AsString(), re.String())
+				msg = fmt.Sprintf("variable %q value %q must match pattern %q when conditions are met", dependent, dependentVal, re.String())
 			} else {
-				msg = fmt.Sprintf("variable %q value %q must not match pattern %q when conditions are met", dependent, dependentVal.AsString(), re.String())
+				msg = fmt.Sprintf("variable %q value %q must not match pattern %q when conditions are met", dependent, dependentVal, re.String())
 			}
 		}
 		return config.BpError{Err: fmt.Errorf("%s", msg), Path: depPath}
@@ -566,6 +852,33 @@ func getSettingWithFallback(
 	return cty.NilVal, path
 }
 
+// matchTrigger reports whether an actual setting value satisfies an expected trigger value.
+//
+// Null handling is deliberately asymmetric and is relied upon by compound 'triggers' maps:
+//   - expected is null  -> matches when the setting IS set (the "any value" idiom, e.g.
+//     'accelerator_topology: null' means "whenever a topology is configured").
+//   - actual is null    -> matches only when the expected value is itself unset/falsy, so a
+//     rule keyed on 'foo: false' still fires for a module that never sets foo.
+//
+// Caveat: isVarSet is a truthiness check, not a presence check. The number 0, the empty
+// string, and the boolean false all report as NOT set. Rules that need to match a literal
+// false therefore rely on the module default resolving to a concrete false via
+// getSettingWithFallback, which then takes the equality path below rather than either
+// null path.
+func matchTrigger(actualVal, expectedVal cty.Value) bool {
+	if expectedVal == cty.NilVal || (expectedVal.IsKnown() && expectedVal.IsNull()) {
+		return isVarSet([]cty.Value{actualVal})
+	}
+	if actualVal == cty.NilVal || actualVal.IsNull() {
+		return !isVarSet([]cty.Value{expectedVal})
+	}
+	if !actualVal.IsKnown() || !expectedVal.IsKnown() {
+		return false
+	}
+	eq := actualVal.Equals(expectedVal)
+	return eq.IsKnown() && !eq.IsNull() && eq.True()
+}
+
 func evalTriggers(
 	bp config.Blueprint,
 	group config.Group,
@@ -576,15 +889,7 @@ func evalTriggers(
 	for name, expectedValRaw := range triggers {
 		expectedVal := convertToCty(expectedValRaw)
 		actualVal, _ := getSettingWithFallback(bp, group, modIdx, mod, name)
-
-		var matches bool
-		if actualVal.IsNull() || actualVal == cty.NilVal {
-			matches = !isVarSet([]cty.Value{expectedVal}) || expectedVal.False()
-		} else {
-			matches = actualVal.Equals(expectedVal).True()
-		}
-
-		if !matches {
+		if !matchTrigger(actualVal, expectedVal) {
 			return false
 		}
 	}

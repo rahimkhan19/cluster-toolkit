@@ -15,12 +15,17 @@
 package gke
 
 import (
+	"context"
 	"hpc-toolkit/pkg/orchestrator"
 	"hpc-toolkit/pkg/shell"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/types"
 )
 
 func defaultMockResponses(clusterName, location, project string) map[string][]shell.CommandResult {
@@ -49,6 +54,7 @@ func defaultMockResponses(clusterName, location, project string) map[string][]sh
 		"kubectl get workloads":                                           {workloadsResult, workloadsResult, workloadsResult, workloadsResult},
 		"kubectl describe jobsets":                                        {{ExitCode: 0, Stdout: "jobset-config"}},
 		"kubectl describe workloads":                                      {{ExitCode: 0, Stdout: "workload-config"}},
+		"kubectl config set-context":                                      {{ExitCode: 0}},
 	}
 }
 
@@ -57,12 +63,8 @@ func TestInspectCluster_Success(t *testing.T) {
 	location := "us-central1-a"
 	project := "test-project"
 
-	t.Cleanup(func() {
-		files, _ := filepath.Glob("gcluster-inspect-" + clusterName + "-*.log")
-		for _, f := range files {
-			_ = os.Remove(f)
-		}
-	})
+	tempDir := t.TempDir()
+	logFilePath := filepath.Join(tempDir, "gcluster-inspect-"+clusterName+".log")
 
 	responses := defaultMockResponses(clusterName, location, project)
 	mockExec := NewMockExecutor(responses)
@@ -79,6 +81,7 @@ func TestInspectCluster_Success(t *testing.T) {
 		ClusterLocation: location,
 		WorkloadName:    "test-workload",
 		Show:            false,
+		OutputPath:      logFilePath,
 	}
 
 	err := orc.InspectCluster(opts)
@@ -87,14 +90,10 @@ func TestInspectCluster_Success(t *testing.T) {
 	}
 
 	// Verify log file was created
-	files, err := filepath.Glob("gcluster-inspect-" + clusterName + "-*.log")
-	if err != nil {
-		t.Fatalf("failed to glob log files: %v", err)
+	if _, err := os.Stat(logFilePath); os.IsNotExist(err) {
+		t.Fatalf("expected log file to exist at %s", logFilePath)
 	}
-	if len(files) != 1 {
-		t.Fatalf("expected 1 log file, found %d", len(files))
-	}
-	logFile := files[0]
+	logFile := logFilePath
 
 	contentBytes, err := os.ReadFile(logFile)
 	if err != nil {
@@ -108,6 +107,8 @@ func TestInspectCluster_Success(t *testing.T) {
 		"Google Cloud SDK 400.0.0",
 		"GKE: Cluster Details",
 		"cluster-description",
+		// The logged command must be the pinned one that actually ran.
+		"Command: kubectl [--context gke_test-project_us-central1-a_test-cluster-success get nodes -o wide]",
 		"Node Pool Node Counts:",
 		"pool-1: 1 total",
 		"Healthy Node Counts Per Node Pool:",
@@ -238,5 +239,101 @@ func TestInspectCluster_CustomOutputPath(t *testing.T) {
 
 	if !strings.Contains(content, "Local Setup: gcloud version") {
 		t.Errorf("expected custom log file to contain diagnostic logs, but it did not.")
+	}
+}
+
+func TestInspectCluster_DefaultKubeClientNilDynClient(t *testing.T) {
+	t.Setenv("KUBECONFIG", filepath.Join(t.TempDir(), "nonexistent"))
+	clusterName := "test-cluster-nil-dynclient"
+	location := "us-central1"
+	project := "test-project"
+	customPath := filepath.Join(t.TempDir(), "nil-dynclient-inspect.log")
+
+	responses := defaultMockResponses(clusterName, location, project)
+	mockExec := NewMockExecutor(responses)
+	orc := newTestGKEOrchestrator(mockExec)
+	orc.projectID = project
+	// Simulate the state where getCurrentNamespace sets orc.kubeClient = &DefaultKubeClient{dynClient: nil}
+	// and dynClient is nil.
+	orc.kubeClient = &DefaultKubeClient{dynClient: nil}
+
+	opts := orchestrator.InspectOptions{
+		ProjectID:       project,
+		ClusterName:     clusterName,
+		ClusterLocation: location,
+		GKENamespace:    "default",
+		WorkloadName:    "test-workload",
+		OutputPath:      customPath,
+		Show:            false,
+	}
+
+	err := orc.InspectCluster(opts)
+	if err != nil {
+		t.Fatalf("InspectCluster failed unexpectedly: %v", err)
+	}
+}
+
+func TestDefaultKubeClient_NilDynClient(t *testing.T) {
+	client := &DefaultKubeClient{dynClient: nil}
+
+	if _, err := client.ListWorkloads("default", "test-workload"); err == nil {
+		t.Errorf("expected ListWorkloads to return error when dynClient is nil, got nil")
+	}
+	if err := client.DeleteJobSet("default", "test-workload"); err == nil {
+		t.Errorf("expected DeleteJobSet to return error when dynClient is nil, got nil")
+	}
+	if _, err := client.ListJobSets("default", ""); err == nil {
+		t.Errorf("expected ListJobSets to return error when dynClient is nil, got nil")
+	}
+}
+
+func TestInspectCluster_DefaultKubeClientWithDynamicClient(t *testing.T) {
+	clusterName := "test-cluster-dynclient"
+	location := "us-central1"
+	project := "test-project"
+	customPath := filepath.Join(t.TempDir(), "dynclient-inspect.log")
+
+	responses := defaultMockResponses(clusterName, location, project)
+	mockExec := NewMockExecutor(responses)
+	orc := newTestGKEOrchestrator(mockExec)
+	orc.projectID = project
+	// Simulate production state where kubeClient is nil and dynClient is provided.
+	orc.kubeClient = nil
+	orc.SetDynamicClient(&mockDynamicClient{
+		getFunc: func(ctx context.Context, name string, options metav1.GetOptions, subresources ...string) (*unstructured.Unstructured, error) {
+			obj := &unstructured.Unstructured{}
+			obj.SetUID(types.UID("jobset-uid-123"))
+			return obj, nil
+		},
+		listFunc: func(ctx context.Context, opts metav1.ListOptions) (*unstructured.UnstructuredList, error) {
+			wl := unstructured.Unstructured{}
+			wl.SetName("jobset-test-workload-abcde")
+			return &unstructured.UnstructuredList{Items: []unstructured.Unstructured{wl}}, nil
+		},
+	})
+
+	opts := orchestrator.InspectOptions{
+		ProjectID:       project,
+		ClusterName:     clusterName,
+		ClusterLocation: location,
+		GKENamespace:    "custom-namespace",
+		WorkloadName:    "test-workload",
+		OutputPath:      customPath,
+		Show:            false,
+	}
+
+	err := orc.InspectCluster(opts)
+	if err != nil {
+		t.Fatalf("InspectCluster failed unexpectedly: %v", err)
+	}
+
+	contentBytes, err := os.ReadFile(customPath)
+	if err != nil {
+		t.Fatalf("failed to read custom output file: %v", err)
+	}
+	content := string(contentBytes)
+
+	if !strings.Contains(content, "jobset-test-workload-abcde") {
+		t.Errorf("expected log file to describe discovered workload 'jobset-test-workload-abcde', got:\n%s", content)
 	}
 }

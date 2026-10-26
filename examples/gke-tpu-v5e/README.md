@@ -11,7 +11,17 @@ Key parameters when working with TPUs:
 
 Before you start, make sure you have performed the following tasks:
 
-* Enable the Google Kubernetes Engine API.
+* Enable the required Google Cloud APIs (`compute.googleapis.com`, `container.googleapis.com`, `iam.googleapis.com`, `storage.googleapis.com`):
+
+  ```sh
+  gcloud services enable \
+    compute.googleapis.com \
+    container.googleapis.com \
+    iam.googleapis.com \
+    storage.googleapis.com \
+    --project=<PROJECT_ID>
+  ```
+
 * If you want to use the Google Cloud CLI for this task, [install](https://cloud.google.com/sdk/docs/install) and then [initialize](https://cloud.google.com/sdk/docs/initializing) the gcloud CLI.
 * Ensure that you have enough quota for TPUs (`tpu-v5-lite-podslice` quota in your region).
 * Ensure that you have the following roles enabled on your deployment identity:
@@ -27,11 +37,10 @@ This section guides you through the cluster creation process, ensuring that your
 
 1. [Launch Cloud Shell](https://cloud.google.com/shell/docs/launching-cloud-shell). You can use a different environment; however, we recommend Cloud Shell because the dependencies are already pre-installed for Cluster Toolkit. If you don't want to use Cloud Shell, follow the instructions to [install dependencies](https://cloud.google.com/cluster-toolkit/docs/setup/install-dependencies) to prepare a different environment.
 
-1. Install the Cluster Toolkit: Download and extract the pre-built `gcluster` binary bundle. Follow the download commands for your operating system in the [Install the Cluster Toolkit](https://docs.cloud.google.com/cluster-toolkit/docs/setup/configure-environment#install) section of the setup guide.
-
-1. Once extracted, verify that the installation is ready:
+1. Install or build the Cluster Toolkit: Either download the pre-built `gcluster` bundle per the [Install the Cluster Toolkit](https://docs.cloud.google.com/cluster-toolkit/docs/setup/configure-environment#install) guide, or from the root of the [`cluster-toolkit`](https://github.com/GoogleCloudPlatform/cluster-toolkit) repository build `./gcluster`:
 
       ```sh
+      test -x ./gcluster || make
       ./gcluster --version
       ```
 
@@ -86,15 +95,23 @@ This section guides you through the cluster creation process, ensuring that your
 
 This blueprint installs and configures [Kueue](https://kueue.sigs.k8s.io/) by default to manage TPU quotas and queue job submissions. The provided `tpu-kueue-jax-sample.yaml` file creates a Kubernetes Job that integrates both Kueue queue routing and JAX TPU device count validation.
 
+**NOTE**:
+By default, the toolkit dynamically applies an embedded kueue configuration based on your **Pathways** and **Dynamic Slicing** settings.
+
+* **Custom Configurations:**
+  * If you explicitly disable both Pathways and Dynamic Slicing, the toolkit will still install the Kueue engine/controllers, but it leaves them unconfigured(no default queues or resource flavors are created).
+  * If you want to override the default embedded configurations, or apply configuration in the scenario above, you can uncomment and set `config_path` in the `kueue` section of the `workload-manager-install` module in the blueprint.
+  * For more details on default configurations and variables, see the [`kubectl-apply` documentation](https://github.com/GoogleCloudPlatform/cluster-toolkit/tree/main/modules/management/kubectl-apply#inputs).
+
 * **Quota Allocation:** The blueprint automatically calculates and sets a `google.com/tpu` quota in Kueue's `ClusterQueue`. The node count is derived from your `machine_type` and `tpu_topology`, and the quota is calculated using the formula: `num_slices` × `(total_chips_in_topology / chips_per_machine)` × `chips_per_machine`.
 
 1. **Connect to your cluster:**
 
     ```sh
-    gcloud container clusters get-credentials gke-tpu-v5e --region=REGION --project=PROJECT_ID
+    gcloud container clusters get-credentials DEPLOYMENT_NAME --region=REGION --project=PROJECT_ID
     ```
 
-    Replace `REGION` and `PROJECT_ID` with your deployment region and project ID.
+    Replace `DEPLOYMENT_NAME`, `REGION`, and `PROJECT_ID` with your deployment name, region, and project ID.
 
 2. **Update the Node Selector:** Open `examples/gke-tpu-v5e/tpu-kueue-jax-sample.yaml` and verify that the `nodeSelector` values match the TPU accelerator and topology configured in your deployment:
 
@@ -165,7 +182,7 @@ Before submitting the job to the live GKE cluster, it is highly recommended to p
   --pathways \
   --pathways-gcs-location gs://YOUR_COORDINATION_BUCKET/pathways-scratch \
   --image us-docker.pkg.dev/cloud-tpu-images/jax-ai-image/tpu:latest \
-  --command "pip install pathwaysutils && python -c 'import pathwaysutils; pathwaysutils.initialize(); import jax; print(\"JAX Device count:\", jax.device_count())'" \
+  --command "pip install -U jax jaxlib pathwaysutils && python -c 'import pathwaysutils; pathwaysutils.initialize(); import jax; print(\"JAX Device count:\", jax.device_count())'" \
   --dry-run-out my-manifest.yaml
 ```
 
@@ -194,7 +211,7 @@ Once you have verified the manifest, submit the job to your live GKE cluster by 
   --pathways \
   --pathways-gcs-location gs://YOUR_COORDINATION_BUCKET/pathways-scratch \
   --image us-docker.pkg.dev/cloud-tpu-images/jax-ai-image/tpu:latest \
-  --command "pip install pathwaysutils && python -c 'import pathwaysutils; pathwaysutils.initialize(); import jax; print(\"JAX Device count:\", jax.device_count())'"
+  --command "pip install -U jax jaxlib pathwaysutils && python -c 'import pathwaysutils; pathwaysutils.initialize(); import jax; print(\"JAX Device count:\", jax.device_count())'"
 ```
 
 ### 4. Monitor and Manage the Job
@@ -202,7 +219,7 @@ Once you have verified the manifest, submit the job to your live GKE cluster by 
 1. **Monitor and Check Logs:** Use the `gcluster` CLI to track the execution status and view the workload logs:
 
    ```sh
-   gcluster job logs pathways-job
+   ./gcluster job logs pathways-job
    ```
 
    A successful execution will output logs ending with:
@@ -214,7 +231,7 @@ Once you have verified the manifest, submit the job to your live GKE cluster by 
 2. **Cancel and Clean Up Job:** To terminate a running job or clean up resources once finished, run:
 
    ```sh
-   gcluster job cancel pathways-job
+   ./gcluster job cancel pathways-job
    ```
 
 ## Tear down the cluster
@@ -224,3 +241,5 @@ To avoid recurring charges for the resources used on this page, clean up the res
    ```sh
    ./gcluster destroy DEPLOYMENT_NAME
    ```
+
+**Note:** GCS buckets created for Terraform state are not deleted by the `./gcluster destroy` command and must be deleted manually.

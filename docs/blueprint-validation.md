@@ -141,7 +141,17 @@ ghpc:
 ### Regex Validator
 The `regex` validator ensures that input variables match a specific regular expression pattern. This is commonly used to enforce Google Cloud naming conventions or specific software requirements (like Slurm partition name lengths).
 
-**Example definition in `metadata.yaml`:**
+It also supports validating concatenated values across multiple variables (e.g., combined Service Account IDs) by setting `concat: true`.
+
+**Supported Inputs:**
+* `vars` (list of strings, required): The list of variable names to validate.
+* `pattern` (string, required): The regular expression pattern to match.
+* `concat` (boolean, optional, default `false`): If `true`, concatenates the values of all variables in `vars` before matching against `pattern`.
+* `separator` (string, optional, default `""`): Delimiter used to join variable values when `concat: true`.
+* `allow_null` (list of strings, optional): Variables in `vars` that are permitted to be `null`/empty without failing validation when `concat: true`.
+* `optional` (boolean, optional, default `true`): If `true`, validation is skipped if variables are missing or unresolved.
+
+**Basic Example in `metadata.yaml`:**
 
 ```yaml
 ghpc:
@@ -151,6 +161,20 @@ ghpc:
         vars: [partition_name]
         pattern: "^[a-z0-9]{1,10}$"
       error_message: "partition_name must be lowercase alphanumeric and max 10 characters."
+```
+
+**Concatenation Example in `metadata.yaml`:**
+
+```yaml
+ghpc:
+  validators:
+    - validator: regex
+      inputs:
+        vars: [deployment_name, name]
+        concat: true
+        separator: "-"
+        pattern: "^[a-z][-a-z0-9]{4,28}[a-z0-9]$"
+      error_message: "The combined service account ID (deployment_name + name) must be between 6 and 30 characters, start with a lowercase letter, contain only lowercase alphanumeric characters and dashes, and cannot end with a dash."
 ```
 
 ### Allowed Enum Validator
@@ -247,6 +271,41 @@ ghpc:
         trigger_value: true
         dependent: slurm_control_host
       error_message: "slurm_control_host is required when enable_hybrid is true."
+```
+
+### Conditional Regex Validator
+The `conditional_regex` validator ensures that a `dependent` string variable matches a regular expression `pattern` when a trigger condition is met. Set `match_expected: false` to require that the variable does not match the pattern.
+
+Specify the condition with `trigger` and `trigger_value`, or use `triggers` to pass a map of variable names or dot-separated nested paths (such as `dws_flex.enabled`) to expected values. Unset or empty dependent variables are skipped unless `required: true` is set.
+
+**Example definition in `metadata.yaml`:**
+
+```yaml
+ghpc:
+  validators:
+    - validator: conditional_regex
+      inputs:
+        trigger: enable_custom_domain
+        trigger_value: true
+        dependent: custom_domain_name
+        pattern: "^[a-z0-9.-]+\\.[a-z]{2,}$"
+        match_expected: true
+      error_message: "custom_domain_name must be a valid domain when enable_custom_domain is true."
+```
+
+### CIDR Validator
+The `cidr` validator ensures that input variables are valid IP CIDR blocks. It validates strings, lists of strings, or specific fields within objects and maps when `object_key` is set. Supports optional `allow_null` (defaults to `false`) and `optional` (defaults to `true`) flags.
+
+**Example definition in `metadata.yaml`:**
+
+```yaml
+ghpc:
+  validators:
+  - validator: cidr
+    inputs:
+      vars: [master_authorized_networks]
+      object_key: cidr_block
+    error_message: "All values in 'master_authorized_networks.cidr_block' must be in CIDR format (e.g. 1.2.3.4/32)."
 ```
 
 Unlike blueprint-level validators, these are intrinsic to the module and ensure that the module receives data in the exact format required for its internal logic to function.

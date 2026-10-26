@@ -146,6 +146,7 @@ variable "login_nodes" {
       device_name                         = optional(string)
       disk_size_gb                        = optional(number)
       disk_type                           = optional(string)
+      disk_storage_pool                   = optional(string)
       disk_labels                         = optional(map(string), {})
       auto_delete                         = optional(bool, true)
       boot                                = optional(bool, false)
@@ -166,6 +167,7 @@ variable "login_nodes" {
         network_tier = string
       })), [])
       network            = optional(string)
+      network_attachment = optional(string)
       network_ip         = optional(string, "")
       nic_type           = optional(string)
       queue_count        = optional(number)
@@ -180,6 +182,7 @@ variable "login_nodes" {
     disk_resource_manager_tags = optional(map(string), {})
     disk_size_gb               = optional(number)
     disk_type                  = optional(string, "n1-standard-1")
+    disk_storage_pool          = optional(string)
     enable_confidential_vm     = optional(bool, false)
     enable_oslogin             = optional(bool, true)
     enable_shielded_vm         = optional(bool, false)
@@ -234,6 +237,38 @@ variable "login_nodes" {
     condition     = length(distinct([for x in var.login_nodes : x.group_name])) == length(var.login_nodes)
     error_message = "All login_nodes must have a unique group name."
   }
+
+  validation {
+    condition = alltrue(flatten([
+      for ln in var.login_nodes : [
+        for nic in(ln.additional_networks != null ? ln.additional_networks : []) : (
+          # Cannot specify network or subnetwork alongside network_attachment
+          !(((nic.network != null && nic.network != "") || (nic.subnetwork != null && nic.subnetwork != "")) && (nic.network_attachment != null && nic.network_attachment != "")) &&
+          # Cannot specify subnetwork_project, access_config, ipv6_access_config, or alias_ip_range alongside network_attachment
+          (nic.network_attachment == null || nic.network_attachment == "" || (
+            (nic.subnetwork_project == null || nic.subnetwork_project == "") &&
+            length(try(nic.access_config, [])) == 0 &&
+            length(try(nic.ipv6_access_config, [])) == 0 &&
+            length(try(nic.alias_ip_range, [])) == 0
+          )) &&
+          # Must specify at least one of network, subnetwork, or network_attachment
+          ((nic.network != null && nic.network != "") || (nic.subnetwork != null && nic.subnetwork != "") || (nic.network_attachment != null && nic.network_attachment != ""))
+        )
+      ]
+    ]))
+    error_message = "In var.login_nodes[*].additional_networks, you must specify at least one of 'network', 'subnetwork', or 'network_attachment'. When 'network_attachment' is set, you cannot specify 'network', 'subnetwork', 'subnetwork_project', 'access_config', 'ipv6_access_config', or 'alias_ip_range'."
+  }
+
+  validation {
+    condition = alltrue(flatten([
+      for ln in var.login_nodes : [
+        for nic in(ln.additional_networks != null ? ln.additional_networks : []) : (
+          nic.network_attachment == null || nic.network_attachment == "" || can(regex("^(?:https://www.googleapis.com/compute/[^/]+/)?projects/[^/]+/regions/[^/]+/networkAttachments/[^/]+$", nic.network_attachment))
+        )
+      ]
+    ]))
+    error_message = "In var.login_nodes[*].additional_networks, 'network_attachment' must be the full resource URI: projects/{project}/regions/{region}/networkAttachments/{name}."
+  }
 }
 
 ############
@@ -252,6 +287,7 @@ variable "nodeset" {
       device_name                = optional(string)
       disk_size_gb               = optional(number)
       disk_type                  = optional(string)
+      disk_storage_pool          = optional(string)
       disk_labels                = optional(map(string), {})
       auto_delete                = optional(bool, true)
       boot                       = optional(bool, false)
@@ -264,6 +300,7 @@ variable "nodeset" {
     disk_resource_manager_tags          = optional(map(string), {})
     disk_size_gb                        = optional(number)
     disk_type                           = optional(string)
+    disk_storage_pool                   = optional(string)
     disk_encryption_key                 = optional(string)
     disk_encryption_key_service_account = optional(string)
     enable_confidential_vm              = optional(bool, false)
@@ -278,6 +315,9 @@ variable "nodeset" {
       count = number
       type  = string
     }))
+    # Resolved GPU count per VM, used to derive accelerator topology slice sizes.
+    # Declared explicitly so it is not dropped during object type conversion.
+    gpu_count            = optional(number)
     accelerator_topology = optional(string, null)
     dws_flex = object({
       enabled          = bool
@@ -285,8 +325,9 @@ variable "nodeset" {
       use_job_duration = bool
       use_bulk_insert  = bool
     })
-    labels       = optional(map(string), {})
-    machine_type = optional(string)
+    provisioning_engine = optional(string, "AUTO")
+    labels              = optional(map(string), {})
+    machine_type        = optional(string)
     advanced_machine_features = object({
       enable_nested_virtualization = optional(bool)
       threads_per_core             = optional(number)
@@ -329,25 +370,26 @@ variable "nodeset" {
     source_image         = optional(string)
     subnetwork_self_link = string
     additional_networks = optional(list(object({
-      network            = string
-      subnetwork         = string
-      subnetwork_project = string
-      network_ip         = string
-      nic_type           = string
-      stack_type         = string
-      queue_count        = number
-      access_config = list(object({
+      network            = optional(string)
+      subnetwork         = optional(string)
+      subnetwork_project = optional(string)
+      network_attachment = optional(string)
+      network_ip         = optional(string, "")
+      nic_type           = optional(string)
+      stack_type         = optional(string)
+      queue_count        = optional(number)
+      access_config = optional(list(object({
         nat_ip       = string
         network_tier = string
-      }))
-      ipv6_access_config = list(object({
+      })), [])
+      ipv6_access_config = optional(list(object({
         network_tier = string
-      }))
-      alias_ip_range = list(object({
+      })), [])
+      alias_ip_range = optional(list(object({
         ip_cidr_range         = string
         subnetwork_range_name = string
-      }))
-    })))
+      })), [])
+    })), [])
     access_config = optional(list(object({
       nat_ip       = string
       network_tier = string
@@ -364,8 +406,48 @@ variable "nodeset" {
     zone_target_shape = string
     zone_policy_allow = set(string)
     zone_policy_deny  = set(string)
+
+    instance_flexibility_policy = optional(object({
+      instance_selections = list(object({
+        name          = optional(string)
+        rank          = optional(number, 1)
+        machine_types = set(string)
+      }))
+    }))
   }))
   default = []
+
+  validation {
+    condition = alltrue(flatten([
+      for ns in var.nodeset : [
+        for nic in(ns.additional_networks != null ? ns.additional_networks : []) : (
+          # Cannot specify network or subnetwork alongside network_attachment
+          !(((nic.network != null && nic.network != "") || (nic.subnetwork != null && nic.subnetwork != "")) && (nic.network_attachment != null && nic.network_attachment != "")) &&
+          # Cannot specify subnetwork_project, access_config, ipv6_access_config, or alias_ip_range alongside network_attachment
+          (nic.network_attachment == null || nic.network_attachment == "" || (
+            (nic.subnetwork_project == null || nic.subnetwork_project == "") &&
+            length(try(nic.access_config, [])) == 0 &&
+            length(try(nic.ipv6_access_config, [])) == 0 &&
+            length(try(nic.alias_ip_range, [])) == 0
+          )) &&
+          # Must specify at least one of network, subnetwork, or network_attachment
+          ((nic.network != null && nic.network != "") || (nic.subnetwork != null && nic.subnetwork != "") || (nic.network_attachment != null && nic.network_attachment != ""))
+        )
+      ]
+    ]))
+    error_message = "In var.nodeset[*].additional_networks, you must specify at least one of 'network', 'subnetwork', or 'network_attachment'. When 'network_attachment' is set, you cannot specify 'network', 'subnetwork', 'subnetwork_project', 'access_config', 'ipv6_access_config', or 'alias_ip_range'."
+  }
+
+  validation {
+    condition = alltrue(flatten([
+      for ns in var.nodeset : [
+        for nic in(ns.additional_networks != null ? ns.additional_networks : []) : (
+          nic.network_attachment == null || nic.network_attachment == "" || can(regex("^(?:https://www.googleapis.com/compute/[^/]+/)?projects/[^/]+/regions/[^/]+/networkAttachments/[^/]+$", nic.network_attachment))
+        )
+      ]
+    ]))
+    error_message = "In var.nodeset[*].additional_networks, 'network_attachment' must be the full resource URI: projects/{project}/regions/{region}/networkAttachments/{name}."
+  }
 }
 
 variable "nodeset_tpu" {
@@ -485,6 +567,12 @@ variable "enable_debug_logging" {
   default     = false
 }
 
+variable "enable_openmetrics" {
+  description = "Enable native Prometheus OpenMetrics telemetry via Slurm and Google Cloud Ops Agent"
+  type        = bool
+  default     = false
+}
+
 variable "extra_logging_flags" {
   type        = map(bool)
   description = "The only available flag is `trace_api`"
@@ -519,7 +607,7 @@ Enables slurm authentication instead of munge.
 
 EOD
   type        = bool
-  default     = false
+  default     = true
 }
 
 variable "cloud_parameters" {
@@ -572,7 +660,7 @@ variable "enable_default_mounts" {
     - /opt/apps
     EOD
   type        = bool
-  default     = true
+  default     = null
 }
 
 variable "network_storage" {
@@ -846,6 +934,56 @@ variable "gcloud_path_override" {
   type        = string
   default     = ""
   nullable    = false
+}
+
+variable "enable_hybrid" {
+  description = <<EOD
+Enables use of hybrid controller mode. When true, controller_hybrid_config will
+be used instead of controller_instance_config and will disable login instances.
+EOD
+  type        = bool
+  default     = false
+}
+
+variable "hybrid_conf" {
+  description = "The hybrid configuration"
+  type = object({
+    slurm_bin_dir           = optional(string)
+    slurm_log_dir           = optional(string)
+    slurm_control_host      = string
+    slurm_control_host_port = optional(string)
+    slurm_control_addr      = optional(string)
+    slurm_uid               = optional(number)
+    slurm_gid               = optional(number)
+    service_account_email   = optional(string)
+    google_app_cred_path    = optional(string)
+    slurm_version           = optional(string)
+  })
+  default = null
+}
+
+variable "output_dir" {
+  type        = string
+  description = <<EOD
+Directory where this module will write its files to. These files include:
+cloud.conf; cloud_gres.conf; config.yaml; resume.py; suspend.py; and util.py.
+EOD
+  default     = null
+}
+
+variable "install_dir" {
+  type        = string
+  description = <<EOD
+Directory where the hybrid configuration directory will be installed on the
+on-premise controller (e.g. /etc/slurm/hybrid). This updates the prefix path
+for the resume and suspend scripts in the generated `cloud.conf` file.
+
+This variable should be used when the TerraformHost and the SlurmctldHost
+are different.
+
+This will default to var.output_dir if null.
+EOD
+  default     = null
 }
 
 # DEPRECATED VARIABLES

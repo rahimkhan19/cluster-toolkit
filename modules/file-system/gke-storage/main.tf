@@ -36,6 +36,13 @@ check "private_vpc_connection_peering" {
   }
 }
 
+check "storage_pool_supported_types" {
+  assert {
+    condition     = var.disk_storage_pool == null || var.disk_storage_pool == "" || contains(["hyperdisk-balanced", "hyperdisk-throughput"], lower(var.storage_type))
+    error_message = "Storage pools are only supported with Hyperdisk types (balanced or throughput)."
+  }
+}
+
 module "kubectl_apply" {
   source = "../../management/kubectl-apply"
 
@@ -47,6 +54,7 @@ module "kubectl_apply" {
     [
       # create StorageClass in the cluster
       {
+        name = "sc-${local.storage_type}"
         content = templatefile(
           "${path.module}/storage-class/${local.storage_class_name}.yaml.tftpl",
           {
@@ -57,10 +65,12 @@ module "kubectl_apply" {
             topology_zones              = var.sc_topology_zones
             enable_confidential_storage = var.enable_confidential_storage
             disk_encryption_kms_key     = var.disk_encryption_kms_key
+            disk_storage_pool           = var.disk_storage_pool
         })
         wait_for_rollout = false
       },
       var.namespace != "default" ? [{
+        name = length(var.namespace) <= 41 ? "ns-${var.namespace}" : "ns-${substr(var.namespace, 0, 35)}-${substr(sha1(var.namespace), 0, 5)}"
         content = templatefile(
           "${path.module}/persistent-volume-claim/namespace.yaml.tftpl",
           {
@@ -72,6 +82,7 @@ module "kubectl_apply" {
       flatten([
         for idx in range(var.pvc_count) : [
           {
+            name = length(local.pvc_name_prefix) <= 30 ? "pvc-${local.pvc_name_prefix}-${idx}" : "pvc-${substr(local.pvc_name_prefix, 0, 24)}-${substr(sha1(local.pvc_name_prefix), 0, 5)}-${idx}"
             content = templatefile(
               "${path.module}/persistent-volume-claim/${(local.pvc_name_prefix)}.yaml.tftpl",
               {

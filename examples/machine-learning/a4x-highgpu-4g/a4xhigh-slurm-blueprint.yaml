@@ -17,9 +17,6 @@
 blueprint_name: a4xhigh-slurm
 
 vars:
-  # Set to true to enable the secure Slurm Native Authentication standard.
-  # Default fallback remains false (MUNGE) to guarantee zero regression risk on upgrades.
-  enable_slurm_auth: false
   deployment_name: ## Deployment name ##
   project_id: ## Project name ##
   region: ## A4X Reservation Region ##
@@ -36,7 +33,7 @@ vars:
   local_ssd_mountpoint: /mnt/localssd
   instance_image:
     project: advanced-compute-images
-    family: aci-gpu-u2404-slurm-2511-cuda-130-nvidia-580-arm64
+    family: aci-gpu-u2404-slurm-2605-cuda-132-nvidia-595-arm64
   a4x_reservation_name: "" # supply reservation name
   benchmark_dir: $(ghpc_stage("system_benchmarks"))
 
@@ -226,6 +223,7 @@ deployment_groups:
   - id: a4x_startup
     source: modules/scripts/startup-script
     settings:
+      install_ansible: false
       local_ssd_filesystem:
         mountpoint: $(vars.local_ssd_mountpoint)
         permissions: "1777"  # must quote numeric filesystem permissions!
@@ -274,9 +272,12 @@ deployment_groups:
             hosts: all
             become: true
             vars:
-              cuda_installer_url: "https://developer.download.nvidia.com/compute/cuda/13.0.0/local_installers/cuda_13.0.0_580.65.06_linux_sbsa.run"
-              cuda_installer_file: "/tmp/cuda_13.0.0_580.65.06_linux_sbsa.run"
-              dcgm_version: "1:4.6.0-1"
+              cuda_installer_url: "https://developer.download.nvidia.com/compute/cuda/13.2.2/local_installers/cuda_13.2.2_595.71.05_linux_sbsa.run"
+              cuda_installer_file: "/tmp/cuda_13.2.2_595.71.05_linux_sbsa.run"
+              nvidia_packages:
+                - datacenter-gpu-manager-4-core=1:4.6.1-1
+                - datacenter-gpu-manager-4-dev=1:4.6.1-1
+                - datacenter-gpu-manager-4-cuda13=1:4.6.1-1
             tasks:
               - name: Download CUDA runfile
                 ansible.builtin.get_url:
@@ -302,22 +303,17 @@ deployment_groups:
                 ansible.builtin.apt:
                   update_cache: yes
 
-              - name: Install DCGM packages
+              - name: Install NVIDIA Packages
                 ansible.builtin.apt:
-                  name:
-                    - "datacenter-gpu-manager-4-cuda13={{ dcgm_version }}"
-                    - "datacenter-gpu-manager-4-dev={{ dcgm_version }}"
-                    - "datacenter-gpu-manager-4-core={{ dcgm_version }}"
+                  name: "{{ nvidia_packages }}"
                   state: present
+                  allow_downgrade: yes
 
               - name: Freeze DCGM packages
                 ansible.builtin.dpkg_selections:
-                  name: "{{ item }}"
+                  name: "{{ item.split('=')[0] }}"
                   selection: hold
-                loop:
-                  - datacenter-gpu-manager-4-cuda13
-                  - datacenter-gpu-manager-4-dev
-                  - datacenter-gpu-manager-4-core
+                loop: "{{ nvidia_packages }}"
       - type: ansible-local
         destination: enable_dcgm.yml
         content: |

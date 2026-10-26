@@ -16,9 +16,6 @@
 blueprint_name: managed-lustre-slurm
 
 vars:
-  # Set to true to enable the secure Slurm Native Authentication standard.
-  # Default fallback remains false (MUNGE) to guarantee zero regression risk on upgrades.
-  enable_slurm_auth: true
   project_id:  ## Set GCP Project ID Here ##
   deployment_name: managed-lustre-slurm
   region: us-central1
@@ -36,9 +33,8 @@ vars:
   per_unit_storage_throughput: 500
   kms_key: ""
   slurm_image:
-    # Pinned to working version prior to July 10, 2026 due to Lustre client incompatibility on Rocky 9.8
-    name: slurm-gcp-6-12-hpc-rocky-linux-9-20260519
-    project: schedmd-slurm-public
+    family: aci-cpu-rocky-linux-9-slurm-2605-amd64
+    project: advanced-compute-images
 
 # Documentation for each of the modules used below can be found at
 # https://github.com/GoogleCloudPlatform/hpc-toolkit/blob/main/modules/README.md

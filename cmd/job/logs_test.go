@@ -20,15 +20,29 @@ import (
 	"hpc-toolkit/pkg/shell"
 	"strings"
 	"testing"
+	"time"
 )
 
 type mockLogsExecutor struct{}
 
 func (m *mockLogsExecutor) ExecuteCommand(name string, args ...string) shell.CommandResult {
-	if name == "kubectl" && len(args) > 0 && args[0] == "logs" {
-		return shell.CommandResult{ExitCode: 0, Stdout: "mock logs output"}
+	cmdLine := strings.Join(args, " ")
+	if name == "gcloud" && strings.HasPrefix(cmdLine, "container clusters describe") {
+		return shell.CommandResult{ExitCode: 0, Stdout: "{}"}
+	}
+	if name == "kubectl" {
+		if strings.Contains(cmdLine, "get pods") {
+			return shell.CommandResult{ExitCode: 0, Stdout: "main\n"}
+		}
+		if strings.Contains(cmdLine, "logs") {
+			return shell.CommandResult{ExitCode: 0, Stdout: "mock logs output"}
+		}
 	}
 	return shell.CommandResult{ExitCode: 0}
+}
+
+func (m *mockLogsExecutor) ExecuteCommandWithTimeout(_ time.Duration, name string, args ...string) shell.CommandResult {
+	return m.ExecuteCommand(name, args...)
 }
 
 func (m *mockLogsExecutor) ExecuteCommandStream(name string, args ...string) error {
@@ -36,7 +50,7 @@ func (m *mockLogsExecutor) ExecuteCommandStream(name string, args ...string) err
 }
 
 func TestLogsCmd_Success(t *testing.T) {
-	resetSubmitCmdFlags() // Reset shared flags
+	setupSubmitTestEnv(t) // Reset shared flags
 
 	// Mock the orchestrator factory
 	oldFactory := gkeOrchestratorFactory

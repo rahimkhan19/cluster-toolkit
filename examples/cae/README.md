@@ -88,17 +88,10 @@ storage intact and b) you can build software before you deploy your cluster.
 > However, this is merely an example sizing for an instance of this reference architecture.
 > Node counts and remote desktop seats can easily be adjusted in the blueprint.
 
-1. Clone the repo
+1. From the root of the [`cluster-toolkit`](https://github.com/GoogleCloudPlatform/cluster-toolkit) repository, build `./gcluster` (if not already built):
 
    ```bash
-   git clone https://github.com/GoogleCloudPlatform/cluster-toolkit.git
-   cd cluster-toolkit
-   ```
-
-1. Build the Cluster Toolkit
-
-   ```bash
-   make
+   test -x ./gcluster || make
    ```
 
 1. Generate the deployment folder after replacing `<project>` with the project
@@ -202,8 +195,8 @@ Depending on the software you want to use, different installation paths may be r
   that illustrate this process.
 
   In general, you need to bring the binaries to your CAE cluster for which it is
-  useful to use a Google Clouds Storage bucket, which is accessible from any machine using the
-  gsutil command and which can be mounted in the cluster.
+  useful to use a Google Cloud Storage bucket, which is accessible from any machine using the
+  `gcloud storage` commands or mounted directly in the cluster.
 
   As this installation process only needs to be done once and at the same time may require time,
   we recommend to do this installation in a separate deployment group before you bring up the cluster.

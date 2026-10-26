@@ -309,6 +309,27 @@ func TestResolveTopologyForChips(t *testing.T) {
 			wantErr:    false,
 		},
 		{
+			name:       "v4 16 cores (8 chips)",
+			prefix:     "v4",
+			totalChips: 16,
+			wantShape:  "2x2x2",
+			wantErr:    false,
+		},
+		{
+			name:       "v5p 8 cores (4 chips)",
+			prefix:     "v5p",
+			totalChips: 8,
+			wantShape:  "2x2x1",
+			wantErr:    false,
+		},
+		{
+			name:       "v5p 16 cores (8 chips)",
+			prefix:     "v5p",
+			totalChips: 16,
+			wantShape:  "2x2x2",
+			wantErr:    false,
+		},
+		{
 			name:       "tpu7x 2048 chips",
 			prefix:     "tpu7x",
 			totalChips: 2048,
@@ -337,9 +358,16 @@ func TestResolveTopologyForChips(t *testing.T) {
 			wantErr:    true,
 		},
 		{
-			name:       "v4 3 chips (Fail)",
+			name:       "v4 3 cores (Fail)",
 			prefix:     "v4",
 			totalChips: 3,
+			wantShape:  "",
+			wantErr:    true,
+		},
+		{
+			name:       "v5p 7 cores (Fail)",
+			prefix:     "v5p",
+			totalChips: 7,
 			wantShape:  "",
 			wantErr:    true,
 		},
@@ -397,7 +425,7 @@ func TestMatchesTPUFamily(t *testing.T) {
 		{"v5litepod matches 2D", "v5litepod-16", valid2DTPUFamilies, true},
 		{"l4 does not match 2D", "l4-1", valid2DTPUFamilies, false},
 		{"v4 matches 3D", "v4-8", valid3DTPUFamilies, true},
-		{"v5p matches 3D", "v5p-4", valid3DTPUFamilies, true},
+		{"v5p matches 3D", "v5p-8", valid3DTPUFamilies, true},
 		{"v6e does not match 3D", "v6e-8", valid3DTPUFamilies, false},
 	}
 	for _, tt := range tests {
@@ -416,6 +444,8 @@ func TestResolveMachineType(t *testing.T) {
 	}{
 		{"v4-8", "ct4p-hightpu-4t"},
 		{"v5litepod-8", "ct5lp-hightpu-8t"},
+		{"v5e-8", "ct5lp-hightpu-8t"},
+		{"v5e-4", "ct5lp-hightpu-4t"},
 		{"l4-1", "g2-standard-12"},
 		{"unknown", "unknown"},
 		{"ct4p-hightpu-4t", "ct4p-hightpu-4t"},
@@ -433,15 +463,15 @@ func TestGetCandidatesForShorthand(t *testing.T) {
 		want      []string
 	}{
 		{"v5litepod", []string{"ct5lp-hightpu-1t", "ct5lp-hightpu-4t", "ct5lp-hightpu-8t"}},
+		{"v5e", []string{"ct5lp-hightpu-1t", "ct5lp-hightpu-4t", "ct5lp-hightpu-8t"}},
+		{"v5", []string{"ct5lp-hightpu-1t", "ct5lp-hightpu-4t", "ct5lp-hightpu-8t", "ct5p-hightpu-4t"}},
 		{"v4", []string{"ct4p-hightpu-4t"}},
+		{"v5p", []string{"ct5p-hightpu-4t"}},
 		{"l4", []string{"g2-standard-12", "g2-standard-24", "g2-standard-48", "g2-standard-96"}},
 		{"unknown", nil},
 	}
 	for _, tt := range tests {
 		got := GetCandidatesForShorthand(tt.shorthand)
-		// Sort for comparison because map iteration order is random
-		slices.Sort(got)
-		slices.Sort(tt.want)
 		if !slices.Equal(got, tt.want) {
 			t.Errorf("GetCandidatesForShorthand(%q) = %v, want %v", tt.shorthand, got, tt.want)
 		}
@@ -459,6 +489,7 @@ func TestValidateHardwareRequest(t *testing.T) {
 		{"Valid TPU v6e", "v6e-8", "2x2", false},
 		{"Invalid TPU v6e shape", "v6e-8", "3x3", true},
 		{"Valid TPU v5litepod", "v5litepod-16", "4x4", false},
+		{"Valid TPU v5e", "v5e-16", "4x4", false},
 		{"Invalid TPU v5litepod shape", "v5litepod-16", "3x3", true},
 		{"Invalid TPU v4 dimensions", "ct4p-hightpu-4t", "2x2", true}, // Needs 3D
 		{"Invalid TPU v4 shape", "ct4p-hightpu-4t", "3x3x3", true},
